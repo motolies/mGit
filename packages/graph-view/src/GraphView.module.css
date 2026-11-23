@@ -26,7 +26,8 @@
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
-  overscroll-behavior: contain;
+  /* contain 은 바깥 번짐만 막고 자기 탄성 튕김(WKWebView)은 남긴다. none 은 튕김까지 꺼 캔버스가 어긋나지 않는다 */
+  overscroll-behavior: none;
 }
 
 .inner {

@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -123,7 +124,8 @@ const OVERSCAN = 8;
  * 커밋 그래프 뷰.
  * - 텍스트 열은 @tanstack/react-virtual 로 보이는 행만 DOM 에 둔다
  * - 레인·엣지·노드는 스크롤 컨테이너 밖의 캔버스 오버레이에 그린다
- * - 그리기는 렌더 후 effect 에서 한 번: 가상 행과 같은 프레임에 맞춘다
+ * - 그리기는 렌더 후 effect(슬라이스·크기 변경)와 스크롤 이벤트마다 한다. 가상 행은 보이는 행 범위가
+ *   바뀔 때만 다시 렌더되므로, 범위 안의 스크롤(탄성 튕김 복귀 포함)은 스크롤 이벤트가 캔버스를 맞춘다
  * - WIP 행이 있으면 표시 행 0 에 끼워 넣고 그래프 행은 1 씩 밀린다 (`rowOffset`)
  * - 저장소 띠 열이 있으면 캔버스를 그 폭만큼 오른쪽으로 옮긴다. 레인 좌표는 그래프 열 기준 그대로다
  */
@@ -336,16 +338,6 @@ export function GraphView({
     return () => observer.disconnect();
   }, []);
 
-  // 스크롤 활동 표시 (프레임 측정용). 그리기 자체는 렌더 후 effect 가 한다
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) {
-      return;
-    }
-    el.addEventListener('scroll', markActivity, { passive: true });
-    return () => el.removeEventListener('scroll', markActivity);
-  }, [markActivity]);
-
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     const scroller = scrollRef.current;
@@ -410,6 +402,29 @@ export function GraphView({
   useEffect(() => {
     redraw();
   }, [redraw]);
+
+  // 스크롤 리스너가 다시 붙지 않고도 최신 슬라이스·크기로 그리게 한다.
+  // 레이아웃 effect 라 가상 스크롤이 스크롤 이벤트 안에서 flushSync 로 다시 렌더한 직후에도 최신이다
+  const redrawRef = useRef(redraw);
+  useLayoutEffect(() => {
+    redrawRef.current = redraw;
+  }, [redraw]);
+
+  // 스크롤 이벤트마다: 활동 표시(프레임 측정용)와 캔버스 다시 그리기.
+  // 가상 스크롤은 보이는 행 범위·isScrolling 이 바뀔 때만 다시 렌더하므로, 범위 안의 스크롤은 여기서 맞춘다.
+  // 스크롤 이벤트는 브라우저가 프레임당 한 번 보내므로 rAF 로 다시 묶지 않는다
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    const onScroll = () => {
+      markActivity();
+      redrawRef.current();
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [markActivity]);
 
   const handleSelect = useCallback(
     (row: GraphRow, mods?: SelectModifiers) => {

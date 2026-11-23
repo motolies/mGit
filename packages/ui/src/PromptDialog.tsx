@@ -57,6 +57,19 @@ export function normalizedPreview(field: PromptField, value: string | boolean | 
     : field.normalize.preview(normalized);
 }
 
+/** 여러 줄 칸(`textarea`)이 처음 열릴 때의 최소·최대 줄 수 */
+const TEXTAREA_MIN_ROWS = 6;
+const TEXTAREA_MAX_ROWS = 16;
+
+/**
+ * 여러 줄 칸의 처음 높이(줄 수). 처음 값의 줄 수에 입력할 여유 한 줄을 더해 최소~최대로 자른다 — commit 메시지를
+ * 고칠 때 늘리지 않아도 전체가 보이게. 입력 중에는 다시 계산하지 않는다 (사용자가 손잡이로 정한 높이와 다투지 않게)
+ */
+export function textareaRows(initial: string | boolean | undefined): number {
+  const lines = typeof initial === 'string' && initial !== '' ? initial.split('\n').length : 0;
+  return Math.min(TEXTAREA_MAX_ROWS, Math.max(TEXTAREA_MIN_ROWS, lines + 1));
+}
+
 /** 지금 값이 확인할 수 없는 사유를 돌려주는 검증 함수. 확인할 수 있으면 null */
 export type PromptValidate = (values: Readonly<Record<string, string | boolean>>) => string | null;
 
@@ -193,6 +206,8 @@ export function PromptDialog({
   const invalid = validate ? validate(values) : null;
   const valid = filled && invalid === null;
   const warning = notice ? notice(values) : null;
+  // 여러 줄 칸이 있으면 대화상자 폭을 넓게 정한다 (없으면 내용 폭에 맞추는 지금 모양)
+  const wide = fields.some((f) => f.type === 'textarea');
 
   /** 필드 하나 (`index` 는 전체 목록에서의 차례 — 첫 입력 칸이 포커스를 받는다) */
   const renderField = (f: PromptField, index: number) => {
@@ -252,8 +267,8 @@ export function PromptDialog({
               ) : f.type === 'textarea' ? (
                 <textarea
                   id={id}
-                  className={styles.input}
-                  rows={3}
+                  className={`${styles.input} ${styles.textarea}`}
+                  rows={textareaRows(f.initial)}
                   placeholder={f.placeholder}
                   value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
                   onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
@@ -293,6 +308,7 @@ export function PromptDialog({
     <dialog
       ref={ref}
       className={styles.dialog}
+      data-size={wide ? 'wide' : undefined}
       // 제목이 대화상자의 이름, 설명이 설명이 된다 (W19 ③)
       aria-labelledby={titleId}
       aria-describedby={message ? messageId : undefined}

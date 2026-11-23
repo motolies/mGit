@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmDialog } from '../ConfirmDialog';
 import styles from '../ConfirmDialog.module.css';
+import dialogCss from '../ConfirmDialog.module.css?raw';
 import {
   normalizedPreview,
   PromptDialog,
@@ -10,6 +11,7 @@ import {
   promptResult,
   promptSegments,
   requireChecked,
+  textareaRows,
 } from '../PromptDialog';
 import { S } from '../strings';
 
@@ -500,5 +502,72 @@ describe('PromptDialog 입력 다듬기 (normalize, branch 이름 정규화)', (
     expect(document.querySelector('[data-role="normalized-preview"]')).toBeNull();
     fireEvent.submit(document.querySelector('form') as HTMLFormElement);
     expect(onConfirm).toHaveBeenCalledWith({ name: ' a  b ' });
+  });
+});
+
+describe('PromptDialog 여러 줄 입력 크기 (메시지 수정 대화상자)', () => {
+  /** commit 메시지처럼 9줄인 처음 값 */
+  const nineLines = Array.from({ length: 9 }, (_, i) => `line ${i}`).join('\n');
+  const messageField: PromptField = {
+    key: 'message',
+    label: '메시지',
+    type: 'textarea',
+    initial: nineLines,
+  };
+
+  /** CSS 원문에서 선택자 블록 하나의 본문을 읽는다. 없으면 빈 글자 */
+  function cssBlock(selector: string): string {
+    const start = dialogCss.indexOf(`${selector} {`);
+    return start < 0 ? '' : dialogCss.slice(start, dialogCss.indexOf('}', start));
+  }
+
+  it('높이는 처음 값의 줄 수 + 1 을 6~16 줄 사이로 자른다', () => {
+    expect(textareaRows(undefined)).toBe(6);
+    expect(textareaRows('')).toBe(6);
+    expect(textareaRows(true)).toBe(6);
+    expect(textareaRows(nineLines)).toBe(10);
+    expect(textareaRows(Array.from({ length: 40 }, () => 'x').join('\n'))).toBe(16);
+  });
+
+  it('여러 줄 칸이 있으면 대화상자가 넓고, 칸은 내용 줄 수만큼 높으며 여러 줄 칸 규칙을 받는다', async () => {
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={[messageField]}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    expect(document.querySelector('dialog')?.dataset.size).toBe('wide');
+    const textarea = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '메시지' });
+    expect(textarea.value).toBe(nineLines);
+    expect(textarea.rows).toBe(10);
+    expect(textarea.classList.contains(styles.textarea as string)).toBe(true);
+  });
+
+  it('여러 줄 칸이 없는 대화상자는 지금 폭 그대로다', async () => {
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={[{ key: 'name', label: '이름' }]}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    expect(document.querySelector('dialog')?.dataset.size).toBeUndefined();
+  });
+
+  it('스타일: 넓은 대화상자는 폭을 정하고, 여러 줄 칸은 칸 폭을 채우며 세로로만·창 안에서만 늘어난다', () => {
+    const wide = cssBlock('.dialog[data-size="wide"]');
+    expect(wide).toMatch(/(^|\s)width:\s*\d+px/m);
+    expect(wide).toMatch(/max-width:/);
+    const textarea = cssBlock('.textarea');
+    expect(textarea).toMatch(/(^|\s)width:\s*100%/m);
+    expect(textarea).toMatch(/resize:\s*vertical/);
+    expect(textarea).toMatch(/max-height:/);
   });
 });

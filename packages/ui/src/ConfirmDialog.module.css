@@ -10,6 +10,13 @@
   font-size: var(--font-size);
 }
 
+/* 여러 줄 입력이 있는 대화상자 (PromptDialog, commit 메시지 등): 내용 폭에 맞춰 좁게 줄지 않게 폭을 정한다.
+   좁은 창에서는 창 안에 맞춘다 */
+.dialog[data-size="wide"] {
+  width: 640px;
+  max-width: calc(100vw - 32px);
+}
+
 .dialog::backdrop {
   background: rgba(0, 0, 0, 0.35);
 }
@@ -83,6 +90,16 @@
   font: inherit;
   font-size: 12px;
   padding: 4px 8px;
+}
+
+/* 여러 줄 입력 (PromptDialog `textarea`): 칸 폭을 꽉 채우고 세로로만 늘린다 — 가로로 끌면 대화상자 밖으로 넘쳐
+   테두리가 잘린다. 창 높이를 넘겨 단추가 밀려나지 않게 높이를 제한한다 */
+.textarea {
+  width: 100%;
+  min-height: 60px;
+  max-height: 60vh;
+  resize: vertical;
+  line-height: 1.4;
 }
 
 .checkRow {

@@ -2,6 +2,8 @@ import type { BatchOp, BatchResult, FoundRepo, RepoSummary } from '@mgit/ipc';
 import { Button, requireChecked, S } from '@mgit/ui';
 import { bool, str, useDialogs } from '../../components/use-dialogs';
 import { getFolderStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import { branchNameField, normalizeBranchName } from '../branch/branch-name';
+import { batchSummary, repoResultState } from './batch-report';
 import styles from './FolderExtra.module.css';
 import { useSelectedRepos } from './use-selected-repos';
 
@@ -200,6 +202,14 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   const pull = (paths: readonly string[] = selected) => run({ kind: 'pull' }, paths);
 
   /**
+   * branch 업데이트 (BR-09): 로컬 branch `name` 을 저장소마다 업스트림으로 fast-forward 한다 (checkout 하지 않은 branch 도).
+   * 확인 없이 바로 실행한다 — fast-forward 만 하므로 잃는 commit 이 없다. 대상은 브랜치 트리가 고른 저장소(그 branch 가
+   * 있고 업스트림이 있는 저장소)이고, 빈 목록이면 실행하지 않는다 (코어에서 빈 목록은 "전부")
+   */
+  const updateBranch = (name: string, paths: readonly string[]) =>
+    paths.length === 0 ? Promise.resolve(null) : run({ kind: 'updateBranch', name }, paths);
+
+  /**
    * push (WS-09, W14·W19): 항상 저장소 체크 목록을 거친다 (checkout 체크 목록과 같은 부품·같은 묶음 모양). 올라갈
    * commit 이 있는 저장소는 체크된 채로, 건너뛸 저장소는 같은 목록에 꺼진 칸과 사유로 보인다. 체크한 저장소만 명시
    * 목록으로 넘기고, 하나도 체크하지 않으면 확인 단추가 꺼진다 (빈 목록이 "전부"로 가지 않게 — 확인이 와도 다시 거른다).
@@ -248,7 +258,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
       title: t.branchTitle,
       message: describe(paths),
       fields: [
-        { key: 'name', label: t.branchName, required: true },
+        branchNameField({ key: 'name', label: t.branchName, required: true }),
         { key: 'checkout', label: t.branchCheckout, type: 'checkbox', initial: true },
       ],
       confirmLabel: S.dialog.create,
@@ -284,7 +294,8 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
       title: t.worktreeTitle,
       message: `${describe(paths)} → ${root}`,
       fields: [
-        { key: 'branch', label: t.worktreeBranch, required: true },
+        // 만들 수도 있고 있는 branch 를 고를 수도 있다 (공백이 든 이름은 어느 쪽이든 git 이 받지 않는다)
+        branchNameField({ key: 'branch', label: t.worktreeBranch, required: true }, 'use'),
         { key: 'create', label: t.worktreeCreate, type: 'checkbox', initial: true },
       ],
       confirmLabel: S.dialog.create,
@@ -379,7 +390,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
       message: tl.newBranchFromTargets(targets.length),
       // 옵션(이름·checkout)과 대상 저장소 체크 칸을 묶음으로 나눈다 (W19)
       fields: [
-        { key: 'name', label: t.branchName, required: true },
+        branchNameField({ key: 'name', label: t.branchName, required: true }),
         { key: 'checkout', label: t.branchCheckout, type: 'checkbox', initial: false },
         ...targets.map((r) => ({
           key: repoKey(r.path),
@@ -413,6 +424,59 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     }
   };
 
+  /**
+   * 브랜치 트리의 이름 변경 (로컬 branch): 새 이름(지금 이름으로 채움, 정규화)과 그 branch 를 가진 저장소의 체크 목록(처음엔
+   * 모두 체크)을 받아 체크한 저장소에서 일괄로 바꾼다. 새 이름이 지금 이름과 같거나 체크한 저장소가 없으면 확인을 끈다.
+   * 새 이름이 이미 있는 저장소는 코어가 건너뛴다. 결과(실행하지 않았으면 null)와 새 이름을 돌려준다
+   */
+  const renameBranch = async (
+    from: string,
+    targets: readonly { path: string; name: string }[],
+  ): Promise<{ result: BatchResult | null; to: string; paths: string[] } | null> => {
+    if (targets.length === 0 || running) {
+      return null;
+    }
+    const tl = S.folder.timeline;
+    // 저장소 체크 칸의 키. 이름 칸의 키와 겹치지 않게 접두를 붙인다
+    const repoKey = (path: string) => `repo:${path}`;
+    const repos = requireChecked(
+      targets.map((r) => repoKey(r.path)),
+      t.noneChecked,
+    );
+    const v = await dialogs.prompt({
+      title: tl.renameTitle(from),
+      message: tl.renameTargets(targets.length),
+      fields: [
+        branchNameField(
+          { key: 'name', label: S.dialog.newName, initial: from, required: true },
+          'rename',
+        ),
+        ...targets.map((r) => ({
+          key: repoKey(r.path),
+          label: r.name,
+          type: 'checkbox' as const,
+          initial: true,
+          group: t.repoGroup(targets.length),
+        })),
+      ],
+      validate: (values) =>
+        normalizeBranchName(typeof values.name === 'string' ? values.name : '') === from
+          ? tl.renameSame
+          : repos(values),
+      confirmLabel: S.dialog.rename,
+    });
+    if (!v) {
+      return null;
+    }
+    const to = str(v, 'name');
+    const paths = targets.filter((r) => bool(v, repoKey(r.path))).map((r) => r.path);
+    // 빈 목록은 코어에서 "전부"를 뜻한다. 아무것도 고르지 않았거나 이름이 그대로면 실행하지 않는다
+    if (paths.length === 0 || to === '' || to === from) {
+      return null;
+    }
+    return { result: await run({ kind: 'renameBranch', from, to }, paths), to, paths };
+  };
+
   return {
     dialogs,
     /** 고른 저장소 (빈 목록 = 전부) */
@@ -421,12 +485,14 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     running,
     fetch,
     pull,
+    updateBranch,
     push,
     createBranch,
     checkout,
     worktree,
     checkoutBranch,
     createBranchFrom,
+    renameBranch,
   };
 }
 
@@ -482,7 +548,7 @@ export function FolderBatchBar() {
         <div className={styles.result}>
           <div className={styles.resultHead}>
             <span>
-              {f.result.label} · {t.result(f.result.succeeded, f.result.skipped, f.result.failed)}
+              {f.result.label} · {batchSummary(f.result)}
             </span>
             <span className={styles.spacer} />
             <Button onClick={f.clearResult}>{t.close}</Button>
@@ -495,9 +561,7 @@ export function FolderBatchBar() {
                 data-state={r.skipped ? 'skipped' : r.ok ? 'ok' : 'failed'}
               >
                 <span className={styles.resultName}>{r.name}</span>
-                <span className={styles.resultState}>
-                  {r.skipped ? `${t.skipped}: ${r.skipped}` : r.ok ? t.ok : t.failed}
-                </span>
+                <span className={styles.resultState}>{repoResultState(r)}</span>
                 {r.message ? <span className={styles.resultMsg}>{r.message}</span> : null}
               </li>
             ))}

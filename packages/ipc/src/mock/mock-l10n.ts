@@ -30,4 +30,21 @@ export const mockReason = {
     pick(`원격 branch 가 없음: ${tracking}`, `Remote branch not found: ${tracking}`),
   /** 일괄 commit: stage 된 변경이 없다 */
   nothingStaged: () => pick('stage 된 변경 없음', 'No staged changes'),
+  /** branch 업데이트 (BR-09)·이름 바꾸기: 그 이름의 로컬 branch 가 없다 (코어 `reason::no_branch`) */
+  noBranch: () => pick('branch 없음', 'No such branch'),
+  /** 일괄 이름 바꾸기: 새 이름의 branch 가 이미 있다 (코어 `rename_args`) */
+  nameTaken: (name: string) =>
+    pick(`새 이름이 이미 있음: ${name}`, `New name already exists: ${name}`),
+  /** branch 업데이트: 다른 워크트리에서 checkout 중 (코어 `NotUpdatable::OtherWorktree`) */
+  otherWorktree: (path: string) =>
+    pick(`다른 워크트리에서 checkout 중 (${path})`, `Checked out in another worktree (${path})`),
+  /** branch 업데이트: 로컬이 앞섬 (코어 `branch_update::ahead_reason`) */
+  ahead: (n: number) =>
+    pick(`로컬이 앞섬 (⇡${n}), 받을 것 없음`, `Local is ahead (⇡${n}), nothing to update`),
+  /** branch 업데이트: 갈라짐 (코어 `branch_update::diverged_reason`) */
+  diverged: (ahead: number, behind: number) =>
+    pick(
+      `갈라져 갱신하지 않음 (⇡${ahead} ⇣${behind})`,
+      `Diverged, not updated (⇡${ahead} ⇣${behind})`,
+    ),
 };

@@ -266,6 +266,37 @@ describe('파일 API 목 (W10) — repo·conflict 장면', () => {
     expect((await client.fsReadFile(session, 'src/lib/money/format.ts')).kind).toBe('text');
   });
 
+  it('Rollback 흉내: 추가·untracked 파일은 상태와 트리에서 사라지고 충돌 항목은 거부된다', async () => {
+    const { client, session } = await open('repo');
+    const before = (await client.repoState(session)).status.entries;
+    const added = before.find((e) => e.index === 'added' && e.worktree !== 'deleted');
+    const untracked = before.find((e) => e.worktree === 'untracked');
+    const modified = before.find((e) => e.index === 'unmodified' && e.worktree === 'modified');
+    if (!added || !untracked || !modified) {
+      throw new Error('repo 장면에 추가·untracked·수정 표본이 있어야 한다');
+    }
+    await client.rollbackPaths(session, [added.path, untracked.path, modified.path]);
+    const after = (await client.repoState(session)).status.entries.map((e) => e.path);
+    for (const e of [added, untracked, modified]) {
+      expect(after).not.toContain(e.path);
+    }
+    expect(after.length).toBe(before.length - 3);
+    expect(await client.fsReadFile(session, added.path)).toEqual({ kind: 'missing' });
+    expect(await client.fsReadFile(session, untracked.path)).toEqual({ kind: 'missing' });
+    expect((await client.fsReadFile(session, modified.path)).kind).toBe('text');
+
+    const conflict = await open('conflict');
+    const conflicted = (await conflict.client.repoState(conflict.session)).status.entries.find(
+      (e) => e.conflict,
+    );
+    expect(conflicted).toBeDefined();
+    expect(
+      await rejectionKind(
+        conflict.client.rollbackPaths(conflict.session, [conflicted?.path ?? '']),
+      ),
+    ).toBe('internal');
+  });
+
   it('상태 표본과 잘리는 디렉터리, 권한 없는 디렉터리가 있다', async () => {
     const { client, session } = await open('repo');
     const icons = await client.fsListDir(session, 'src/generated/icons');

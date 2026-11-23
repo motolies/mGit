@@ -28,6 +28,7 @@ import {
   type RepoBranchDeps,
   repoBranchMenu,
   repoBranchRowActions,
+  updateBlocked,
 } from './repo-branch-menu';
 import {
   buildRepoBranchTree,
@@ -53,7 +54,8 @@ function copyText(text: string): void {
 
 /**
  * 저장소 탭 브랜치 트리의 상태와 동작 (BT-11). 클릭·Space = 그 커밋으로 이동(로그 탭이 열리고 그 행으로, 결정 16번),
- * 더블클릭·Enter = checkout 류(`openRepoBranch`), 우클릭 = 옛 사이드바 메뉴(`repoBranchMenu`), Worktrees 그룹 끝 단추 =
+ * 더블클릭·Enter = branch 는 그래프를 그 branch 와 기본 branch(master·origin/master, 없으면 main)로 거르기, 태그는 분리
+ * checkout, 워크트리는 탭 열기(`openRepoBranch`), 우클릭 = 옛 사이드바 메뉴(checkout 포함, `repoBranchMenu`), Worktrees 그룹 끝 단추 =
  * 정리·만들기. 세로 툴바(BT-05): 접기, 새 branch(⌘⇧B 와 같은 흐름), Fetch(툴바 Fetch 와 같다), 즐겨찾기, 모두 펼치기·접기
  */
 export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
@@ -91,6 +93,7 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
     rebase: st.rebase,
     renameBranch: st.renameBranch,
     setUpstream: st.setUpstream,
+    updateBranch: st.updateBranch,
     deleteBranch: st.deleteBranch,
     fetch: st.fetch,
     push: st.push,
@@ -201,12 +204,12 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
     },
     [setView, source, jumpToCommit],
   );
-  /** 더블클릭·Enter: checkout 류 (`openRepoBranch`) */
+  /** 더블클릭·Enter: branch 는 그래프를 그 branch 와 기본 branch 로 거르기, 태그·워크트리는 지금까지대로 (`openRepoBranch`) */
   const onOpen = useCallback(
     (node: BranchTreeNode) => {
       const target = repoBranchTarget(node.id, source);
       if (target) {
-        openRepoBranch(target, deps);
+        openRepoBranch(target, deps, source.labels);
       }
     },
     [source, deps],
@@ -238,6 +241,11 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
   const onSearchChange = useCallback((search: string) => setView?.({ search }), [setView]);
 
   const picked = selectionFavorite(nodes, view.selected);
+  // 세로 툴바의 "선택한 branch 업데이트" (BR-09): 고른 행이 하나이고 로컬 branch 일 때, 메뉴의 업데이트와 같은 조건으로
+  const pickedTarget =
+    view.selected.length === 1 ? repoBranchTarget(view.selected[0] ?? '', source) : null;
+  const updateLabel = pickedTarget?.kind === 'local' ? pickedTarget.label : null;
+  const updateOff = updateLabel === null || updateBlocked(updateLabel, deps.state);
   const t = S.workspace.repoLog;
   return {
     key: s.id,
@@ -250,6 +258,16 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
       fetchDisabled: s.busy || s.op !== null || !s.hasRemotes,
       onNewBranch: () => void createBranchFlow(dialogs, s.createBranch),
       onFetch: () => void s.fetch(null, true),
+      onUpdate: () => {
+        if (updateLabel && !updateOff) {
+          void s.updateBranch(updateLabel.shortName);
+        }
+      },
+      updateDisabled: updateOff,
+      updateTitle:
+        updateLabel && !updateOff
+          ? `${S.branches.toolbar.update}: ${updateLabel.shortName}`
+          : S.branches.toolbar.updateNone,
       favorite: picked.favorite,
       onToggleFavorite: () => setFavorites(picked.fullNames, !picked.favorite),
       onExpandAll: () => setView?.({ expansion: expansionForAll(nodes, true) }),

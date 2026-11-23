@@ -228,7 +228,8 @@ export const BranchTree = memo(function BranchTree({
 
   /**
    * 트리의 키보드 조작 (공용 규칙 `treeKeyCommand`): ↑↓·Home·End 이동, ←→ 접기·펼치기와 부모·자식 이동(검색 중에는
-   * 모두 펼쳐 보이므로 ← 는 부모로만), Enter 열기(checkout), Space 누르기(로그 필터), ⇧F10·메뉴 키 우클릭 메뉴.
+   * 모두 펼쳐 보이므로 ← 는 부모로만), Enter 열기(더블클릭과 같은 `onOpen` — branch 는 기본 branch 와 함께 그래프 거르기),
+   * Space 누르기(클릭과 같은 `onActivate`), ⇧F10·메뉴 키 우클릭 메뉴.
    * 그룹·폴더 행의 Enter·Space 는 펼침을 뒤집는다. ⌘Space 는 선택에 더한다 (클릭의 ⌘ 와 같다)
    */
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {

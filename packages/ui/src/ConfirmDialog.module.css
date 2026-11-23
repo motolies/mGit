@@ -141,3 +141,11 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* 다듬은 값 미리보기 (PromptDialog `normalize`, 예: "만들 이름: feature-x"): 입력 칸 바로 아래에 붙인다 */
+.preview {
+  margin-top: -6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

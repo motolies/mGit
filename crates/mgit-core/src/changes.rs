@@ -1,6 +1,6 @@
 //! 변경 사항·스테이징·커밋 (CHG-02~06, DIFF-01·02).
 //!
-//! 모든 상태 변경은 `run_write`(쓰기 큐)를 지난다. discard 는 되돌릴 수 없으므로
+//! 모든 상태 변경은 `run_write`(쓰기 큐)를 지난다. discard·rollback 은 되돌릴 수 없으므로
 //! 지우기 전 사본을 앱 백업 영역에 두고 색인을 남긴다 (CHG-04).
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -15,8 +15,8 @@ use mgit_git::cmd::{
 use mgit_git::patch::build_partial_patch;
 use mgit_l10n::{pick, tr};
 use mgit_model::{
-    BackupRecord, DiffOptions, EnvProfile, FileDiff, GitRequest, LineKind, LineSelection,
-    MarkerHit, Oid, now_millis,
+    BackupRecord, DiffOptions, EnvProfile, FileDiff, FileState, GitRequest, InProgressOp, LineKind,
+    LineSelection, MarkerHit, Oid, StatusEntry, now_millis,
 };
 
 use crate::core::Core;
@@ -128,6 +128,99 @@ fn refuse_non_utf8(diff: &FileDiff, path: &str) -> Result<(), CoreError> {
         )));
     }
     Ok(())
+}
+
+/// Rollback 할 대상 (요청 경로를 status 항목으로 펼친 결과)
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RollbackPlan {
+    /// 백업할 작업 트리 경로 (항목의 현재 경로)
+    backup: Vec<String>,
+    /// 지울 untracked 경로
+    untracked: Vec<String>,
+    /// git 으로 HEAD 에 맞출 경로 (rename·copy 의 원래 경로 포함)
+    tracked: Vec<String>,
+    /// index 에 추가(A)된 경로 — unborn 저장소에서 디스크에서도 지울 대상
+    added: Vec<String>,
+}
+
+/// 요청 경로를 비교용으로 다듬는다: `.`·빈 조각·끝의 `/` 를 없앤다. 빈 문자열이면 저장소 전체다
+fn norm_rel(p: &str) -> String {
+    p.split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// status 경로 `path` 가 다듬은 요청 경로 `want` 자체이거나 그 아래인지
+fn path_under(path: &str, want: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    want.is_empty()
+        || path == want
+        || path
+            .strip_prefix(want)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// 요청 경로(파일·폴더)를 status 항목으로 펼치고 되돌릴 수 있는지 검사한다 (세션 상태만 보는 순수 함수).
+/// 충돌 항목과, 진행 중 작업(bisect 제외)에서 stage 된 항목이 하나라도 있으면 아무것도 하지 않고 거부한다.
+/// 어느 항목에도 걸리지 않는 요청 경로(이미 깨끗한 파일)는 조용히 건너뛴다
+fn plan_rollback(
+    entries: &[StatusEntry],
+    paths: &[String],
+    op: Option<&InProgressOp>,
+) -> Result<RollbackPlan, CoreError> {
+    let wants: Vec<String> = paths.iter().map(|p| norm_rel(p)).collect();
+    let hit = |p: &str| wants.iter().any(|w| path_under(p, w));
+    let chosen: Vec<&StatusEntry> = entries
+        .iter()
+        .filter(|e| e.worktree != FileState::Ignored)
+        .filter(|e| hit(&e.path) || e.orig_path.as_deref().is_some_and(hit))
+        .collect();
+
+    let conflicts: Vec<&str> = chosen
+        .iter()
+        .filter(|e| e.conflict.is_some())
+        .map(|e| e.path.as_str())
+        .collect();
+    if !conflicts.is_empty() {
+        return Err(CoreError::Invalid(tr!(
+            "충돌 중인 파일은 되돌리지 않습니다. 먼저 충돌을 해결하거나 작업을 중단하세요: {}",
+            "Conflicted files are not rolled back. Resolve the conflicts or abort the operation first: {}",
+            conflicts.join(", ")
+        )));
+    }
+    // bisect 는 index 에 해결 결과를 두지 않으니 막지 않는다
+    if op.is_some_and(|o| !matches!(o, InProgressOp::Bisect)) {
+        let staged: Vec<&str> = chosen
+            .iter()
+            .filter(|e| e.is_staged())
+            .map(|e| e.path.as_str())
+            .collect();
+        if !staged.is_empty() {
+            return Err(CoreError::Invalid(tr!(
+                "merge·rebase 같은 작업이 진행 중이라 stage 된 변경은 되돌리지 않습니다 (해결 결과 보호): {}",
+                "An operation such as merge or rebase is in progress, so staged changes are not rolled back (protecting resolutions): {}",
+                staged.join(", ")
+            )));
+        }
+    }
+
+    let mut plan = RollbackPlan::default();
+    for e in chosen {
+        plan.backup.push(e.path.clone());
+        if e.is_untracked() {
+            plan.untracked.push(e.path.clone());
+            continue;
+        }
+        plan.tracked.push(e.path.clone());
+        if let Some(orig) = &e.orig_path {
+            plan.tracked.push(orig.clone());
+        }
+        if e.index == FileState::Added {
+            plan.added.push(e.path.clone());
+        }
+    }
+    Ok(plan)
 }
 
 impl Core {
@@ -499,6 +592,113 @@ impl Core {
         Ok(id)
     }
 
+    /// 경로들의 변경을 HEAD 기준으로 되돌린다 (Rollback, CHG-04). stage 된 변경까지 되돌리는 점이
+    /// unstaged 만 버리는 `discard` 와 다르다. 지우거나 덮기 전에 작업 트리 파일을 모두 백업하고 백업 id 를 돌려준다.
+    ///
+    /// - 요청 경로는 파일이나 폴더다. 폴더면 그 아래 status 항목(untracked 는 `-uall` 이라 파일 단위)으로 펼친다
+    /// - 충돌 항목, 진행 중 작업(merge·rebase 등)의 stage 된 항목은 거부한다 (해결 결과 보호)
+    /// - untracked 파일은 지운다 (링크는 따라가지 않는다). 폴더 자체는 지우지 않는다
+    /// - 추적·stage 항목은 `git restore --source=HEAD --staged --worktree` 로 되돌린다. no-overlay 라 HEAD 에 없는
+    ///   추가(A) 항목은 index·디스크에서 사라지고, rename 은 원래 경로와 새 경로를 함께 넘긴다
+    /// - HEAD 가 없는(unborn) 저장소는 index 의 항목이 모두 추가라 `rm --cached` 뒤 파일을 지운다
+    pub async fn rollback(
+        &self,
+        session: SessionId,
+        paths: &[String],
+    ) -> Result<Vec<u64>, CoreError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        for p in paths {
+            if !is_safe_rel_path(p) {
+                return Err(CoreError::Invalid(tr!(
+                    "잘못된 경로: {p}",
+                    "Invalid path: {p}"
+                )));
+            }
+        }
+        let s = self.inner().get(session)?;
+        // 화면이 본 상태가 오래됐을 수 있으니 되돌리기 전에 status·진행 중 작업을 다시 읽는다
+        self.inner()
+            .refresh_session(&s, RefreshScope::all(true))
+            .await;
+        let (plan, has_head) = {
+            let st = s.state();
+            (
+                plan_rollback(&st.status.entries, paths, st.op.as_ref())?,
+                st.refs.head.oid().is_some(),
+            )
+        };
+        // 백업할 수 없는 폴더(중첩 저장소 등)는 함께 고른 파일까지 건드리기 전에 거부한다
+        let dirs: Vec<&str> = plan
+            .untracked
+            .iter()
+            .filter(|p| {
+                s.info
+                    .work_tree
+                    .join(p)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_dir())
+            })
+            .map(String::as_str)
+            .collect();
+        if !dirs.is_empty() {
+            return Err(CoreError::Invalid(tr!(
+                "폴더는 백업할 수 없어 되돌리지 않습니다: {}. 필요하면 직접 지우세요",
+                "Folders cannot be backed up, so they were not rolled back: {}. Delete them yourself if needed",
+                dirs.join(", ")
+            )));
+        }
+        let mut ids = Vec::new();
+        for p in &plan.backup {
+            if let Some(id) = self.backup_file(&s, p, "rollback")? {
+                ids.push(id);
+            }
+        }
+        // git 쪽을 먼저 한다. 실패하면 untracked 파일은 그대로 남는다
+        if !plan.tracked.is_empty() {
+            let args: &[&str] = if has_head {
+                &["restore", "--source=HEAD", "--staged", "--worktree"]
+            } else {
+                &["rm", "--cached", "-f", "-q", "--ignore-unmatch"]
+            };
+            let mut args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+            args.extend([
+                "--pathspec-from-file=-".into(),
+                "--pathspec-file-nul".into(),
+            ]);
+            let mut list = Vec::new();
+            for p in &plan.tracked {
+                list.extend_from_slice(p.as_bytes());
+                list.push(0);
+            }
+            self.run_write(
+                session,
+                WriteSpec::new(args)
+                    .with_stdin(list)
+                    .label("rollback")
+                    .skip_refresh(),
+            )
+            .await?;
+        }
+        // unborn 이면 index 에서 뺀 추가 파일을 디스크에서도 지운다 (폴더·서브모듈은 건드리지 않는다)
+        let mut remove: Vec<&String> = plan.untracked.iter().collect();
+        if !has_head {
+            remove.extend(plan.added.iter());
+        }
+        for p in remove {
+            // 링크는 따라가지 않고 링크 자체를 지운다 (끊긴 링크 포함)
+            let abs = s.info.work_tree.join(p);
+            if abs.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+                std::fs::remove_file(&abs).map_err(mgit_model::StoreError::Io)?;
+            }
+        }
+        self.inner()
+            .refresh_session(&s, RefreshScope::all(true))
+            .await;
+        Ok(ids)
+    }
+
     /// 세션 저장소의 백업 목록 (최신 순)
     pub fn backups(&self, session: SessionId, limit: u32) -> Result<Vec<BackupRecord>, CoreError> {
         let s = self.inner().get(session)?;
@@ -663,6 +863,7 @@ impl Core {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -684,6 +885,79 @@ mod tests {
             assert!(!is_safe_rel_path(bad), "{bad:?}");
         }
         assert!(is_safe_rel_path(r"a\b.txt"));
+    }
+
+    /// 시험용 status 항목
+    fn entry(path: &str, index: FileState, worktree: FileState) -> StatusEntry {
+        StatusEntry {
+            path: path.into(),
+            orig_path: None,
+            index,
+            worktree,
+            submodule: None,
+            conflict: None,
+            rename_score: None,
+        }
+    }
+
+    /// 요청 경로를 다듬어 폴더 접두사로 비교한다 (`a` 는 `ab/x` 를 고르지 않는다)
+    #[test]
+    fn rollback_path_matching() {
+        assert_eq!(norm_rel("./a//b/"), "a/b");
+        assert_eq!(norm_rel("."), "");
+        assert!(path_under("a/b.txt", "a"));
+        assert!(path_under("a", "a"));
+        assert!(path_under("nested/", "nested"));
+        assert!(!path_under("ab/x", "a"));
+        assert!(path_under("anything", ""));
+    }
+
+    /// 폴더 요청은 그 아래 항목으로 펼치고, rename 은 원래 경로도 git 에 넘기며, 추가(A)는 따로 모은다
+    #[test]
+    fn rollback_plan_expands_folders_and_renames() {
+        use FileState::*;
+        let mut renamed = entry("dir/new.txt", Renamed, Unmodified);
+        renamed.orig_path = Some("old.txt".into());
+        let entries = vec![
+            entry("dir/a.txt", Added, Unmodified),
+            entry("dir/u.txt", Unmodified, Untracked),
+            entry("other.txt", Modified, Modified),
+            renamed,
+        ];
+        let plan = plan_rollback(&entries, &["dir/".into()], None).unwrap();
+        assert_eq!(plan.backup, ["dir/a.txt", "dir/u.txt", "dir/new.txt"]);
+        assert_eq!(plan.untracked, ["dir/u.txt"]);
+        assert_eq!(plan.tracked, ["dir/a.txt", "dir/new.txt", "old.txt"]);
+        assert_eq!(plan.added, ["dir/a.txt"]);
+        // rename 의 원래 경로로 골라도 같은 항목이다
+        let plan = plan_rollback(&entries, &["old.txt".into()], None).unwrap();
+        assert_eq!(plan.tracked, ["dir/new.txt", "old.txt"]);
+        // 깨끗한 경로는 조용히 건너뛴다
+        assert_eq!(
+            plan_rollback(&entries, &["clean.txt".into()], None).unwrap(),
+            RollbackPlan::default()
+        );
+    }
+
+    /// 충돌 항목은 늘, 진행 중 작업(bisect 제외)의 stage 된 항목은 거부한다. unstaged 만 있는 항목은 된다
+    #[test]
+    fn rollback_plan_refuses_conflicts_and_staged_during_operation() {
+        use FileState::*;
+        let mut conflicted = entry("c.txt", Unmerged, Unmerged);
+        conflicted.conflict = Some(mgit_model::ConflictKind::BothModified);
+        let entries = vec![
+            conflicted,
+            entry("s.txt", Modified, Unmodified),
+            entry("w.txt", Unmodified, Modified),
+        ];
+        assert!(plan_rollback(&entries, &["c.txt".into()], None).is_err());
+        let merge = InProgressOp::Merge {
+            head: Oid::from_hex(b"0123456789abcdef0123456789abcdef01234567").unwrap(),
+        };
+        assert!(plan_rollback(&entries, &["s.txt".into()], Some(&merge)).is_err());
+        assert!(plan_rollback(&entries, &["w.txt".into()], Some(&merge)).is_ok());
+        assert!(plan_rollback(&entries, &["s.txt".into()], Some(&InProgressOp::Bisect)).is_ok());
+        assert!(plan_rollback(&entries, &["s.txt".into()], None).is_ok());
     }
 
     /// 쓰기 명령의 인자를 문자열로

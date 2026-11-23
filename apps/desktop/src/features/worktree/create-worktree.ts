@@ -1,6 +1,7 @@
-import { S } from '@mgit/ui';
+import { type PromptField, S } from '@mgit/ui';
 import { str } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
+import { branchNameField } from '../branch/branch-name';
 
 /** 워크트리 생성 흐름에 필요한 스토어 조각 */
 export type WorktreeActions = Pick<SessionState, 'suggestWorktreePath' | 'worktreeAdd'>;
@@ -9,14 +10,7 @@ interface PromptLike {
   prompt: (spec: {
     title: string;
     message?: string;
-    fields: readonly {
-      key: string;
-      label: string;
-      type?: 'text' | 'textarea' | 'checkbox';
-      placeholder?: string;
-      initial?: string | boolean;
-      required?: boolean;
-    }[];
+    fields: readonly PromptField[];
     confirmLabel?: string;
   }) => Promise<Record<string, string | boolean> | null>;
 }
@@ -32,7 +26,7 @@ export async function createWorktreeFlow(
 ): Promise<string | null> {
   const first = await d.prompt({
     title: S.worktree.createTitle,
-    fields: [{ key: 'name', label: S.worktree.branchName, required: true }],
+    fields: [branchNameField({ key: 'name', label: S.worktree.branchName, required: true })],
     confirmLabel: S.dialog.create,
   });
   if (!first) {

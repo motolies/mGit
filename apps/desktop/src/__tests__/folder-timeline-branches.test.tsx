@@ -13,7 +13,8 @@ import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PREF_BRANCH_FAVORITES } from '../features/branches/branch-favorites';
-import { batchNotice } from '../features/folder/batch-report';
+import { batchNotice, batchSummary, repoResultState } from '../features/folder/batch-report';
+import { FolderBatchBar } from '../features/folder/FolderBatchBar';
 import { FolderTimeline } from '../features/folder/FolderTimeline';
 import { useAppStore } from '../store';
 import type { SessionMeta } from '../store/app-store';
@@ -216,6 +217,12 @@ async function openMenu(id: string) {
   await tick();
   return screen.queryAllByRole('menuitem');
 }
+/** 우클릭 메뉴의 checkout… 으로 확인창을 연다 (더블클릭은 checkout 이 아니라 그래프 거르기다) */
+async function openCheckout(id: string) {
+  await openMenu(id);
+  act(() => fireEvent.click(screen.getByText(S.branches.menu.checkout)));
+  await tick();
+}
 /** 저장된 즐겨찾기 */
 const storedFavorites = () => JSON.parse(localStorage.getItem(PREF_BRANCH_FAVORITES) ?? 'null');
 const toasts = () => useAppStore.getState().toasts.map((t) => [t.kind, t.title, t.message]);
@@ -381,10 +388,128 @@ describe('브랜치 클릭과 로그 범위 (BT-03)', () => {
   });
 });
 
+describe('브랜치 더블클릭·Enter = 그 branch 와 기본 branch 로 거르기 (checkout 하지 않는다)', () => {
+  it('로컬 branch 를 더블클릭하면 [그 branch, main, origin/main] 으로 거르고 세 행이 선택으로 보인다. 확인창은 없다', async () => {
+    const { batch, lastRevs } = await setup();
+    act(() => fireEvent.doubleClick(row(LOCAL('hotfix'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'branches', names: ['hotfix', 'main', 'origin/main'] });
+    expect(selected()).toEqual([LOCAL('main'), LOCAL('hotfix'), REMOTE('origin/main')]);
+    expect(dialog()).toBeNull();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('저장소 범위도 그 branch 가 있는 저장소로 좁혀 필터 바에 보이고, 다른 branch 를 누르면 걸기 전으로 돌아간다', async () => {
+    const scopeSet = vi.fn<IpcClient['folderTimelineScopeSet']>(async () => {});
+    const { store } = await setup(undefined, { folderTimelineScopeSet: scopeSet });
+    const repoButton = () =>
+      within(logPanel() as HTMLElement)
+        .getAllByRole('button')
+        .find((b) => b.textContent?.startsWith(S.filterBar.repo));
+    // hotfix 는 api·docs 에만 있다
+    act(() => fireEvent.doubleClick(row(LOCAL('hotfix'))));
+    await tick();
+    expect(store.getState().timeline.scope).toEqual([pathOf('api'), pathOf('docs')]);
+    expect(scopeSet).toHaveBeenLastCalledWith(FOLDER_ID, [pathOf('api'), pathOf('docs')]);
+    expect(repoButton()?.textContent).toBe(S.filterBar.summary(S.filterBar.repo, 'api +1'));
+    // 한 번 클릭(다른 범위): 걸기 전(전부)으로
+    act(() => fireEvent.click(row(LOCAL('release'))));
+    await tick();
+    expect(store.getState().timeline.scope).toEqual([]);
+    expect(scopeSet).toHaveBeenLastCalledWith(FOLDER_ID, []);
+    // 모든 저장소에 있는 main 은 좁히지 않는다
+    act(() => fireEvent.doubleClick(row(LOCAL('main'))));
+    await tick();
+    expect(store.getState().timeline.scope).toEqual([]);
+    // branch 필터 해제(필터 바의 ×)도 되돌린다
+    act(() => fireEvent.doubleClick(row(LOCAL('feature/login'))));
+    await tick();
+    expect(store.getState().timeline.scope).toEqual([pathOf('web')]);
+    act(() => fireEvent.click(chipClear() as HTMLElement));
+    await tick();
+    expect(store.getState().timeline.query.revs).toEqual({ kind: 'all' });
+    expect(store.getState().timeline.scope).toEqual([]);
+  });
+
+  it('원격 행·기본 branch 자신·모든 저장소에서 현재인 branch 도 거른다', async () => {
+    const { lastRevs } = await setup();
+    act(() => fireEvent.doubleClick(row(REMOTE('origin/hotfix'))));
+    await tick();
+    expect(lastRevs()).toEqual({
+      kind: 'branches',
+      names: ['origin/hotfix', 'main', 'origin/main'],
+    });
+    act(() => fireEvent.doubleClick(row(LOCAL('main'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'branches', names: ['main', 'origin/main'] });
+    // feature/login 은 web 에만 있고 거기서 현재 branch 다 (예전에는 checkout 할 것이 없어 아무 일도 없었다)
+    act(() => fireEvent.doubleClick(row(LOCAL('feature/login'))));
+    await tick();
+    expect(lastRevs()).toEqual({
+      kind: 'branches',
+      names: ['feature/login', 'main', 'origin/main'],
+    });
+    expect(dialog()).toBeNull();
+  });
+
+  it('Enter 도 같다. 클릭 뒤 더블클릭이면 마지막 범위는 더블클릭의 것이다', async () => {
+    const { lastRevs } = await setup();
+    const tree = within(branchPanel() as HTMLElement).getByRole('tree');
+    act(() => fireEvent.click(row(LOCAL('development'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'solo', name: 'development' });
+    act(() => fireEvent.keyDown(tree, { key: 'Enter' }));
+    await tick();
+    expect(lastRevs()).toEqual({
+      kind: 'branches',
+      names: ['development', 'main', 'origin/main'],
+    });
+    act(() => fireEvent.click(row(LOCAL('release'))));
+    act(() => fireEvent.doubleClick(row(LOCAL('release'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'branches', names: ['release', 'main', 'origin/main'] });
+  });
+
+  it('HEAD 행·그룹의 더블클릭은 범위를 바꾸지 않는다', async () => {
+    const { querySet } = await setup();
+    const before = querySet.mock.calls.length;
+    act(() => fireEvent.doubleClick(row('head')));
+    act(() => fireEvent.doubleClick(row('group:local')));
+    await tick();
+    // HEAD 행의 한 번 클릭(더블클릭에 앞선 클릭은 jsdom 에서 따로 오지 않는다)도 없었으니 질의가 없다
+    expect(querySet.mock.calls.length).toBe(before);
+    expect(dialog()).toBeNull();
+  });
+});
+
 describe('브랜치 우클릭 메뉴 (BT-07)', () => {
-  it('브랜치 행의 메뉴는 checkout…, 여기서 새 branch…, 이 branch 만 보기, 즐겨찾기, 이름 복사다', async () => {
+  it('로컬 브랜치 행의 메뉴는 checkout…, 업데이트, 여기서 새 branch…, 이름 변경…, 이 branch 만 보기, 즐겨찾기, 이름 복사다', async () => {
     await setup();
     const menu = await openMenu(LOCAL('hotfix'));
+    expect(menu.map((m) => m.textContent)).toEqual([
+      S.branches.menu.checkout,
+      // hotfix 는 어느 저장소에도 업스트림이 없다: 사유를 이름에 적고 끈다 (BR-09)
+      S.branches.menu.updateNone,
+      S.branches.menu.newBranchHere,
+      S.menu.rename,
+      S.branches.menu.showOnly,
+      S.branches.addFavorite,
+      S.menu.copyName,
+    ]);
+    expect(menu.map((m) => m.getAttribute('aria-disabled'))).toEqual([
+      null,
+      'true',
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it('원격 브랜치 행에는 업데이트·이름 변경이 없다', async () => {
+    await setup();
+    const menu = await openMenu(REMOTE('origin/hotfix'));
     expect(menu.map((m) => m.textContent)).toEqual([
       S.branches.menu.checkout,
       S.branches.menu.newBranchHere,
@@ -392,13 +517,53 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       S.branches.addFavorite,
       S.menu.copyName,
     ]);
-    expect(menu.map((m) => m.getAttribute('aria-disabled'))).toEqual([
-      null,
-      null,
-      null,
-      null,
-      null,
+  });
+
+  it('업데이트 (BR-09): 업스트림이 있는 저장소에서만 일괄 UpdateBranch 를 부르고 결과를 알린다. 원격 branch 에는 없다', async () => {
+    const { batch } = await setup(async () => ({
+      label: '일괄 업데이트: development',
+      results: [
+        {
+          path: pathOf('api'),
+          name: 'api',
+          ok: true,
+          skipped: null,
+          message: '',
+          moved: { branch: 'development', from: 'a'.repeat(40), to: 'b'.repeat(40), commits: 54 },
+        },
+        {
+          path: pathOf('web'),
+          name: 'web',
+          ok: true,
+          skipped: '로컬이 앞섬 (⇡3), 받을 것 없음',
+          message: '',
+        },
+      ],
+      succeeded: 1,
+      skipped: 1,
+      failed: 0,
+    }));
+    const menu = await openMenu(LOCAL('development'));
+    expect(menu[1]?.textContent).toBe(S.branches.menu.updateIn(2));
+    act(() => fireEvent.click(screen.getByText(S.branches.menu.updateIn(2))));
+    await tick();
+    expect(batch).toHaveBeenCalledWith(FOLDER_ID, { kind: 'updateBranch', name: 'development' }, [
+      pathOf('api'),
+      pathOf('web'),
     ]);
+    expect(toasts()).toEqual([
+      [
+        'success',
+        '일괄 업데이트: development',
+        [
+          S.folder.batch.resultMoved(1, 0, 0, 1, 0),
+          'web: 로컬이 앞섬 (⇡3), 받을 것 없음',
+          `api: ${S.branches.update.moved('development', 54)}`,
+        ].join('\n'),
+      ],
+    ]);
+    const remote = await openMenu(REMOTE('origin/main'));
+    expect(remote.map((m) => m.textContent)).not.toContain(S.branches.menu.updateNone);
   });
 
   it('"여기서 새 branch…" 는 그 브랜치를 가진 저장소를 체크 목록으로 확인받고, 체크한 저장소에만 만든다', async () => {
@@ -432,6 +597,26 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       [pathOf('api'), pathOf('docs')],
     );
     expect(toasts()).toHaveLength(1);
+  });
+
+  it('"여기서 새 branch…" 의 이름은 정규화한다: 칸 아래에 만들 이름을 미리 보이고 그 이름으로 만든다', async () => {
+    const { batch } = await setup();
+    await openMenu(LOCAL('main'));
+    act(() => fireEvent.click(screen.getByText(S.branches.menu.newBranchHere)));
+    await tick();
+    const open = dialog() as HTMLDialogElement;
+    const preview = () => open.querySelector('[data-role="normalized-preview"]');
+    fireEvent.change(within(open).getByRole('textbox'), { target: { value: 'main' } });
+    expect(preview()).toBeNull();
+    fireEvent.change(within(open).getByRole('textbox'), { target: { value: ' main  - 2 ' } });
+    expect(preview()?.textContent).toBe(S.dialog.branchNameWillCreate('main-2'));
+    submit();
+    await tick();
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      { kind: 'createBranch', name: 'main-2', checkout: false, startPoint: 'refs/heads/main' },
+      [pathOf('api'), pathOf('web'), pathOf('docs')],
+    );
   });
 
   it('"여기서 새 branch…" 에서 저장소를 모두 해제하면 실행하지 않는다 (빈 목록은 코어에서 전부를 뜻한다)', async () => {
@@ -537,6 +722,107 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
   });
 });
 
+describe('브랜치 이름 변경 (로컬 branch, 폴더 일괄 RenameBranch)', () => {
+  /** 이름 변경 결과: api 는 바꾸고 web 은 새 이름이 이미 있어 건너뛴다 */
+  const RENAMED: BatchResult = {
+    label: '일괄 이름 바꾸기: development → dev-2',
+    results: [
+      { path: pathOf('api'), name: 'api', ok: true, skipped: null, message: '' },
+      {
+        path: pathOf('web'),
+        name: 'web',
+        ok: true,
+        skipped: '새 이름이 이미 있음: dev-2',
+        message: '',
+      },
+    ],
+    succeeded: 1,
+    skipped: 1,
+    failed: 0,
+  };
+
+  /** development 행의 메뉴에서 이름 변경을 연다 */
+  async function openRename() {
+    await openMenu(LOCAL('development'));
+    act(() => fireEvent.click(screen.getByText(S.menu.rename)));
+    await tick();
+    return dialog() as HTMLDialogElement;
+  }
+
+  it('새 이름 칸은 지금 이름으로 채우고, 그 branch 가 있는 저장소를 체크 목록으로 확인받는다. 그대로면 확인이 꺼진다', async () => {
+    const { batch } = await setup();
+    const open = await openRename();
+    expect(open.querySelector('h2')?.textContent).toBe(
+      S.folder.timeline.renameTitle('development'),
+    );
+    expect(open.textContent).toContain(S.folder.timeline.renameTargets(2));
+    const name = within(open).getByRole<HTMLInputElement>('textbox', { name: S.dialog.newName });
+    expect(name.value).toBe('development');
+    const boxes = within(open).getAllByRole<HTMLInputElement>('checkbox');
+    expect(boxes.map((b) => [b.labels?.[0]?.textContent, b.checked])).toEqual([
+      ['api', true],
+      ['web', true],
+    ]);
+    expect(within(open).getByRole('group', { name: S.folder.batch.repoGroup(2) })).toBeTruthy();
+    const confirm = () =>
+      within(open).getByRole<HTMLButtonElement>('button', { name: S.dialog.rename });
+    // 지금 이름 그대로(공백만 덧붙여도 정규화하면 같다)면 확인이 꺼지고 사유가 보인다
+    expect(confirm().disabled).toBe(true);
+    expect(open.textContent).toContain(S.folder.timeline.renameSame);
+    fireEvent.change(name, { target: { value: ' development ' } });
+    expect(confirm().disabled).toBe(true);
+    // 저장소를 모두 풀어도 꺼진다
+    fireEvent.change(name, { target: { value: 'dev-2' } });
+    expect(confirm().disabled).toBe(false);
+    for (const box of boxes) {
+      fireEvent.click(box);
+    }
+    expect(confirm().disabled).toBe(true);
+    submit();
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('정규화한 새 이름으로 체크한 저장소에서 일괄로 바꾸고 결과를 알린다', async () => {
+    const { batch } = await setup(async () => RENAMED);
+    const open = await openRename();
+    const name = within(open).getByRole('textbox', { name: S.dialog.newName });
+    fireEvent.change(name, { target: { value: 'dev  2' } });
+    expect(open.querySelector('[data-role="normalized-preview"]')?.textContent).toBe(
+      S.dialog.branchNameWillRename('dev-2'),
+    );
+    submit();
+    await tick();
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      { kind: 'renameBranch', from: 'development', to: 'dev-2' },
+      [pathOf('api'), pathOf('web')],
+    );
+    expect(toasts()).toEqual([
+      [
+        'success',
+        RENAMED.label,
+        `${S.folder.batch.result(1, 1, 0)}\nweb: 새 이름이 이미 있음: dev-2`,
+      ],
+    ]);
+  });
+
+  it('로그가 그 branch 로 걸려 있었으면 범위의 이름도 바꾼다. 바꾸지 않은 저장소가 남으면 옛 이름도 남긴다', async () => {
+    const { lastRevs } = await setup(async () => RENAMED);
+    act(() => fireEvent.click(row(LOCAL('development'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'solo', name: 'development' });
+    const open = await openRename();
+    fireEvent.change(within(open).getByRole('textbox', { name: S.dialog.newName }), {
+      target: { value: 'dev-2' },
+    });
+    submit();
+    await tick();
+    // web 은 건너뛰어 development 가 남았다
+    expect(lastRevs()).toEqual({ kind: 'branches', names: ['development', 'dev-2'] });
+  });
+});
+
 describe('브랜치 checkout (BT-07)', () => {
   it('확인창에 그 브랜치를 가진 저장소의 수와 이름을 체크 목록으로 보이고, 체크한 저장소에만 실행한다', async () => {
     const { batch } = await setup();
@@ -572,30 +858,9 @@ describe('브랜치 checkout (BT-07)', () => {
     ]);
   });
 
-  it('더블클릭과 Enter 도 같은 확인창을 연다', async () => {
-    await setup();
-    act(() => fireEvent.doubleClick(row(LOCAL('hotfix'))));
-    await tick();
-    expect(dialog()?.querySelector('h2')?.textContent).toBe(
-      S.folder.timeline.checkoutTitle('hotfix'),
-    );
-    act(() => fireEvent.click(within(dialog() as HTMLElement).getByText(S.confirm.cancel)));
-    await tick();
-    expect(dialog()).toBeNull();
-
-    const tree = within(branchPanel() as HTMLElement).getByRole('tree');
-    act(() => fireEvent.click(row(LOCAL('development'))));
-    act(() => fireEvent.keyDown(tree, { key: 'Enter' }));
-    await tick();
-    expect(dialog()?.querySelector('h2')?.textContent).toBe(
-      S.folder.timeline.checkoutTitle('development'),
-    );
-  });
-
   it('아무 저장소도 체크하지 않으면 실행하지 않는다 (빈 목록은 코어에서 전부를 뜻한다)', async () => {
     const { batch } = await setup();
-    act(() => fireEvent.doubleClick(row(LOCAL('hotfix'))));
-    await tick();
+    await openCheckout(LOCAL('hotfix'));
     const open = dialog() as HTMLElement;
     // 저장소 목록은 "대상 저장소" 묶음이다 (W19)
     expect(within(open).getByRole('group', { name: S.folder.batch.repoGroup(2) })).toBeTruthy();
@@ -614,8 +879,7 @@ describe('브랜치 checkout (BT-07)', () => {
 
   it('원격 브랜치는 로컬 추적 브랜치로 checkout 하고, 그렇게 된다는 것을 확인창에 적는다', async () => {
     const { batch } = await setup();
-    act(() => fireEvent.doubleClick(row(REMOTE('origin/hotfix'))));
-    await tick();
+    await openCheckout(REMOTE('origin/hotfix'));
     expect(dialog()?.querySelector('h2')?.textContent).toBe(
       S.folder.timeline.checkoutTitle('origin/hotfix'),
     );
@@ -633,8 +897,7 @@ describe('브랜치 checkout (BT-07)', () => {
 
   it('원격 브랜치를 추적하는 로컬 짝이 이미 현재 브랜치인 저장소는 표시하고 체크를 빼 둔다', async () => {
     await setup();
-    act(() => fireEvent.doubleClick(row(REMOTE('origin/main'))));
-    await tick();
+    await openCheckout(REMOTE('origin/main'));
     const boxes = within(dialog() as HTMLElement).getAllByRole<HTMLInputElement>('checkbox');
     // docs 는 origin/main 을 추적하는 main 에 이미 있다
     expect(boxes.map((b) => [b.labels?.[0]?.textContent, b.checked])).toEqual([
@@ -651,25 +914,16 @@ describe('브랜치 checkout (BT-07)', () => {
       branches: [...BRANCHES.branches, branch('origin/feature/login', at('web'))],
     };
     await setup(undefined, { folderBranches: async () => branches });
-    act(() => fireEvent.doubleClick(row(REMOTE('origin/feature/login'))));
-    await tick();
+    await openCheckout(REMOTE('origin/feature/login'));
     const boxes = within(dialog() as HTMLElement).getAllByRole<HTMLInputElement>('checkbox');
     expect(boxes.map((b) => [b.labels?.[0]?.textContent, b.checked])).toEqual([['web', true]]);
-  });
-
-  it('모든 저장소에서 이미 현재인 브랜치는 더블클릭해도 확인창을 열지 않는다', async () => {
-    await setup();
-    act(() => fireEvent.doubleClick(row(LOCAL('feature/login'))));
-    await tick();
-    expect(dialog()).toBeNull();
   });
 
   it('실행하지 못하면 사유를 알린다', async () => {
     await setup(async () => {
       throw new Error('세션 없음');
     });
-    act(() => fireEvent.doubleClick(row(LOCAL('hotfix'))));
-    await tick();
+    await openCheckout(LOCAL('hotfix'));
     submit();
     await tick();
     expect(toasts()).toEqual([['error', S.folder.timeline.batchFailed, '세션 없음']]);
@@ -766,6 +1020,32 @@ describe('세로 툴바 (BT-05)', () => {
     expect(storedFavorites()).toEqual({});
   });
 
+  it('선택한 branch 업데이트 (BR-09): 업스트림이 있는 로컬 branch 하나를 골랐을 때만 켜지고 그 저장소들에서 업데이트한다', async () => {
+    const { batch } = await setup();
+    expect(toolbarButton(t.update).disabled).toBe(true);
+    expect(toolbarButton(t.update).getAttribute('title')).toBe(t.updateNone);
+    // 업스트림이 없는 branch·원격 branch 는 꺼진 채
+    act(() => fireEvent.click(row(LOCAL('hotfix'))));
+    expect(toolbarButton(t.update).disabled).toBe(true);
+    act(() => fireEvent.click(row(REMOTE('origin/main'))));
+    expect(toolbarButton(t.update).disabled).toBe(true);
+
+    act(() => fireEvent.click(row(LOCAL('development'))));
+    expect(toolbarButton(t.update).disabled).toBe(false);
+    expect(toolbarButton(t.update).getAttribute('title')).toBe(
+      S.folder.batch.withScope(`${t.update}: development`, S.folder.batch.repoGroup(2)),
+    );
+    act(() => fireEvent.click(toolbarButton(t.update)));
+    await tick();
+    expect(batch).toHaveBeenCalledWith(FOLDER_ID, { kind: 'updateBranch', name: 'development' }, [
+      pathOf('api'),
+      pathOf('web'),
+    ]);
+    // 둘을 고르면 꺼진다
+    act(() => fireEvent.click(row(LOCAL('main')), { metaKey: true }));
+    expect(toolbarButton(t.update).disabled).toBe(true);
+  });
+
   it('모두 접기·모두 펼치기는 그룹을 한꺼번에 접고 편다', async () => {
     await setup();
     act(() => fireEvent.click(toolbarButton(t.collapseAll)));
@@ -830,6 +1110,92 @@ describe('세로 툴바 (BT-05)', () => {
     await tick();
     expect(dialog()?.textContent).toContain(
       S.folder.batch.targets(S.folder.batch.selected(1), 'web'),
+    );
+  });
+});
+
+describe('일괄 결과의 실제 변화 (BR-09)', () => {
+  const moved = (branch: string, commits: number) => ({
+    branch,
+    from: 'a'.repeat(40),
+    to: (commits > 0 ? 'b' : 'a').repeat(40),
+    commits,
+  });
+
+  it('옮긴 결과가 있으면 성공을 갱신·이미 최신으로 나누고, 줄마다 "branch ← commit N개"·"이미 최신"을 쓴다', () => {
+    const result: BatchResult = {
+      label: '일괄 pull',
+      results: [
+        { path: '/f/a', name: 'a', ok: true, skipped: null, message: '', moved: moved('main', 3) },
+        { path: '/f/b', name: 'b', ok: true, skipped: null, message: '', moved: moved('dev', 0) },
+        { path: '/f/c', name: 'c', ok: true, skipped: '업스트림 없음', message: '' },
+        { path: '/f/d', name: 'd', ok: false, skipped: null, message: 'fatal: x' },
+      ],
+      succeeded: 2,
+      skipped: 1,
+      failed: 1,
+    };
+    expect(batchSummary(result)).toBe(S.folder.batch.resultMoved(1, 1, 0, 1, 1));
+    expect(result.results.map(repoResultState)).toEqual([
+      S.branches.update.moved('main', 3),
+      S.branches.update.upToDate,
+      `${S.folder.batch.skipped}: 업스트림 없음`,
+      S.folder.batch.failed,
+    ]);
+    expect(S.folder.batch.resultMoved(1, 1, 0, 1, 1)).toBe(
+      '갱신 1 · 이미 최신 1 · 건너뜀 1 · 실패 1',
+    );
+  });
+
+  it('개요의 결과 칸: 머리 줄은 갱신·이미 최신 수, 저장소 줄은 "완료" 대신 무엇이 바뀌었는지', async () => {
+    const { store } = await setup();
+    const result: BatchResult = {
+      label: '일괄 pull',
+      results: [
+        {
+          path: pathOf('api'),
+          name: 'api',
+          ok: true,
+          skipped: null,
+          message: '',
+          moved: moved('development', 54),
+        },
+        {
+          path: pathOf('docs'),
+          name: 'docs',
+          ok: true,
+          skipped: null,
+          message: '',
+          moved: moved('main', 0),
+        },
+      ],
+      succeeded: 2,
+      skipped: 0,
+      failed: 0,
+    };
+    act(() => store.setState({ batchResult: result }));
+    const { container } = render(<FolderBatchBar />);
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent);
+    expect(container.textContent).toContain(
+      `일괄 pull · ${S.folder.batch.resultMoved(1, 1, 0, 0, 0)}`,
+    );
+    expect(items).toEqual([
+      `api${S.branches.update.moved('development', 54)}`,
+      `docs${S.branches.update.upToDate}`,
+    ]);
+  });
+
+  it('옮긴 결과가 없는 작업(fetch 등)은 예전 요약과 "완료"를 쓴다', () => {
+    const result: BatchResult = {
+      label: '일괄 fetch',
+      results: [{ path: '/f/a', name: 'a', ok: true, skipped: null, message: '' }],
+      succeeded: 1,
+      skipped: 0,
+      failed: 0,
+    };
+    expect(batchSummary(result)).toBe(S.folder.batch.result(1, 0, 0));
+    expect(repoResultState(result.results[0] as BatchResult['results'][number])).toBe(
+      S.folder.batch.ok,
     );
   });
 });

@@ -6,6 +6,7 @@ import type {
   BatchOp,
   BatchResult,
   BlameLine,
+  BranchUpdate,
   ChangedFile,
   CheckoutTarget,
   CommandLogRecord,
@@ -83,7 +84,7 @@ import { type ContainingEntry, createContainingLoader } from './containing-loade
 import { describeError } from './errors';
 import { createFileTree, type FileTreeStore } from './file-tree';
 import type { TimelineAuthors } from './folder-store';
-import { notifyHub } from './notify';
+import { type Notice, notifyHub } from './notify';
 import { readPref, writePref } from './prefs';
 import {
   buildSquashRangePlan,
@@ -579,6 +580,11 @@ export interface SessionState {
   stageAll(): Promise<void>;
   unstageAll(): Promise<void>;
   discard(paths: string[]): Promise<void>;
+  /**
+   * 경로(파일·폴더)의 변경을 HEAD 기준으로 되돌린다 (파일 메뉴 Rollback — stage 된 변경 포함, 백업 뒤). 성공하면
+   * `discard` 처럼 "폐기 백업에서 복구할 수 있습니다" 를 알린다. 실패 사유는 `actionError`
+   */
+  rollback(paths: string[]): Promise<void>;
   applyLines(selection: LineSelection[]): Promise<void>;
   applyHunk(hunk: number): Promise<void>;
   discardLines(selection: LineSelection[]): Promise<void>;
@@ -665,6 +671,11 @@ export interface SessionState {
   deleteBranch(name: string, force: boolean): Promise<void>;
   deleteRemoteBranch(remote: string, name: string): Promise<void>;
   setUpstream(branch: string, upstream: string | null): Promise<void>;
+  /**
+   * 로컬 branch 를 업스트림으로 fast-forward (BR-09): checkout 하지 않은 branch 도 갱신하고 Undo 할 수 있다. 결과는
+   * 알림으로 보인다 (`branchUpdateNotice`)
+   */
+  updateBranch(name: string): Promise<void>;
   createTag(
     name: string,
     target: string | null,
@@ -989,6 +1000,24 @@ export function draftDroppedTitle(path: string, cause: DraftDropCause): string {
       return S.conflict.droppedBySkip(path);
     case 'continue':
       return S.conflict.droppedByContinue(path);
+  }
+}
+
+/**
+ * branch 업데이트 결과의 알림 (BR-09, 저장소 탭): 갱신하면 `development ← commit 39개`(성공), 이미 최신·로컬이 앞섬은
+ * 안내, 갈라져 옮기지 않았으면 안내에 수를 적는다
+ */
+export function branchUpdateNotice(name: string, result: BranchUpdate): Notice {
+  const t = S.branches.update;
+  switch (result.kind) {
+    case 'updated':
+      return { kind: 'success', title: t.moved(name, result.commits) };
+    case 'upToDate':
+      return { kind: 'info', title: t.upToDateOf(name) };
+    case 'ahead':
+      return { kind: 'info', title: t.ahead(name, result.commits) };
+    case 'diverged':
+      return { kind: 'info', title: t.diverged(name, result.ahead, result.behind) };
   }
 }
 
@@ -2038,6 +2067,14 @@ export function createSessionStore(
         });
       },
 
+      rollback(paths) {
+        return run(() => client.rollbackPaths(id, paths)).then((r) => {
+          if (r !== undefined) {
+            notifyHub.notify({ kind: 'info', title: S.safety.discardBackedUp });
+          }
+        });
+      },
+
       applyLines(selection) {
         const target = get().selectedFile;
         if (!target || target.commit) {
@@ -2705,6 +2742,14 @@ export function createSessionStore(
 
       setUpstream(branch, upstream) {
         return run(() => client.setUpstream(id, branch, upstream)).then(() => {});
+      },
+
+      updateBranch(name) {
+        return run(() => client.updateBranch(id, name)).then((r) => {
+          if (r !== undefined) {
+            notifyHub.notify(branchUpdateNotice(name, r));
+          }
+        });
       },
 
       createTag(name, target, message, sign = false) {

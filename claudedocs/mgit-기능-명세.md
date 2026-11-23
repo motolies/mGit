@@ -1,7 +1,7 @@
 # mGit 기능 명세서
 macOS·Windows에서 동작하는 개인용 Git GUI 클라이언트 mGit의 기능 요구사항과 아키텍처 초안.
 
-> ℹ️ 대상 독자: 개발자 본인 | 최종 수정: 2026-11-23 (tag 관리 마감 — delete_tag 제거·트리 개선 전후·공용 부품, BR-06·12절) | 근거 조사: [git-gui-클라이언트-조사.md](git-gui-클라이언트-조사.md)
+> ℹ️ 대상 독자: 개발자 본인 | 최종 수정: 2026-11-23 (branch 이름 정규화 BR-02·폴더 일괄 이름 변경 BR-04·브랜치 트리 더블클릭 = 기본 branch 와 그래프 거르기, branch 업데이트 BR-09·일괄 pull 결과 MR-05, 변경 되돌리기 CHG-12·프로젝트 트리 파일 메뉴) | 근거 조사: [git-gui-클라이언트-조사.md](git-gui-클라이언트-조사.md)
 
 ## 1. 제품 개요
 
@@ -328,7 +328,7 @@ flowchart TD
 | MR-02 | 저장소 대시보드 | 저장소별 현재 브랜치, 변경 파일 수, ahead·behind, 진행 중 작업(merge·rebase), 마지막 fetch 시각을 한 표로 보여 준다. "변경 있음"·"뒤처짐" 필터와 정렬 | P0 |
 | MR-03 | 저장소 열기 | 대시보드에서 고른 저장소를 탭으로 연다. 폴더 탭 아래에 저장소 탭을 묶어 표시 | P0 |
 | MR-04 | 최근 항목 | 멀티 저장소 폴더도 최근 목록에 저장해 다시 열 수 있다 | P0 |
-| MR-05 | 일괄 fetch·pull·push | 선택한 저장소들에 동시에 실행한다(동시 실행 수 기본 4). 저장소별 성공·실패를 요약하고 실패한 것만 다시 시도한다. 로컬 변경이나 진행 중 작업이 있는 저장소는 pull 대상에서 기본 제외 | P1 |
+| MR-05 | 일괄 fetch·pull·push | 선택한 저장소들에 동시에 실행한다(동시 실행 수 기본 4). 저장소별 성공·실패를 요약하고 실패한 것만 다시 시도한다. 로컬 변경이나 진행 중 작업이 있는 저장소는 pull 대상에서 기본 제외. pull 은 저장소마다 checkout 된 branch 만 갱신한다(다른 로컬 branch 는 BR-09 업데이트). 결과는 "완료" 대신 무엇이 바뀌었는지 보인다: 저장소 줄은 `master ← commit 3개`·`이미 최신`, 머리 줄·알림은 "갱신 · 이미 최신 · 건너뜀 · 실패" 수 | P1 |
 | MR-06 | 일괄 브랜치 | 선택한 저장소들에 같은 이름의 브랜치를 만들거나 전환·삭제한다. 여러 저장소에 걸친 기능을 개발할 때 쓴다 | P1 |
 | MR-07 | 일괄 워크트리 | 선택한 저장소들에 같은 브랜치명으로 워크트리를 만들고, 그 워크트리들을 작업 폴더 하나로 묶어 멀티 저장소 폴더처럼 연다 (3.7 연계) | P1 |
 | MR-08 | 통합 변경 보기 | 모든 저장소의 변경 파일을 저장소별로 묶어 한 화면에 보여 주고, 저장소별로 stage·커밋한다. 같은 메시지로 여러 저장소에 한 번에 커밋하는 옵션 | P1 |
@@ -341,7 +341,7 @@ flowchart TD
 
 > ℹ️ **IntelliJ식 개편(2026-11) 뒤 구현 위치** (요구 자체는 위 표 그대로, 상세는 10절)
 > - MR-02·03: 저장소 표는 폴더 탭 에디터 공간의 "개요" 탭(폴더를 열면 기본). 저장소 탭으로 열기는 개요 표 줄의 더블클릭·Enter, Project 트리·로그 행 우클릭 "저장소 탭으로 열기".
-> - MR-05~07: 진입점은 툴바 Fetch·Pull·Push(Project 트리에서 고른 저장소 행, 없으면 전부 — Push 는 늘 저장소 체크 목록 확인창), Project 트리·브랜치 트리 우클릭, 개요 탭.
+> - MR-05~07: 진입점은 툴바 Fetch·Pull·Push(Project 트리에서 고른 저장소 행, 없으면 전부 — Push 는 늘 저장소 체크 목록 확인창), Project 트리·브랜치 트리 우클릭, 개요 탭. checkout 하지 않은 branch 의 갱신(BR-09)은 브랜치 트리 로컬 행 메뉴 "업데이트 (N개 저장소)"와 세로 도구 막대 "선택한 branch 업데이트"다(fetch 옆).
 > - MR-08: Commit 도구 창의 폴더 모드. 저장소 > 폴더 > 파일 체크 트리에서 체크 = stage, 해제 = unstage(git index 를 그대로 비춘다), 커밋은 stage 된 것만 저장소별로.
 > - MR-09: 로그 필터 바로 대체(위 표).
 > - MR-11: 폴더 설정은 Project 도구 창 머리의 "폴더 설정" 대화상자.
@@ -446,10 +446,22 @@ flowchart TD
 | CHG-07 | 커밋 템플릿 | `commit.template` 설정 인식과 앱 내 템플릿 | P1 |
 | CHG-08 | 커밋 서명 | GPG·SSH 서명(`commit.gpgsign`, `gpg.format=ssh`), 그래프에 서명 검증 결과 표시 | P1 |
 | CHG-09 | 비밀 정보 스캔 | 커밋 전에 staged 내용에서 클라우드 키·토큰·개인 키 패턴을 찾아 경고한다 | P1 |
-| CHG-10 | ignore 추가 | 파일 우클릭으로 파일·확장자·폴더 단위 ignore 패턴 추가 | P1 |
+| CHG-10 | ignore 추가 | 파일 우클릭으로 파일·확장자·폴더 단위 ignore 패턴 추가. 저장소 탭 변경 목록, 프로젝트 트리(두 탭)·폴더 탭 Commit 도구 창의 파일 메뉴(untracked 파일·untracked 항목을 품은 폴더) | P1 |
 | CHG-11 | 공동 작성자 | `Co-authored-by` 트레일러 자동완성 | P2 |
+| CHG-12 | 변경 되돌리기 (Rollback) | 파일·폴더(여러 개 선택 포함)의 변경을 HEAD 기준으로 되돌린다. stage 된 변경까지 되돌리는 점이 CHG-04(unstaged 만)와 다르다. 새로 추가한(A) 파일·untracked 파일은 지운다. 파일 목록 확인창을 띄우고 되돌리기 전 내용을 CHG-04 와 같은 백업 영역에 보관한다. 프로젝트 트리(두 탭)·폴더 탭 Commit 도구 창의 파일 메뉴에 둔다 | P1 |
 
-> ⚠️ **주의**: discard한 작업 트리 변경은 커밋된 적이 없어 reflog로도 복구할 수 없다. CHG-04의 백업이 유일한 복구 수단이다.
+> ⚠️ **주의**: discard·Rollback 한 작업 트리 변경은 커밋된 적이 없어 reflog로도 복구할 수 없다. CHG-04의 백업이 유일한 복구 수단이다.
+
+**CHG-12 구현 메모 (2026-11-23, `feat/file-menu`)**
+
+| 항목 | 결정 |
+|---|---|
+| 코어 | `Core::rollback(session, paths) -> 백업 id 목록`(`crates/mgit-core/src/changes.rs`). 시작할 때 status·진행 중 작업을 다시 읽고, 순수 함수 `plan_rollback` 이 요청 경로(파일·폴더·`.`)를 status 항목으로 펼친다 — 폴더는 그 아래 항목(`-uall` 이라 untracked 폴더도 파일 단위), 이름 바뀐 항목은 원래 경로로 골라도 된다. 깨끗한 경로는 건너뛴다 |
+| 거부 | 충돌(U) 항목, 진행 중 작업(merge·rebase·cherry-pick·revert·am, bisect 는 제외)에서 stage 된 항목(해결 결과 보호), 백업할 수 없는 untracked 폴더(중첩 저장소 `dir/`). 하나라도 있으면 아무것도 바꾸지 않는다 |
+| 실행 | 백업(`reason = "rollback"`) → `git restore --source=HEAD --staged --worktree --pathspec-from-file=- --pathspec-file-nul`(rename 은 두 경로 모두) → untracked 삭제(링크는 링크 자체만) → 재조회 1회. restore 의 no-overlay 기본 동작으로 HEAD 에 없는 추가(A) 파일은 index·디스크에서 모두 사라진다(관문 테스트로 실측). HEAD 가 없는(unborn) 저장소는 `rm --cached -f -q --ignore-unmatch` 뒤 추가 파일을 디스크에서 지운다(디렉터리는 건드리지 않는다) |
+| 한계 | 백업은 작업 트리 파일만 한다 — stage 된 내용이 작업 트리와 다르던(MM) 파일의 stage 쪽 내용은 남지 않는다. 서브모듈 gitlink 는 index 만 HEAD 로 돌아가고 서브모듈 작업 트리는 그대로다 |
+| IPC | `rollback_paths(session, paths) -> 백업 id[]`, client `rollbackPaths`. 목은 상태에서 그 항목을 빼고 목 파일 트리에서 untracked·추가 파일을 지운다(`mockRollback`) |
+| 화면 | 프런트가 폴더를 항목 경로로 펼쳐 명시 목록을 넘긴다 — 확인창에 보인 목록이 실제로 되돌리는 목록이다. 충돌·`dir/` 항목은 메뉴 단계에서 뺀다. 저장소 탭은 그 탭의 세션(`rollback`), 폴더 탭은 저장소의 가벼운 세션(`RepoSessionActions.rollback`). 끝나면 "폐기 백업에서 복구할 수 있습니다" 를 알리고 프로젝트 트리를 다시 읽는다(트리는 감시하지 않는다) |
 
 ### 3.5 Diff·히스토리 (DIFF)
 
@@ -470,13 +482,14 @@ flowchart TD
 | ID | 기능 | 설명 | 우선순위 |
 |---|---|---|---|
 | BR-01 | 좌측 패널 | 로컬·원격 브랜치, 태그, 스태시, 워크트리, 모듈, 서브모듈 트리. ahead·behind 개수 표시 | P0 |
-| BR-02 | 생성·체크아웃 | 임의 커밋에서 생성. 원격 브랜치를 체크아웃하면 추적 브랜치를 자동으로 만든다. 같은 이름의 로컬 브랜치가 그 원격을 추적하면 전환만 하고, 다른 원격을 추적하거나 업스트림이 없으면 새 이름(기본 `<remote>-<name>`)의 추적 브랜치 또는 분리된 HEAD 를 묻는다 | P0 |
+| BR-02 | 생성·체크아웃 | 임의 커밋에서 생성. 원격 브랜치를 체크아웃하면 추적 브랜치를 자동으로 만든다. 같은 이름의 로컬 브랜치가 그 원격을 추적하면 전환만 하고, 다른 원격을 추적하거나 업스트림이 없으면 새 이름(기본 `<remote>-<name>`)의 추적 브랜치 또는 분리된 HEAD 를 묻는다. 새 branch 이름은 정규화해 만든다: 앞뒤 공백을 지우고 가운데 공백 덩어리(탭·전각 공백, 붙은 하이픈 포함)를 하이픈 하나로(`" feature  x "` → `feature-x`, `"a - b"` → `a-b`, 공백 없는 `--` 는 그대로). 입력과 다르면 칸 아래에 `만들 이름: …` 을 미리 보이고 정규화한 이름으로 실행한다. 이름 변경(`바꿀 이름`)·새 branch 워크트리·폴더 일괄 만들기·백업·reflog 복원·저장소 만들기의 첫 branch 도 같다. 그 밖의 잘못된 이름은 코어 이름 검사가 막는다 | P0 |
 | BR-03 | 변경 중 전환 | 로컬 변경이 있으면 stash 후 전환, 변경 가져가기, 취소 중에서 고른다 | P0 |
-| BR-04 | 이름 변경·삭제 | 로컬·원격 삭제. 병합되지 않은 브랜치를 지우면 경고한다 | P0 |
+| BR-04 | 이름 변경·삭제 | 로컬 이름 변경(새 이름 칸은 지금 이름으로 채움, BR-02 정규화), 로컬·원격 삭제. 병합되지 않은 브랜치를 지우면 경고한다. 폴더 탭: 로컬 branch 행 메뉴 "이름 변경…" — 새 이름 + 그 branch 가 있는 저장소 체크 목록, 일괄 `RenameBranch`(`git branch -m`, branch 없음·새 이름이 이미 있음은 건너뜀, 현재 branch·다른 워크트리에서 checkout 된 branch 도 바꾸며 git 이 그 워크트리 HEAD 를 옮긴다). 로그 범위에 옛 이름이 있으면 새 이름으로 바꾼다. 즐겨찾기는 옮기지 않는다(두 탭 같음) | P0 |
 | BR-05 | 업스트림 | 업스트림 지정과 해제 | P0 |
 | BR-06 | 태그 | lightweight·annotated 생성, 삭제(로컬·원격별), 고른 원격으로 push(하나·여럿). 세부 규칙은 `TG-xx`(12.1) | P0 |
 | BR-07 | 빠른 전환 | 브랜치 퍼지 검색으로 바로 체크아웃 | P0 |
 | BR-08 | Git Flow | feature·release·hotfix 시작과 완료 | P2 |
+| BR-09 | branch 업데이트 | 로컬 branch 를 업스트림으로 fast-forward 한다. checkout 하지 않은 branch 도 갱신한다(IntelliJ 의 Update). 업스트림 ref 만 받아 비교하고, fast-forward 일 때만 옮긴다 — 갈라졌거나 로컬이 앞서면 옮기지 않고 그대로 알린다. 지금 checkout 된 branch 는 작업 트리까지 갱신한다(폴더 일괄에서는 pull 처럼 커밋하지 않은 변경·진행 중 작업이 있으면 건너뜀). 다른 워크트리에서 checkout 된 branch 는 건드리지 않는다. 저장소 탭: 로컬 branch 메뉴 "업데이트"·세로 도구 막대 "선택한 branch 업데이트", 결과 알림(`development ← commit 39개`·이미 최신·로컬이 앞섬·갈라져 갱신하지 않음), Undo 대상. 폴더 탭: 브랜치 행 메뉴 "업데이트 (N개 저장소)"(그 branch 가 있고 업스트림이 있는 저장소)·같은 도구 막대 단추, 결과는 MR-05 와 같은 모양 | P1 |
 
 ### 3.7 워크트리 (WT)
 
@@ -735,7 +748,7 @@ flowchart TD
 | Commit 도구 창 | 폴더 모드: 저장소 > 폴더 > 파일 체크 트리(체크 = stage, 해제 = unstage, 일부 = 중간), 아래 커밋 메시지(분할선), 커밋될·커밋되지 않을 저장소를 누르기 전에 보인다. amend·템플릿·서명·비밀 스캔은 없다 | 탭 둘: **변경**(옛 변경 목록·커밋 폼 그대로 — amend·템플릿·서명·비밀 스캔·충돌 목록), **Stash**(목록·저장·apply·pop·drop·상세) |
 | Pull Requests 도구 창 | 없음 | 원격 프로젝트(GitHub/GitLab)가 있을 때만 띠에 단추. 처음 열 때 목록을 읽는다 |
 | 에디터 공간 | 폴더를 열면 "개요" 탭(옛 대시보드 표 — 필터·정렬·체크·일괄 작업)이 기본. 탭이 없으면 단축키 안내 + "개요 열기" | 개요 탭 없음. 탭이 없으면 단축키 안내 |
-| 브랜치 트리 | 로컬·원격, 이름 뒤 회색 `(저장소, …)`, `⇣N⇡N`. 클릭 = 로그를 그 branch 로 거름(⌘클릭 다중), 더블클릭 = checkout(대상 저장소 체크 목록 확인) | Local·Remote(원격 그룹)·Tags·Worktrees·Backups, 배지(다른 워크트리 체크아웃·충돌 레이더). 클릭 = 그 커밋으로 이동, 더블클릭·Enter = checkout, 옛 사이드바 메뉴 전 항목 |
+| 브랜치 트리 | 로컬·원격, 이름 뒤 회색 `(저장소, …)`, `⇣N⇡N`. 클릭 = 로그를 그 branch 로 거름(⌘클릭 다중), 더블클릭·Enter = 그 branch 와 기본 branch 로 거름(그 branch 가 있는 저장소마다 master 우선·없으면 main 과 그 원격 짝을 모은다) + 저장소 범위를 그 branch 가 있는 저장소로(모든 저장소면 좁히지 않음). 좁힌 범위는 ref 범위가 다른 것으로 바뀌면(클릭·HEAD 행·다른 더블클릭·branch 조건 해제) 더블클릭 전 범위로 되돌리고, 그 사이 사용자가 저장소 범위를 바꿨으면 그대로 둔다. checkout 은 우클릭 메뉴(대상 저장소 체크 목록 확인) | Local·Remote(원격 그룹)·Tags·Worktrees·Backups, 배지(다른 워크트리 체크아웃·충돌 레이더). 클릭 = 그 커밋으로 이동, 더블클릭·Enter = branch(로컬·원격)는 checkout 하지 않고 그래프를 [그 branch, 기본 로컬(master 우선, 없으면 main), 기본 원격(그 로컬의 업스트림, 없으면 origin/<기본>)] 으로 거름(중복 제거, 하나면 solo), 태그는 분리 checkout·워크트리는 탭 열기, 옛 사이드바 메뉴 전 항목(checkout 은 메뉴) |
 | 로그 | 통합 타임라인: 저장소 띠(저장소 색, 이름은 구간 첫 행과 화면 첫 행), 그래프, 제목·ref 라벨, 작성자, 날짜, 해시 8자. 필터 바에 저장소 범위 드롭다운 | 단일 저장소 그래프(스트리밍, WIP 행, 라벨 드래그 merge·rebase, 범위 선택). 필터 바에 경로 칩·보기 옵션 전체(정렬·첫 부모·머지 제외·레이아웃 4종·열 설정)와 찾기 단추, 그 아래 찾기 줄(하이라이트·다음·이전·고급) |
 | 상세 | 위 변경 파일 트리(저장소 루트 > 폴더 > 파일, 단일 자식 폴더 압축) / 아래 커밋 상세(분할) | 범위 상세 → 커밋 상세(부모·자식 이동, 서명) → 고른 것이 없으면 작업 트리 요약 + "Commit 도구 창 열기" |
 | 저장소 세션 | 로그·상세·커밋 diff·파일 보기는 세션 없이(폴더 세션 + 저장소 경로). 쓰기·히스토리·blame 은 가벼운 세션(폴더당 3개) | 탭이 곧 저장소 세션(Full) |
@@ -920,7 +933,8 @@ Phase 2(1.0, 모든 P1) 구현 중 명세·계획과 달라졌거나 비워 두�
 | 인터랙티브 rebase (MRG-07·09) | 헬퍼 editor 모드 대신 **todo 주입**: `GIT_SEQUENCE_EDITOR="cp '<todo>'"`, reword 는 `pick` 뒤 `exec git commit --amend -q --no-edit -F <msg>`, 검증 명령은 commit 을 만드는 단계 뒤 `exec <cmd>` | 편집기 왕복 없음, `--fixup=reword:` 의 `-m/-F` 비호환 회피 |
 | 호스팅 (AU-05, HO-01~04) | octocrab 대신 **reqwest 직접 구현**(`mgit-hosting`). GitHub 는 PR 목록을 GraphQL 1회, 디바이스 플로우는 OAuth App client_id 가 설정돼 있을 때만, 없으면 PAT. GitLab 은 PAT(`api`) 기본. 토큰은 키체인 `hosting:<id>` | 필요한 호출이 적고 TLS·버전 의존을 줄인다 |
 | 아바타 (GRAPH-11) | 코어가 받아 `<app data>/avatars/<sha256>` 캐시 → data URI. GitHub noreply 는 id 로, 그 외 Gravatar(sha256) | CSP `img-src 'self' data:` 유지 |
-| 멀티 저장소 일괄 (MR-05~07) | 저장소별 임시 세션(동시 4)에서 기존 fetch/pull/push/branch/worktree 호출, pull 은 더티·진행 중이면 제외. 공용 러너 `batch_run` 은 서브모듈 일괄(SUB-08)도 쓴다 | 세션 로직 재사용 |
+| 멀티 저장소 일괄 (MR-05~07) | 저장소별 임시 세션(동시 4)에서 기존 fetch/pull/push/branch/worktree 호출, pull 은 더티·진행 중이면 제외. 공용 러너 `batch_run` 은 서브모듈 일괄(SUB-08)도 쓴다. pull 은 전후 `rev-parse HEAD`·`rev-list --count` 로 `RepoResult.moved` 를 채운다 | 세션 로직 재사용 |
+| branch 업데이트 (BR-09) | `for-each-ref refs/heads/<b>` 의 `%(upstream)`·`%(upstream:remotename)`·`%(upstream:remoteref)`·`%(worktreepath)`·`%(HEAD)` 로 판정 → 업스트림 ref 하나만 `fetch <remote> +<remoteref>:<upstream>` → `rev-list --left-right --count` 로 Updated·UpToDate·Ahead·Diverged → fast-forward 면 `branch -f`(이 작업 트리의 branch 는 `merge --ff-only`). ref 이동은 PR checkout 흐름과 같은 함수(`fast_forward_branch`, Undo 라벨 `update <b>`). 폴더는 `BatchOp::UpdateBranch` 가 같은 단계를 세션 없이 돈다 | checkout·pull 없이 다른 branch 를 갱신하고, 잃는 commit 이 없다 |
 | 미등록 하위 저장소 (SUB-11) | stage 대상 untracked 폴더에 `.git` 이 있으면 `CoreError::NestedRepos` 로 차단 → 서브모듈 등록 / ignore 제안 | 내용 없는 gitlink 커밋 방지 |
 | 모듈 감지 (MOD-01) | git 호출 없는 파일 파서: Gradle `include`(여러 줄·`:` 경로), Maven `<module>`, npm `workspaces`·`pnpm-workspace.yaml`(`*`/`**` 는 `package.json` 있는 폴더로 펼침), Cargo `[workspace] members`(`Cargo.toml` 마커), `go.work use`. 수동 보정 `modules:<repo>`, 범위 `module-scope:<repo>` | 감지는 빠르고 결정적이어야 한다 |
 | 병합 미리보기 (CF-01) | `merge-tree --write-tree --name-only -z` 결과 tree 에서 `show <tree>:<path>` 로 마커 포함 내용. WIP 포함은 임시 `GIT_INDEX_FILE` 에 `add -A` 한 commit(untracked 포함) | 작업 트리·인덱스를 건드리지 않는다 |
@@ -1065,6 +1079,17 @@ Project 트리·파일 보기용 `fs_list_dir`·`fs_read_file`(`crates/mgit-core
 | FS-14 | 파일 내용은 텍스트로만 그린다(HTML·SVG·이미지 미리보기 없음) |
 
 결과는 오류가 아니라 상태다: 나열 = `listed`·`missing`·`denied`, 읽기 = `text`·`binary`·`notUtf8`·`tooLarge`·`unsupported`·`missing`·`denied`. 남는 한계(확인 뒤 바꿔치기 경합 등)는 결과 문서 7절.
+
+**프로젝트 트리 파일 메뉴 (2026-11-23)**: 트리(폴더 탭·저장소 탭)와 폴더 탭 Commit 도구 창의 우클릭 메뉴에 파일 동작을 둔다. 항목과 켜짐 조건은 순수 모듈 `apps/desktop/src/features/project/file-actions-menu.ts` 한 곳이 정한다. 파일 API 는 그대로 읽기 전용이다(FS-10) — 쓰기는 세션의 `rollback`·`ignore_add` 가 한다.
+
+| 항목 | 보이는 곳·조건 | 동작 |
+|---|---|---|
+| Finder 에서 보기 (macOS) / 파일 탐색기에서 보기 | 파일·폴더·저장소 노드·트리 루트, Commit 창의 파일·저장소 줄 | `open_external(reveal)`. Commit 창의 지워진 파일은 부모 폴더 |
+| 터미널에서 열기 | 위와 같다 | `open_external(terminal)` — 파일이면 부모 폴더에서 연다 |
+| 변경 되돌리기… | 저장소 안이고 대상(여러 개 선택 포함)이나 그 아래에 되돌릴 항목이 있을 때. 폴더 탭 저장소 노드는 그 저장소 전체(안쪽 저장소 항목 제외). 저장소 탭은 하위 저장소·서브모듈 안을 다루지 않는다 | CHG-12. 파일 수가 둘 이상이면 이름에 수를 붙인다 |
+| ignore 에 추가 ▸ | 대상이 하나이고 untracked 파일(이 파일 / `*.ext` / 상위 폴더/)이거나 untracked 항목을 품은 폴더(이 폴더/) | CHG-10 |
+
+메뉴 묶음 순서: 파일은 열기 │ 히스토리·Blame·변경 되돌리기·ignore │ Finder·터미널 │ 경로 복사. 휴지통으로 삭제는 두지 않는다(사용자 결정).
 
 ### 10.4 목 모드 (브라우저 확인)
 

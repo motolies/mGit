@@ -47,6 +47,8 @@ export const commands = {
 	stageLines: (session: number, path: string, selection: LineSelection[], unstage: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<null>("stage_lines", { session, path, selection, unstage, options }),
 	/**  작업 트리 변경을 버린다 (백업 뒤). 백업 id 목록을 돌려준다 */
 	discardPaths: (session: number, paths: string[]) => __TAURI_INVOKE<number[]>("discard_paths", { session, paths }),
+	/**  경로(파일·폴더)의 변경을 HEAD 기준으로 되돌린다 (stage 된 변경 포함, 백업 뒤). 백업 id 목록을 돌려준다 */
+	rollbackPaths: (session: number, paths: string[]) => __TAURI_INVOKE<number[]>("rollback_paths", { session, paths }),
 	/**  고른 hunk·줄만 작업 트리에서 되돌린다 (백업 뒤). `options` 는 화면의 diff 와 같아야 한다 */
 	discardLines: (session: number, path: string, selection: LineSelection[], options: DiffOptionsDto | null) => __TAURI_INVOKE<number | null>("discard_lines", { session, path, selection, options }),
 	/**  discard 백업 목록 (최신 순) */
@@ -82,6 +84,11 @@ export const commands = {
 	deleteRemoteBranch: (session: number, remote: string, name: string) => __TAURI_INVOKE<null>("delete_remote_branch", { session, remote, name }),
 	/**  업스트림 지정·해제 */
 	setUpstream: (session: number, branch: string, upstream: string | null) => __TAURI_INVOKE<null>("set_upstream", { session, branch, upstream }),
+	/**
+	 *  로컬 branch 하나를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신하고 Undo 할 수 있다.
+	 *  진행률(업스트림 fetch)은 operation 이벤트로 온다
+	 */
+	updateBranch: (session: number, name: string) => __TAURI_INVOKE<BranchUpdateDto>("update_branch", { session, name }),
 	/**  태그 생성 (message 가 있으면 annotated) */
 	createTag: (session: number, name: string, target: string | null, message: string | null, sign: boolean) => __TAURI_INVOKE<null>("create_tag", { session, name, target, message, sign }),
 	/**
@@ -682,14 +689,22 @@ export type BatchOpDto_Deserialize = { kind: "fetch"; prune: boolean } | { kind:
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint?: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
-{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean };
+{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } | 
+/**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
+{ kind: "updateBranch"; name: string } | 
+/**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
+{ kind: "renameBranch"; from: string; to: string };
 
 /**  일괄 작업 */
 export type BatchOpDto_Serialize = { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
-{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean };
+{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } | 
+/**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
+{ kind: "updateBranch"; name: string } | 
+/**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
+{ kind: "renameBranch"; from: string; to: string };
 
 /**  일괄 pull 방식 */
 export type BatchPullModeDto = "ffOnly" | "rebase" | "merge";
@@ -789,6 +804,17 @@ export type BranchHeader_Serialize = {
 	ahead: number,
 	behind: number,
 };
+
+/**  branch 업데이트 결과 (BR-09) */
+export type BranchUpdateDto = 
+/**  갱신함: `from` → `to` (받은 commit 수) */
+{ kind: "updated"; from: string; to: string; commits: number } | 
+/**  이미 최신 */
+{ kind: "upToDate" } | 
+/**  로컬이 앞섬 (받을 것 없음) */
+{ kind: "ahead"; commits: number } | 
+/**  갈라짐 (갱신하지 않음) */
+{ kind: "diverged"; ahead: number; behind: number };
 
 /**  커밋이 바꾼 파일 */
 export type ChangedFile = ChangedFile_Serialize | ChangedFile_Deserialize;
@@ -2163,6 +2189,14 @@ export type RefLabel_Serialize = {
 	worktreePath: string | null,
 };
 
+/**  일괄 작업이 옮긴 branch (pull·branch 업데이트). `commits` 0 이면 이미 최신 */
+export type RefMove = {
+	branch: string,
+	from: string,
+	to: string,
+	commits: number,
+};
+
 /**  reflog 항목 */
 export type ReflogEntry = {
 	selector: string,
@@ -2364,6 +2398,11 @@ export type RepoResult_Deserialize = {
 	ok: boolean,
 	skipped?: string | null,
 	message: string,
+	/**
+	 *  옮긴 branch (pull·branch 업데이트가 성공했을 때만). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이
+	 *  `RepoResult` 를 만들기 때문이다
+	 */
+	moved?: RefMove | null,
 };
 
 /**  저장소 하나의 결과 */
@@ -2373,6 +2412,11 @@ export type RepoResult_Serialize = {
 	ok: boolean,
 	skipped: string | null,
 	message: string,
+	/**
+	 *  옮긴 branch (pull·branch 업데이트가 성공했을 때만). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이
+	 *  `RepoResult` 를 만들기 때문이다
+	 */
+	moved?: RefMove,
 };
 
 /**  `folder_release_repo_session` 응답. 이미 닫혔거나 잡지 않은 세션도 오류가 아니라 이 모양이다 */

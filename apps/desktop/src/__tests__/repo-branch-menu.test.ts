@@ -8,6 +8,7 @@ import type { BackupRef, GraphQuery, RefLabel, WorktreeInfo, WorktreeRemoveCheck
 import { S } from '@mgit/ui';
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuItem } from '../components/ContextMenu';
+import { branchNameField } from '../features/branch/branch-name';
 import {
   openRepoBranch,
   type RepoBranchDeps,
@@ -15,6 +16,7 @@ import {
   type RepoBranchSession,
   repoBranchMenu,
   repoBranchRowActions,
+  repoFocusRevs,
 } from '../features/branches/repo-branch-menu';
 import { REPO_GROUP_IDS, type RepoBranchTarget } from '../features/branches/repo-branch-tree';
 import { DEFAULT_GRAPH_QUERY } from '../store/session-store';
@@ -124,6 +126,7 @@ function fakeSession(check: WorktreeRemoveCheck | null = null) {
     rebase: vi.fn(async () => {}),
     renameBranch: vi.fn(async () => {}),
     setUpstream: vi.fn(async () => {}),
+    updateBranch: vi.fn(async () => {}),
     deleteBranch: vi.fn(async () => {}),
     fetch: vi.fn(async () => {}),
     push: vi.fn(async () => true),
@@ -236,11 +239,12 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     shape(repoBranchMenu(target, setup(state).deps));
   const MERGE_SUB = '▸ {merge, merge (--no-ff), merge (--ff-only), merge (--squash)}';
 
-  it('로컬 (현재가 아닌 branch, 업스트림 있음) — 12개', () => {
+  it('로컬 (현재가 아닌 branch, 업스트림 있음) — 13개 (옛 12개 + checkout 다음의 업데이트, BR-09)', () => {
     const items = repoBranchMenu(T.development, setup().deps);
-    expect(items).toHaveLength(12);
+    expect(items).toHaveLength(13);
     expect(shape(items)).toEqual([
       'checkout',
+      '업데이트',
       '이 branch 만 그래프에 표시',
       '현재 branch 와 development 비교…',
       `development 을(를) 현재 branch 에 merge${MERGE_SUB}`,
@@ -260,6 +264,8 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
   it('로컬 (현재 branch main) — checkout·비교·merge·미리보기·격리 병합·rebase·삭제가 꺼진다', () => {
     expect(menu(T.main)).toEqual([
       'checkout [off]',
+      // 현재 branch 도 업데이트할 수 있다 (작업 트리까지 fast-forward)
+      '업데이트',
       '이 branch 만 그래프에 표시',
       '현재 branch 와 main 비교… [off]',
       'main 을(를) 현재 branch 에 merge▸ [off]',
@@ -276,10 +282,13 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     ]);
   });
 
-  it('로컬 (업스트림 없음) 은 "업스트림 지정…", 다른 워크트리에 체크아웃된 branch 는 보통 branch 와 같다', () => {
-    expect(menu(T.searchFilters)[10]).toBe('업스트림 지정…');
+  it('로컬 (업스트림 없음) 은 "업스트림 지정…"·업데이트 꺼짐, 다른 워크트리에 체크아웃된 branch 는 업데이트만 꺼진다', () => {
+    expect(menu(T.searchFilters)[1]).toBe('업데이트 [off]');
+    expect(menu(T.searchFilters)[11]).toBe('업스트림 지정…');
     expect(menu(T.hotfix)).toEqual(
-      menu(T.development).map((l) => l.replaceAll('development', 'hotfix/payment-timeout')),
+      menu(T.development).map((l) =>
+        l === '업데이트' ? '업데이트 [off]' : l.replaceAll('development', 'hotfix/payment-timeout'),
+      ),
     );
   });
 
@@ -406,7 +415,9 @@ describe('꺼짐 조건 (옛 사이드바의 `disabled = busy || op !== null` �
 
   it('로컬: 다른 작업 실행 중이면 그래프 표시·이름 복사 말고 모두 꺼진다', () => {
     expect(off(T.development, { busy: true })).toEqual([
-      ...writes,
+      writes[0],
+      S.branches.menu.update,
+      ...writes.slice(1),
       S.menu.rename,
       S.menu.unsetUpstream,
       S.menu.delete,
@@ -415,6 +426,13 @@ describe('꺼짐 조건 (옛 사이드바의 `disabled = busy || op !== null` �
 
   it('로컬: 진행 중 작업(merge·rebase 등)이 있으면 쓰기 동작만 꺼지고 이름 변경·업스트림·삭제는 켜져 있다', () => {
     expect(off(T.development, { inOp: true })).toEqual(writes);
+  });
+
+  it('로컬 업데이트 (BR-09): 현재 branch 는 진행 중 작업이면, 업스트림이 사라졌으면 꺼진다 (checkout 안 한 branch 는 진행 중이어도 켜짐)', () => {
+    expect(off(T.main, { inOp: true })).toContain(S.branches.menu.update);
+    expect(off(T.development, { inOp: true })).not.toContain(S.branches.menu.update);
+    const gone = { kind: 'local', label: local('old', { upstreamGone: true }) } as const;
+    expect(off(gone, {})).toContain(S.branches.menu.update);
   });
 
   it('로컬: 분리 HEAD(현재 branch 없음)면 HEAD 와 견주는 동작만 꺼진다. 격리 병합 중이면 격리 병합만 꺼진다', () => {
@@ -489,6 +507,8 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     const n = 'development';
     await select(items, S.menu.checkout);
     expect(session.checkout).toHaveBeenCalledWith({ kind: 'branch', name: n });
+    await select(items, S.branches.menu.update);
+    expect(session.updateBranch).toHaveBeenCalledWith(n);
     await select(items, S.menu.graphSolo);
     expect(session.setGraphQuery).toHaveBeenCalledWith({
       ...GRAPH_QUERY,
@@ -541,7 +561,13 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     await select(repoBranchMenu(T.development, r.deps), S.menu.rename);
     expect(r.prompt).toHaveBeenCalledWith({
       title: S.dialog.renameBranch,
-      fields: [{ key: 'name', label: S.dialog.newName, initial: 'development', required: true }],
+      // 새 이름 칸은 지금 이름으로 채우고 정규화한다 (미리보기 "바꿀 이름")
+      fields: [
+        branchNameField(
+          { key: 'name', label: S.dialog.newName, initial: 'development', required: true },
+          'rename',
+        ),
+      ],
       confirmLabel: S.dialog.rename,
     });
     expect(r.session.renameBranch).toHaveBeenCalledWith('development', 'renamed');
@@ -751,7 +777,12 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     expect(asBranch.prompt).toHaveBeenCalledWith({
       title: S.safety.restoreTitle,
       fields: [
-        { key: 'name', label: S.safety.restoreName, initial: 'staging-backup', required: true },
+        branchNameField({
+          key: 'name',
+          label: S.safety.restoreName,
+          initial: 'staging-backup',
+          required: true,
+        }),
       ],
       confirmLabel: S.dialog.create,
     });
@@ -910,41 +941,133 @@ describe('Worktrees 그룹 행의 머리 단추 (옛 섹션 머리: ⌫ 정리·
   });
 });
 
-describe('더블클릭·Enter (`openRepoBranch`, 결정 16번 — checkout 류, 옛 사이드바 그대로)', () => {
-  it('로컬은 그 branch, 원격은 (원격, branch), 태그는 그 커밋으로 checkout. 워크트리는 탭으로 연다', () => {
-    const { deps, session, openRepositoryAt } = setup();
-    openRepoBranch(T.development, deps);
-    expect(session.checkout).toHaveBeenLastCalledWith({ kind: 'branch', name: 'development' });
-    openRepoBranch(T.originMain, deps);
-    expect(session.checkout).toHaveBeenLastCalledWith({
-      kind: 'remoteBranch',
-      remote: 'origin',
-      name: 'main',
+describe('더블클릭·Enter (`openRepoBranch`): branch 는 그래프 거르기, 태그·워크트리는 지금까지대로', () => {
+  /** 장면의 ref 라벨: master 와 그 업스트림, development 와 그 업스트림 */
+  const LABELS: RefLabel[] = [
+    local('master', { isCurrent: true }),
+    local('development'),
+    remoteLabel('origin', 'master'),
+    remoteLabel('origin', 'development'),
+    tagLabel('v2.4.0'),
+  ];
+
+  it('로컬·원격 branch 는 checkout 하지 않고 그래프를 [그 branch, master, origin/master] 로 거른다 (다른 질의 값은 그대로)', () => {
+    const { deps, session } = setup();
+    openRepoBranch(T.development, deps, LABELS);
+    expect(session.setGraphQuery).toHaveBeenLastCalledWith({
+      ...GRAPH_QUERY,
+      revs: { kind: 'branches', names: ['development', 'master', 'origin/master'] },
     });
-    openRepoBranch(T.tag, deps);
+    openRepoBranch(T.originMain, deps, LABELS);
+    expect(session.setGraphQuery).toHaveBeenLastCalledWith({
+      ...GRAPH_QUERY,
+      revs: { kind: 'branches', names: ['origin/main', 'master', 'origin/master'] },
+    });
+    // 현재 branch 도, 실행 중이어도 거른다 (읽기다)
+    const busy = setup({ busy: true, inOp: true });
+    openRepoBranch(T.main, busy.deps, LABELS);
+    expect(busy.session.setGraphQuery).toHaveBeenLastCalledWith({
+      ...GRAPH_QUERY,
+      revs: { kind: 'branches', names: ['main', 'master', 'origin/master'] },
+    });
+    expect(session.checkout).not.toHaveBeenCalled();
+    expect(busy.session.checkout).not.toHaveBeenCalled();
+  });
+
+  it('기본 branch 자신은 [master, origin/master] 이고, 범위가 이미 같으면 다시 읽지 않는다', () => {
+    const master = { kind: 'local', label: LABELS[0] as RefLabel } satisfies RepoBranchTarget;
+    const { deps, session } = setup();
+    openRepoBranch(master, deps, LABELS);
+    expect(session.setGraphQuery).toHaveBeenLastCalledWith({
+      ...GRAPH_QUERY,
+      revs: { kind: 'branches', names: ['master', 'origin/master'] },
+    });
+    const same = setup({
+      graphQuery: {
+        ...GRAPH_QUERY,
+        revs: { kind: 'branches', names: ['master', 'origin/master'] },
+      },
+    });
+    openRepoBranch(master, same.deps, LABELS);
+    expect(same.session.setGraphQuery).not.toHaveBeenCalled();
+  });
+
+  it('태그는 그 커밋으로 분리 checkout, 워크트리는 탭으로 연다 (지금까지대로)', () => {
+    const { deps, session, openRepositoryAt } = setup();
+    openRepoBranch(T.tag, deps, LABELS);
     expect(session.checkout).toHaveBeenLastCalledWith({ kind: 'commit', oid: OID });
-    openRepoBranch(T.wtOther, deps);
+    openRepoBranch(T.wtOther, deps, LABELS);
     expect(openRepositoryAt).toHaveBeenCalledWith(`${PATH}-hotfix`);
   });
 
-  it('현재 branch·이 탭의 워크트리·백업·HEAD 행은 아무것도 하지 않고, 실행 중·진행 중 작업이면 checkout 하지 않는다', () => {
+  it('이 탭의 워크트리·백업·HEAD 행·원격 그룹은 아무것도 하지 않고, 실행 중·진행 중 작업이면 태그 checkout 도 하지 않는다', () => {
     const { deps, session, openRepositoryAt } = setup();
-    openRepoBranch(T.main, deps);
-    openRepoBranch(T.wtMain, deps);
-    openRepoBranch(T.backupMain, deps);
-    openRepoBranch({ kind: 'head', oid: OID }, deps);
-    openRepoBranch(T.origin, deps);
+    openRepoBranch(T.wtMain, deps, LABELS);
+    openRepoBranch(T.backupMain, deps, LABELS);
+    openRepoBranch({ kind: 'head', oid: OID }, deps, LABELS);
+    openRepoBranch(T.origin, deps, LABELS);
     expect(session.checkout).not.toHaveBeenCalled();
+    expect(session.setGraphQuery).not.toHaveBeenCalled();
     expect(openRepositoryAt).not.toHaveBeenCalled();
     for (const state of [{ busy: true }, { inOp: true }]) {
       const blocked = setup(state);
-      for (const target of [T.development, T.originMain, T.tag]) {
-        openRepoBranch(target, blocked.deps);
-      }
+      openRepoBranch(T.tag, blocked.deps, LABELS);
       expect(blocked.session.checkout).not.toHaveBeenCalled();
       // 워크트리 열기는 쓰기가 아니라 막지 않는다 (옛 사이드바와 같다)
-      openRepoBranch(T.wtOther, blocked.deps);
+      openRepoBranch(T.wtOther, blocked.deps, LABELS);
       expect(blocked.openRepositoryAt).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+describe('repoFocusRevs (저장소 탭 더블클릭 범위)', () => {
+  const up = (name: string, upstream: string | null) => local(name, { upstream });
+  it('master 가 있으면 master 와 그 업스트림', () => {
+    const labels = [up('master', 'refs/remotes/origin/master'), remoteLabel('origin', 'master')];
+    expect(repoFocusRevs('feature/x', labels)).toEqual({
+      kind: 'branches',
+      names: ['feature/x', 'master', 'origin/master'],
+    });
+  });
+
+  it('master 가 없으면 main, 업스트림이 없으면 origin/<기본> 이 있을 때 그것', () => {
+    const labels = [up('main', null), remoteLabel('origin', 'main')];
+    expect(repoFocusRevs('feature/x', labels)).toEqual({
+      kind: 'branches',
+      names: ['feature/x', 'main', 'origin/main'],
+    });
+  });
+
+  it('업스트림이 다른 원격이면 그 원격 branch 를 쓴다', () => {
+    const labels = [
+      up('master', 'upstream/master'),
+      remoteLabel('upstream', 'master'),
+      remoteLabel('origin', 'master'),
+    ];
+    expect(repoFocusRevs('x', labels)).toEqual({
+      kind: 'branches',
+      names: ['x', 'master', 'upstream/master'],
+    });
+  });
+
+  it('둘 다 없으면 그 branch 하나(solo), 원격 짝이 없으면 로컬만', () => {
+    expect(repoFocusRevs('x', [up('develop', null)])).toEqual({ kind: 'solo', name: 'x' });
+    expect(repoFocusRevs('x', [up('master', null)])).toEqual({
+      kind: 'branches',
+      names: ['x', 'master'],
+    });
+    // 기본 branch 자신에 원격 짝이 없으면 클릭과 같은 범위다
+    expect(repoFocusRevs('master', [up('master', null)])).toEqual({
+      kind: 'solo',
+      name: 'master',
+    });
+  });
+
+  it('원격 행: 원격 기본 branch 자신을 누르면 [origin/master, master]', () => {
+    const labels = [up('master', 'origin/master'), remoteLabel('origin', 'master')];
+    expect(repoFocusRevs('origin/master', labels)).toEqual({
+      kind: 'branches',
+      names: ['origin/master', 'master'],
+    });
   });
 });

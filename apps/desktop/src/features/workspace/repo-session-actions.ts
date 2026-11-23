@@ -38,6 +38,13 @@ export interface RepoSessionActions {
    * 결과를 가른다 (`opRunResult`). 세션을 쓸 수 없으면 `notRun`
    */
   runOp(repoPath: string, op: OpCommand): Promise<OpRunResult>;
+  /**
+   * 파일 메뉴의 변경 되돌리기 (HEAD 기준 Rollback, 저장소 기준 경로들): 그 저장소 세션에 대고 실행하고 끝날 때까지 기다린다
+   * (트리를 다시 읽을 수 있게). 세션을 쓸 수 없으면 false. 결과 알림·실패 사유는 세션이 낸다
+   */
+  rollback(repoPath: string, paths: string[]): Promise<boolean>;
+  /** 저장소의 `.gitignore` 에 패턴을 더하고 끝날 때까지 기다린다. 세션을 쓸 수 없으면 false */
+  ignoreAdd(repoPath: string, patterns: string[]): Promise<boolean>;
 }
 
 /**
@@ -56,6 +63,21 @@ export function useRepoSessionActions(): RepoSessionActions | null {
     /** 세션을 준비한 뒤 그 세션의 동작을 부른다 (실패 사유는 앱 스토어가 알린다) */
     const use = (repoPath: string, run: (st: SessionState) => void) =>
       void withRepoSession(folder, repoPath, run);
+    /**
+     * 세션을 준비한 뒤 그 세션의 쓰기를 부르고 끝날 때까지 기다린다 (`withRepoSession` 의 콜백은 동기라 프라미스를 밖으로
+     * 꺼낸다). 세션을 쓸 수 없으면 false
+     */
+    const write = async (repoPath: string, run: (st: SessionState) => Promise<void>) => {
+      const started: { done?: Promise<void> } = {};
+      const ok = await withRepoSession(folder, repoPath, (st) => {
+        started.done = run(st);
+      });
+      if (!ok || started.done === undefined) {
+        return false;
+      }
+      await started.done;
+      return true;
+    };
     return {
       history: (repoPath, path) => use(repoPath, (st) => void st.openFileHistory(path)),
       blame: (repoPath, path, rev) => use(repoPath, (st) => void st.openBlame(path, rev)),
@@ -69,20 +91,18 @@ export function useRepoSessionActions(): RepoSessionActions | null {
       openConflict: (repoPath, path) => void openRepoConflict(folder, repoPath, path),
       unresolve: (repoPath, path, mode) => use(repoPath, (st) => void st.unresolve(path, mode)),
       async runOp(repoPath, op) {
-        // 세션 동작의 프라미스를 밖으로 꺼낸다 (`withRepoSession` 의 콜백은 동기다)
-        const started: { done?: Promise<void> } = {};
-        const ok = await withRepoSession(folder, repoPath, (st) => {
-          started.done =
-            op === 'continue' ? st.opContinue() : op === 'skip' ? st.opSkip() : st.opAbort();
-        });
-        if (!ok || started.done === undefined) {
+        const ok = await write(repoPath, (st) =>
+          op === 'continue' ? st.opContinue() : op === 'skip' ? st.opSkip() : st.opAbort(),
+        );
+        if (!ok) {
           return { kind: 'notRun' };
         }
-        await started.done;
         const id = useAppStore.getState().repoSessions[folder]?.[repoPath]?.session;
         const after = id === undefined ? undefined : getSessionStore(id)?.getState();
         return after ? opRunResult(after) : { kind: 'notRun' };
       },
+      rollback: (repoPath, paths) => write(repoPath, (st) => st.rollback(paths)),
+      ignoreAdd: (repoPath, patterns) => write(repoPath, (st) => st.ignoreAdd(patterns)),
     };
   }, [folder, withRepoSession, openRepoConflict]);
 }

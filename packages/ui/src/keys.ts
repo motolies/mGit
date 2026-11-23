@@ -21,15 +21,20 @@ export function isImeKey(e: KeyLike): boolean {
   return native.isComposing === true || native.keyCode === 229;
 }
 
+/** macOS(·iOS) 웹뷰인지. 단축키 판정·표기와 OS 별 문구("Finder 에서 보기")가 함께 쓴다 */
+export function isMac(): boolean {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+}
+
 /** macOS 는 Cmd, 그 외는 Ctrl 을 "주 수정키"로 본다 */
 export function isPrimaryModifier(e: KeyLike): boolean {
-  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const mac = isMac();
   return mac ? e.metaKey : e.ctrlKey;
 }
 
 /** 단축키 표기용 수정키 접두 (`⌘` 또는 `Ctrl+`) */
 export function primaryModifierLabel(): string {
-  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const mac = isMac();
   return mac ? '⌘' : 'Ctrl+';
 }
 
@@ -49,7 +54,7 @@ export function matchShortcut(e: KeyLike, shortcut: string): boolean {
   const wantMod = parts.includes('mod');
   const wantShift = parts.includes('shift');
   const wantAlt = parts.includes('alt');
-  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const mac = isMac();
   const mod = mac ? e.metaKey : e.ctrlKey;
   const other = mac ? e.ctrlKey : e.metaKey;
   if (mod !== wantMod || e.shiftKey !== wantShift || e.altKey !== wantAlt || other) {
@@ -61,7 +66,7 @@ export function matchShortcut(e: KeyLike, shortcut: string): boolean {
 
 /** 단축키 표기를 화면용으로 (`mod+shift+p` → `⌘⇧P` / `Ctrl+Shift+P`) */
 export function formatShortcut(shortcut: string): string {
-  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const mac = isMac();
   const parts = shortcut.split('+');
   const key = parts.pop() ?? '';
   const keyLabel =
@@ -80,7 +85,7 @@ export function shortcutFromEvent(e: KeyLike): string | null {
   if (['meta', 'control', 'shift', 'alt', 'dead', 'unidentified', 'process', ''].includes(key)) {
     return null;
   }
-  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const mac = isMac();
   const mod = mac ? e.metaKey : e.ctrlKey;
   const parts: string[] = [];
   if (mod) {

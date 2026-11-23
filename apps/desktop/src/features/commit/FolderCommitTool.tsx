@@ -3,9 +3,25 @@ import { useEffect, useMemo, useState } from 'react';
 import type { MenuItem } from '../../components/ContextMenu';
 import { ToolButton } from '../../layout/ToolButton';
 import { ToolWindowFrame, ToolWindowNote } from '../../layout/ToolWindowFrame';
-import { entryInArea, getWorkspaceStore, useAppStore, useFolder, useWorkspace } from '../../store';
+import {
+  entryInArea,
+  getWorkspaceStore,
+  useAppStore,
+  useFileTree,
+  useFolder,
+  useWorkspace,
+} from '../../store';
+import { joinRoot, parentDir } from '../../store/fs-path';
 import { useBatchReport } from '../folder/batch-report';
 import { useFolderBatchFlows } from '../folder/FolderBatchBar';
+import {
+  changeItems,
+  ignoreTarget,
+  joinGroups,
+  openInItems,
+  rollbackGroups,
+} from '../project/file-actions-menu';
+import { useFileActions } from '../project/use-file-actions';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
 import { CommitMessageBox } from './CommitMessageBox';
 import { CommitToolSplit } from './CommitToolSplit';
@@ -67,6 +83,16 @@ export function FolderCommitTool() {
   // 저장소 → 누른 줄 id ("처리 중" 표시). 호출이 도는 것 자체는 폴더 스토어의 `indexWrites` 가 기억한다
   const [clicked, setClicked] = useState<Readonly<Record<string, string>>>({});
   const [committing, setCommitting] = useState(false);
+  // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 그 저장소의 가벼운 세션에 대고, 끝나면 프로젝트 트리를
+  // 다시 읽는다 (같은 탭의 트리 — 감시하지 않으므로. 이 창의 목록은 폴더 스토어가 코어의 폴더 변경 알림으로 다시 읽는다)
+  const reloadTree = useFileTree((t) => t.reload);
+  const fileActions = useFileActions({
+    rollback: (repoPath, paths) => repoActions?.rollback(repoPath, paths) ?? Promise.resolve(false),
+    ignoreAdd: (repoPath, patterns) =>
+      repoActions?.ignoreAdd(repoPath, patterns) ?? Promise.resolve(false),
+    after: () => void reloadTree?.(),
+    repoName: (repoPath) => f?.summaries.find((s) => s.path === repoPath)?.name ?? repoPath,
+  });
 
   // 변경 목록을 아직 안 읽었으면 한 번 읽는다 (그 뒤로는 폴더 스토어의 갱신이 함께 다시 읽는다)
   const ensureChanges = f?.ensureChanges;
@@ -139,8 +165,30 @@ export function FolderCommitTool() {
   };
 
   /**
+   * 파일 줄의 파일 동작 묶음: 변경 묶음(그 파일의 변경 되돌리기, untracked 면 ignore — 저장소 세션을 쓸 수 있을 때)과 열기
+   * 묶음(Finder·터미널). 지워진 파일은 디스크에 없으므로 부모 폴더를 연다. 충돌 파일은 되돌리기가 빠진다
+   */
+  const fileGroups = (row: CommitFileRow): MenuItem[][] => {
+    const e = row.entry;
+    const gone = e.worktree === 'deleted' || e.index === 'deleted';
+    const abs = joinRoot(row.repoPath, gone ? (parentDir(e.path) ?? '') : e.path);
+    const target = { repoPath: row.repoPath, path: e.path };
+    const changes = repoActions
+      ? changeItems(
+          {
+            rollback: rollbackGroups([target], () => [e]),
+            ignore: ignoreTarget(target, false, [e]),
+          },
+          fileActions.actions,
+        )
+      : [];
+    return [changes, openInItems(abs, fileActions.actions)];
+  };
+
+  /**
    * 줄의 우클릭 메뉴: 파일 열기(충돌 파일은 "충돌 해결" — 머지 편집기 탭), 저장소 탭으로 열기. 진행 중 작업이 있는
-   * 저장소의 stage 된 파일은 저장소 탭의 변경 목록처럼 "충돌 상태로 되돌리기" 두 가지를 더한다 (W15, 그 저장소 세션에 대고)
+   * 저장소의 stage 된 파일은 저장소 탭의 변경 목록처럼 "충돌 상태로 되돌리기" 두 가지를 더한다 (W15, 그 저장소 세션에 대고).
+   * 파일은 변경 되돌리기·ignore·Finder·터미널, 저장소는 Finder·터미널이 뒤에 붙는다
    */
   const menu = (row: CommitRow): MenuItem[] => {
     const openTab: MenuItem = {
@@ -148,7 +196,10 @@ export function FolderCommitTool() {
       onSelect: () => void openRepositoryAt(row.repoPath, f.id),
     };
     if (row.kind === 'file' && row.check === 'conflict') {
-      return [{ label: S.commitTool.resolveConflict, onSelect: () => open(row) }, openTab];
+      return joinGroups([
+        [{ label: S.commitTool.resolveConflict, onSelect: () => open(row) }, openTab],
+        ...fileGroups(row),
+      ]);
     }
     if (row.kind === 'file') {
       const inOp = (repos.find((r) => r.path === row.repoPath)?.op ?? null) !== null;
@@ -167,9 +218,14 @@ export function FolderCommitTool() {
               },
             ]
           : [];
-      return [{ label: S.project.menu.open, onSelect: () => open(row) }, openTab, ...unresolve];
+      return joinGroups([
+        [{ label: S.project.menu.open, onSelect: () => open(row) }, openTab, ...unresolve],
+        ...fileGroups(row),
+      ]);
     }
-    return row.kind === 'dir' ? [] : [openTab];
+    return row.kind === 'dir'
+      ? []
+      : joinGroups([[openTab], openInItems(row.repoPath, fileActions.actions)]);
   };
 
   const blocker = commitBlocker(plan, ws.message, {
@@ -271,6 +327,7 @@ export function FolderCommitTool() {
         }
       />
       {flows.dialogs.element}
+      {fileActions.element}
     </ToolWindowFrame>
   );
 }

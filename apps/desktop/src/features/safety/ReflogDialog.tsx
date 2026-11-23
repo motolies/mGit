@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActionErrorBar } from '../../components/ActionErrorBar';
 import { str, useDialogs } from '../../components/use-dialogs';
 import { useSession } from '../../store';
+import { branchNameField } from '../branch/branch-name';
 import styles from './ReflogDialog.module.css';
 
 /** reflog 뷰어 (AD-02): ref 입력 → 항목 목록 → 시점을 새 branch 로 복원 */
@@ -46,7 +47,7 @@ export function ReflogDialog() {
     const v = await dialogs.prompt({
       title: S.safety.restoreTitle,
       message: `${selector} · ${shortHash(oid)}`,
-      fields: [{ key: 'name', label: S.safety.restoreName, required: true }],
+      fields: [branchNameField({ key: 'name', label: S.safety.restoreName, required: true })],
       confirmLabel: S.dialog.create,
     });
     if (v) {

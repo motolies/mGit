@@ -7,6 +7,7 @@
 
 mod authors;
 mod branch;
+mod branch_update;
 mod changes;
 mod commit_table;
 mod config;
@@ -59,6 +60,7 @@ mod write;
 
 pub use authors::AUTHORS_MAX;
 pub use branch::{CheckoutTarget, is_not_fully_merged};
+pub use branch_update::BranchUpdate;
 pub use changes::CommitSpec;
 pub use commit_table::CommitTable;
 pub use config::{CoreConfig, LIGHT_SESSIONS_PER_FOLDER};
@@ -76,7 +78,7 @@ pub use error::CoreError;
 pub use events::{CoreEvent, EventSink, SessionId};
 pub use folder::{FolderOpened, FolderRepo, FolderSession, SCAN_DEPTH};
 pub use folder_batch::{
-    BatchOp, BatchPullMode, BatchResult, FolderSettings, RepoChanges, RepoResult,
+    BatchOp, BatchPullMode, BatchResult, FolderSettings, RefMove, RepoChanges, RepoResult,
 };
 pub use folder_branches::{FolderBranch, FolderBranchIn, FolderBranchRepo, FolderBranches};
 pub use folder_index::{IndexTarget, IndexWriteResult, SkipReason, SkippedPath};

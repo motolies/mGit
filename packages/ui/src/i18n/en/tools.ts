@@ -65,6 +65,7 @@ export const enTools: Pick<
     openEditor: 'Open in editor',
     openTerminal: 'Open in terminal',
     reveal: 'Reveal in file manager',
+    revealFinder: 'Reveal in Finder',
     settings: 'Settings…',
     themeLight: 'Theme: Light',
     themeDark: 'Theme: Dark',

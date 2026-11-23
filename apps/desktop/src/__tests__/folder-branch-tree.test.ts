@@ -13,10 +13,13 @@ import {
   isHeadRevs,
   remoteBranchParts,
   revsAfterActivate,
+  revsAfterRename,
   revsOfBranchNames,
   sameRevs,
   selectedBranchNodeIds,
+  selectedLocalBranch,
   trackText,
+  updateTargetsOf,
 } from '../features/branches/folder-branch-tree';
 
 const pathOf = (name: string) => `/work/${name}`;
@@ -388,5 +391,54 @@ describe('브랜치 트리와 로그 범위 (BT-03)', () => {
       branch: 'main',
     });
     expect(remoteBranchParts({ name: 'weird', remoteName: null })).toBeNull();
+  });
+});
+
+describe('branch 업데이트 대상 (BR-09)', () => {
+  it('업스트림이 있고 원격에서 사라지지 않은 저장소만, 원격 branch 는 없다', () => {
+    const dev = local(
+      'development',
+      at('api*', { upstream: 'origin/development', behind: 4 }),
+      at('web', { upstream: 'origin/development', gone: true }),
+      at('docs'),
+    );
+    expect(updateTargetsOf(dev)).toEqual([pathOf('api')]);
+    expect(updateTargetsOf(remote('origin/main', at('api')))).toEqual([]);
+  });
+
+  it('세로 툴바는 고른 행이 로컬 branch 하나일 때만 그 branch 를 준다', () => {
+    const id = (b: FolderBranch) => folderBranchNodeId(b);
+    const [dev, , , main, originDev] = BRANCHES as [
+      FolderBranch,
+      FolderBranch,
+      FolderBranch,
+      FolderBranch,
+      FolderBranch,
+    ];
+    expect(selectedLocalBranch(BRANCHES, [id(dev)])).toBe(dev);
+    expect(selectedLocalBranch(BRANCHES, [id(originDev)])).toBeNull();
+    expect(selectedLocalBranch(BRANCHES, [id(dev), id(main)])).toBeNull();
+    expect(selectedLocalBranch(BRANCHES, [])).toBeNull();
+  });
+});
+
+describe('revsAfterRename', () => {
+  it('범위에 옛 이름이 있으면 새 이름으로, 남은 저장소가 있으면 둘 다. 없으면 그대로', () => {
+    expect(revsAfterRename({ kind: 'solo', name: 'a' }, 'a', 'b', false)).toEqual({
+      kind: 'solo',
+      name: 'b',
+    });
+    expect(revsAfterRename({ kind: 'solo', name: 'a' }, 'a', 'b', true)).toEqual({
+      kind: 'branches',
+      names: ['a', 'b'],
+    });
+    expect(revsAfterRename({ kind: 'branches', names: ['x', 'a', 'b'] }, 'a', 'b', false)).toEqual({
+      kind: 'branches',
+      names: ['x', 'b'],
+    });
+    const all = { kind: 'all' } as const;
+    expect(revsAfterRename(all, 'a', 'b', false)).toBe(all);
+    const other = { kind: 'solo', name: 'x' } as const;
+    expect(revsAfterRename(other, 'a', 'b', false)).toBe(other);
   });
 });

@@ -150,6 +150,22 @@ pub async fn discard_paths(
     Ok(ids.into_iter().map(crate::dto::narrow_u64).collect())
 }
 
+/// 경로(파일·폴더)의 변경을 HEAD 기준으로 되돌린다 (stage 된 변경 포함, 백업 뒤). 백업 id 목록을 돌려준다
+#[tauri::command]
+#[specta::specta]
+pub async fn rollback_paths(
+    state: State<'_, AppState>,
+    session: u32,
+    paths: Vec<String>,
+) -> Result<Vec<u32>, IpcError> {
+    let ids = state
+        .core()?
+        .core
+        .rollback(SessionId(session), &paths)
+        .await?;
+    Ok(ids.into_iter().map(crate::dto::narrow_u64).collect())
+}
+
 /// 고른 hunk·줄만 작업 트리에서 되돌린다 (백업 뒤). `options` 는 화면의 diff 와 같아야 한다
 #[tauri::command]
 #[specta::specta]

@@ -896,6 +896,260 @@ async fn discard_removes_untracked_symlinks_without_following_them() {
     assert_eq!(repo.read_file("dir/keep.txt"), "keep");
 }
 
+/// 세션의 변경 유무
+fn has_changes(core: &mgit_core::Core, session: mgit_core::SessionId) -> bool {
+    core.repo_state(session)
+        .unwrap()
+        .status
+        .summary()
+        .has_changes()
+}
+
+/// Rollback: stage 된 새 파일(A, 뒤에 더 고친 AM 포함)은 index·디스크에서 모두 사라지고 백업에서 복원된다.
+/// `restore --source=HEAD --staged --worktree` 의 no-overlay 동작을 실측한다
+#[tokio::test]
+async fn rollback_removes_staged_new_file_and_backs_it_up() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file(".DS_Store", "finder\n");
+    repo.stage(&[".DS_Store"]);
+    repo.write_file(".DS_Store", "finder junk\n");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let ids = core
+        .rollback(opened.session, &[".DS_Store".into()])
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 1);
+    assert!(
+        !repo.path().join(".DS_Store").exists(),
+        "디스크에서 사라진다"
+    );
+    assert_eq!(
+        repo.git_ok(["ls-files", "--", ".DS_Store"]),
+        "",
+        "index 에서도"
+    );
+    assert!(!has_changes(&core, opened.session));
+
+    let backups = core.backups(opened.session, 10).unwrap();
+    let b = backups.iter().find(|b| b.rel_path == ".DS_Store").unwrap();
+    assert_eq!(b.reason, "rollback");
+    core.restore_backup(opened.session, b.id).await.unwrap();
+    assert_eq!(repo.read_file(".DS_Store"), "finder junk\n");
+    assert_eq!(
+        core.repo_state(opened.session)
+            .unwrap()
+            .status
+            .summary()
+            .untracked,
+        1,
+        "복원하면 untracked 로 돌아온다"
+    );
+}
+
+/// Rollback: staged M(+ unstaged 가 섞인 MM)은 HEAD 로, staged D 는 다시 생긴다. 백업은 디스크에 있던 파일만
+#[tokio::test]
+async fn rollback_reverts_staged_modification_and_deletion_to_head() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(2));
+    repo.write_file("f1.txt", "staged edit\n");
+    repo.stage(&["f1.txt"]);
+    repo.write_file("f1.txt", "staged edit\nplus unstaged\n");
+    repo.git_ok(["rm", "-q", "--", "f2.txt"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let ids = core
+        .rollback(opened.session, &["f1.txt".into(), "f2.txt".into()])
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 1, "지워진 f2 는 백업할 파일이 없다");
+    assert_eq!(repo.read_file("f1.txt"), "commit 1");
+    assert_eq!(repo.read_file("f2.txt"), "commit 2");
+    assert!(!has_changes(&core, opened.session));
+    let backups = core.backups(opened.session, 10).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&backups[0].blob_path).unwrap(),
+        "staged edit\nplus unstaged\n"
+    );
+}
+
+/// Rollback: stage 된 rename 은 새 경로를 지우고 원래 경로를 되살린다 (어느 쪽 경로로 골라도)
+#[tokio::test]
+async fn rollback_reverts_staged_rename() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(2));
+    repo.git_ok(["mv", "f1.txt", "renamed.txt"]);
+    std::fs::create_dir_all(repo.path().join("moved")).unwrap();
+    repo.git_ok(["mv", "f2.txt", "moved/r2.txt"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let st = core.repo_state(opened.session).unwrap();
+    assert!(
+        st.status
+            .entries
+            .iter()
+            .any(|e| e.path == "renamed.txt" && e.orig_path.as_deref() == Some("f1.txt")),
+        "{:?}",
+        st.status.entries
+    );
+
+    core.rollback(opened.session, &["renamed.txt".into(), "f2.txt".into()])
+        .await
+        .unwrap();
+    assert!(!repo.path().join("renamed.txt").exists());
+    assert!(!repo.path().join("moved/r2.txt").exists());
+    assert_eq!(repo.read_file("f1.txt"), "commit 1");
+    assert_eq!(repo.read_file("f2.txt"), "commit 2");
+    assert!(!has_changes(&core, opened.session));
+}
+
+/// Rollback: untracked 파일은 지우고, untracked 폴더는 status(-uall) 항목으로 펼쳐 파일 단위로 지운다.
+/// 폴더 자체와 이름이 비슷한 옆 폴더는 그대로다
+#[tokio::test]
+async fn rollback_deletes_untracked_files_and_expands_folders() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("junk.txt", "j");
+    repo.write_file("build/a.o", "a");
+    repo.write_file("build/sub/b.o", "b");
+    repo.write_file("build2/keep.o", "k");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let ids = core
+        .rollback(opened.session, &["junk.txt".into(), "build/".into()])
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    assert!(!repo.path().join("junk.txt").exists());
+    assert!(!repo.path().join("build/a.o").exists());
+    assert!(!repo.path().join("build/sub/b.o").exists());
+    assert!(
+        repo.path().join("build").is_dir(),
+        "폴더 자체는 지우지 않는다"
+    );
+    assert_eq!(repo.read_file("build2/keep.o"), "k");
+    let s = core.repo_state(opened.session).unwrap().status.summary();
+    assert_eq!(s.untracked, 1, "build2/keep.o 만 남는다");
+}
+
+/// Rollback: 백업할 수 없는 중첩 저장소 폴더가 끼면 함께 고른 파일까지 건드리지 않고 거부한다
+#[tokio::test]
+async fn rollback_refuses_nested_repo_folder() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("nested/s.txt", "s");
+    let mut nested = TestRepo::at(&repo.path().join("nested"));
+    nested.git_ok(["init", "-q", "-b", "main"]);
+    nested.commit("nested work");
+    repo.write_file("u.txt", "u");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let err = core
+        .rollback(opened.session, &["u.txt".into(), "nested".into()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::Invalid(m) if m.contains("nested/")),
+        "{err:?}"
+    );
+    assert!(repo.path().join("nested/.git").exists());
+    assert_eq!(repo.read_file("u.txt"), "u");
+    assert!(core.backups(opened.session, 10).unwrap().is_empty());
+    assert!(matches!(
+        core.rollback(opened.session, &["../escape".into()]).await,
+        Err(CoreError::Invalid(_))
+    ));
+}
+
+/// Rollback: 충돌 항목은 거부하고, merge 진행 중 stage 된 해결 결과도 거부한다.
+/// 같은 merge 중이라도 unstaged 만 고친 파일은 되돌리며 merge 상태는 그대로다
+#[tokio::test]
+async fn rollback_refuses_conflicts_and_staged_entries_during_merge() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.prepare_conflict();
+    repo.begin_merge_conflict();
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let err = core
+        .rollback(opened.session, &["conflict.txt".into()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::Invalid(m) if m.contains("conflict.txt")),
+        "{err:?}"
+    );
+
+    repo.write_file("conflict.txt", "resolved\n");
+    repo.stage(&["conflict.txt"]);
+    let err = core
+        .rollback(opened.session, &["conflict.txt".into()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::Invalid(m) if m.contains("conflict.txt")),
+        "{err:?}"
+    );
+    assert_eq!(repo.read_file("conflict.txt"), "resolved\n");
+
+    repo.write_file("f1.txt", "edited during merge\n");
+    core.rollback(opened.session, &["f1.txt".into()])
+        .await
+        .unwrap();
+    assert_eq!(repo.read_file("f1.txt"), "commit 1");
+    assert_eq!(repo.read_file("conflict.txt"), "resolved\n");
+    assert!(
+        repo.path().join(".git/MERGE_HEAD").exists(),
+        "merge 는 그대로"
+    );
+}
+
+/// Rollback: HEAD 가 없는(unborn) 저장소에서도 stage 된 새 파일과 untracked 파일을 지운다
+#[tokio::test]
+async fn rollback_works_in_unborn_repo() {
+    let core = core().await;
+    let mut repo = build(Scenario::Empty);
+    repo.write_file("x.txt", "x");
+    repo.write_file("dir/y.txt", "y");
+    repo.stage(&["x.txt", "dir/y.txt"]);
+    repo.write_file("u.txt", "u");
+    repo.write_file("keep.txt", "keep");
+    repo.stage(&["keep.txt"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    let ids = core
+        .rollback(
+            opened.session,
+            &["x.txt".into(), "dir".into(), "u.txt".into()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    for p in ["x.txt", "dir/y.txt", "u.txt"] {
+        assert!(!repo.path().join(p).exists(), "{p}");
+    }
+    assert_eq!(
+        repo.git_ok(["ls-files"]),
+        "keep.txt\n",
+        "고르지 않은 파일은 그대로"
+    );
+    assert_eq!(repo.read_file("keep.txt"), "keep");
+}
+
 /// UTF-8 이 아닌 줄은 패치로 되돌릴 수 없으니 줄 단위 작업을 막고, 파일 단위는 바이트를 보존한다
 #[tokio::test]
 async fn partial_actions_refuse_non_utf8_hunks() {

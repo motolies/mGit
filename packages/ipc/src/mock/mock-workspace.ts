@@ -35,6 +35,7 @@ import type {
   HistoryEntry,
   IndexTarget,
   IndexWriteResult,
+  InProgressOp,
   Module,
   ModuleOverrides,
   OpKind,
@@ -1105,6 +1106,63 @@ export function commitMockStaged(entries: readonly StatusEntry[]): StatusEntry[]
     };
     return isListed(kept) ? [kept] : [];
   });
+}
+
+/**
+ * 세션 Rollback(`rollbackPaths`) 흉내 (코어 `plan_rollback`): 요청 경로(파일·폴더, `.` 은 전부)를 변경 항목으로 펼쳐
+ * 목록에서 뺀다 (rename 은 원래 경로로 골라도 된다). 충돌 항목, 진행 중 작업(bisect 제외)의 stage 된 항목이 끼면 아무것도
+ * 바꾸지 않고 코어와 같은 문구로 `error` 를 준다. 디스크에서도 사라지는 경로(untracked·추가)는 `removed` 로 알린다
+ * (호출자가 목 파일 트리에서 뺀다). 삭제·rename 의 원래 파일을 되살리는 것은 흉내 내지 않는다
+ */
+export function mockRollback(
+  entries: readonly StatusEntry[],
+  paths: readonly string[],
+  op: InProgressOp | null,
+): { entries: StatusEntry[]; removed: string[]; error: string | null } {
+  const norm = (p: string) =>
+    p
+      .split('/')
+      .filter((c) => c !== '' && c !== '.')
+      .join('/');
+  const wants = paths.map(norm);
+  const under = (path: string | null | undefined) => {
+    if (path === null || path === undefined) {
+      return false;
+    }
+    const p = path.replace(/\/+$/, '');
+    return wants.some((w) => w === '' || p === w || p.startsWith(`${w}/`));
+  };
+  const chosen = entries.filter((e) => under(e.path) || under(e.origPath));
+  const unchanged = { entries: [...entries], removed: [] };
+  const conflicts = chosen.filter((e) => e.conflict).map((e) => e.path);
+  if (conflicts.length > 0) {
+    const list = conflicts.join(', ');
+    return {
+      ...unchanged,
+      error: pick(
+        `충돌 중인 파일은 되돌리지 않습니다. 먼저 충돌을 해결하거나 작업을 중단하세요: ${list}`,
+        `Conflicted files are not rolled back. Resolve the conflicts or abort the operation first: ${list}`,
+      ),
+    };
+  }
+  const staged = op && op.kind !== 'bisect' ? chosen.filter(isStaged).map((e) => e.path) : [];
+  if (staged.length > 0) {
+    const list = staged.join(', ');
+    return {
+      ...unchanged,
+      error: pick(
+        `merge·rebase 같은 작업이 진행 중이라 stage 된 변경은 되돌리지 않습니다 (해결 결과 보호): ${list}`,
+        `An operation such as merge or rebase is in progress, so staged changes are not rolled back (protecting resolutions): ${list}`,
+      ),
+    };
+  }
+  return {
+    entries: entries.filter((e) => !chosen.includes(e)),
+    removed: chosen
+      .filter((e) => e.worktree === 'untracked' || e.index === 'added' || e.index === 'renamed')
+      .map((e) => e.path),
+    error: null,
+  };
 }
 
 /** 폴더 장면 저장소의 지금 변경 항목 (변경이 없으면 빈 배열) */

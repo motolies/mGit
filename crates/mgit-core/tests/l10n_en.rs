@@ -47,7 +47,7 @@ fn two_repos(tag: &str) -> (PathBuf, TestRepo, TestRepo) {
 async fn batch_label_summary_and_skip_reason_are_english() {
     english();
     let core = core().await;
-    let (root, _a, _b) = two_repos("batch");
+    let (root, mut a, _b) = two_repos("batch");
     let (sink, mut rx) = collector();
     let fid = core.open_folder(&root, sink).await.unwrap().session;
 
@@ -74,6 +74,56 @@ async fn batch_label_summary_and_skip_reason_are_english() {
     assert_eq!(r.label, "Batch pull");
     let rb = r.results.iter().find(|x| x.name == "b").unwrap();
     assert_eq!(rb.skipped.as_deref(), Some("No upstream"));
+
+    // branch 업데이트 (BR-09): 라벨과 건너뜀 사유
+    let r = core
+        .folder_batch(fid, BatchOp::UpdateBranch { name: "dev".into() }, &[])
+        .await
+        .unwrap();
+    assert_eq!(r.label, "Batch update: dev");
+    assert!(
+        r.results
+            .iter()
+            .all(|x| x.skipped.as_deref() == Some("No such branch")),
+        "{r:?}"
+    );
+
+    // 일괄 이름 바꾸기: 라벨과 건너뜀 사유 (branch 없음 · 새 이름이 이미 있음)
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::RenameBranch {
+                from: "dev".into(),
+                to: "main".into(),
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.label, "Batch rename: dev → main");
+    assert!(
+        r.results
+            .iter()
+            .all(|x| x.skipped.as_deref() == Some("No such branch")),
+        "{r:?}"
+    );
+    a.git_ok(["branch", "dev"]);
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::RenameBranch {
+                from: "dev".into(),
+                to: "main".into(),
+            },
+            &[root.join("a")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.results[0].skipped.as_deref(),
+        Some("New name already exists: main"),
+        "{r:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -4,6 +4,7 @@ import type { MenuItem } from '../../components/ContextMenu';
 import { bool, str, type useDialogs } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
 import { rangeRowCount } from '../../store/squash-range';
+import { branchNameField } from '../branch/branch-name';
 import { tagWriteItems } from '../tags/tag-flows';
 import { createWorktreeFlow } from '../worktree/create-worktree';
 
@@ -156,7 +157,7 @@ export function graphMenuItems(row: GraphRow, a: GraphMenuActions, d: Dialogs): 
         .prompt({
           title: S.dialog.createBranch,
           fields: [
-            { key: 'name', label: S.dialog.branchName, required: true },
+            branchNameField({ key: 'name', label: S.dialog.branchName, required: true }),
             { key: 'checkout', label: S.dialog.checkoutAfter, type: 'checkbox', initial: true },
           ],
           confirmLabel: S.dialog.create,

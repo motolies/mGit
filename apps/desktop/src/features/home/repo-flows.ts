@@ -1,21 +1,14 @@
 import type { CloneRequest, GitignoreTemplate } from '@mgit/ipc';
-import { S } from '@mgit/ui';
+import { type PromptField, S } from '@mgit/ui';
 import { bool, str } from '../../components/use-dialogs';
+import { branchNameField } from '../branch/branch-name';
 
 /** 대화상자 API (useDialogs 의 prompt) */
 export interface PromptApi {
   prompt: (spec: {
     title: string;
     message?: string;
-    fields: readonly {
-      key: string;
-      label: string;
-      type?: 'text' | 'textarea' | 'checkbox' | 'select' | 'password';
-      placeholder?: string;
-      initial?: string | boolean;
-      required?: boolean;
-      options?: readonly { value: string; label: string }[];
-    }[];
+    fields: readonly PromptField[];
     confirmLabel?: string;
   }) => Promise<Record<string, string | boolean> | null>;
 }
@@ -101,7 +94,7 @@ export async function initFlow(
     message: parent,
     fields: [
       { key: 'name', label: S.init.name, required: true },
-      { key: 'branch', label: S.init.branch, initial: 'main', required: true },
+      branchNameField({ key: 'branch', label: S.init.branch, initial: 'main', required: true }),
       {
         key: 'template',
         label: S.init.template,
@@ -133,7 +126,7 @@ export async function createBranchFlow(
   const v = await d.prompt({
     title: S.dialog.createBranch,
     fields: [
-      { key: 'name', label: S.dialog.branchName, required: true },
+      branchNameField({ key: 'name', label: S.dialog.branchName, required: true }),
       { key: 'checkout', label: S.dialog.checkoutAfter, type: 'checkbox', initial: true },
     ],
     confirmLabel: S.dialog.create,

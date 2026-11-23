@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmDialog } from '../ConfirmDialog';
 import styles from '../ConfirmDialog.module.css';
 import {
+  normalizedPreview,
   PromptDialog,
   type PromptField,
   promptResult,
@@ -422,5 +423,82 @@ describe('PromptDialog 막지 않는 경고 (notice, B5)', () => {
     );
     fireEvent.click(screen.getByRole('checkbox', { name: '로컬' }));
     expect(status()).toBeNull();
+  });
+});
+
+describe('PromptDialog 입력 다듬기 (normalize, branch 이름 정규화)', () => {
+  /** 테스트용 규칙: 앞뒤 공백을 지우고 가운데 공백을 하이픈으로 */
+  const rule = {
+    apply: (v: string) => v.trim().replace(/\s+/g, '-'),
+    preview: (n: string) => `만들 이름: ${n}`,
+  };
+  const field: PromptField = { key: 'name', label: '이름', required: true, normalize: rule };
+
+  it('미리보기는 다듬은 값이 입력(앞뒤 공백 제외)과 다를 때만, 규칙이 없거나 빈 값이면 없다', () => {
+    expect(normalizedPreview(field, 'a b')).toBe('만들 이름: a-b');
+    expect(normalizedPreview(field, 'ab')).toBeNull();
+    // 끝에 공백을 막 친 순간은 깜박이지 않는다 (앞뒤 공백은 늘 지운다)
+    expect(normalizedPreview(field, 'ab ')).toBeNull();
+    expect(normalizedPreview(field, '   ')).toBeNull();
+    expect(normalizedPreview({ key: 'name', label: '이름' }, 'a b')).toBeNull();
+    expect(normalizedPreview(field, true)).toBeNull();
+  });
+
+  it('확인 결과에는 다듬은 값이 들어간다 (규칙이 없는 칸·체크 칸은 그대로)', () => {
+    const fields: PromptField[] = [
+      field,
+      { key: 'msg', label: '메시지' },
+      { key: 'go', label: '이동', type: 'checkbox' },
+    ];
+    expect(promptResult(fields, { name: ' a  b ', msg: ' x y ', go: true })).toEqual({
+      name: 'a-b',
+      msg: ' x y ',
+      go: true,
+    });
+  });
+
+  it('입력 칸 아래에 미리보기가 보이고 칸의 설명이 되며(이름에는 섞이지 않는다), 제출하면 다듬은 값이다', async () => {
+    const onConfirm = vi.fn();
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={[field]}
+        confirmLabel="만들기"
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    const input = screen.getByRole<HTMLInputElement>('textbox', { name: '이름' });
+    const preview = () => document.querySelector('[data-role="normalized-preview"]');
+    fireEvent.change(input, { target: { value: 'feature' } });
+    expect(preview()).toBeNull();
+    expect(input.getAttribute('aria-describedby')).toBeNull();
+    fireEvent.change(input, { target: { value: ' feature  x ' } });
+    expect(preview()?.textContent).toBe('만들 이름: feature-x');
+    expect(input.getAttribute('aria-describedby')).toBe(preview()?.id);
+    // 미리보기는 입력 칸 바로 아래(label 밖)다
+    expect(preview()?.previousElementSibling?.contains(input)).toBe(true);
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    expect(onConfirm).toHaveBeenCalledWith({ name: 'feature-x' });
+  });
+
+  it('규칙을 주지 않으면 지금 동작 그대로다 (미리보기 없음, 입력 그대로 제출)', async () => {
+    const onConfirm = vi.fn();
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={[{ key: 'name', label: '이름', required: true }]}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    fireEvent.change(screen.getByLabelText('이름'), { target: { value: ' a  b ' } });
+    expect(document.querySelector('[data-role="normalized-preview"]')).toBeNull();
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    expect(onConfirm).toHaveBeenCalledWith({ name: ' a  b ' });
   });
 });

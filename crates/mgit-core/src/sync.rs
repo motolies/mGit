@@ -117,7 +117,7 @@ impl Core {
     }
 
     /// fetch·pull 을 돌리고, 로컬 tag 집합이 바뀌었으면 원격 tag 캐시를 오래됨으로 둔다 (실패해도 일부 받았을 수 있다)
-    async fn run_write_tracking_tags(
+    pub(crate) async fn run_write_tracking_tags(
         &self,
         session: SessionId,
         spec: WriteSpec,

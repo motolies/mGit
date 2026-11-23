@@ -252,6 +252,87 @@ describe('저장소 범위 (W17, folderTimelineScopeSet)', () => {
   });
 });
 
+describe('브랜치 더블클릭의 저장소 범위와 되돌리기 (focusTimelineBranch)', () => {
+  const FOCUS = { kind: 'branches' as const, names: ['feature/x', 'main', 'origin/main'] };
+  const scope = (store: Awaited<ReturnType<typeof opened>>) => store.getState().timeline.scope;
+  const revs = (store: Awaited<ReturnType<typeof opened>>) => store.getState().timeline.query.revs;
+
+  it('ref 범위와 저장소 범위를 함께 걸고, ref 범위가 다른 것으로 바뀌면 저장소 범위를 걸기 전으로 되돌린다', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().focusTimelineBranch(FOCUS, [API]);
+    expect(revs(store)).toEqual(FOCUS);
+    expect(scope(store)).toEqual([API]);
+    expect(c.folderTimelineScopeSet).toHaveBeenLastCalledWith(9, [API]);
+    expect(c.folderTimelineQuerySet).toHaveBeenLastCalledWith(9, { ...Q, revs: FOCUS });
+    // 다른 branch 클릭: 걸기 전(전부)으로
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'solo', name: 'main' } });
+    expect(scope(store)).toEqual([]);
+    expect(c.folderTimelineScopeSet).toHaveBeenLastCalledWith(9, []);
+  });
+
+  it('걸기 전의 저장소 범위가 있었으면 그 범위로 되돌린다 (branch 필터 해제 = 전체 범위)', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().setTimelineScope([WEB]);
+    await store.getState().focusTimelineBranch(FOCUS, [API]);
+    expect(scope(store)).toEqual([API]);
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'all' } });
+    expect(scope(store)).toEqual([WEB]);
+  });
+
+  it('ref 범위가 그대로인 다른 필터 변경(텍스트 등)에서는 되돌리지 않는다', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().focusTimelineBranch(FOCUS, [API]);
+    await store
+      .getState()
+      .setTimelineQuery(
+        withText({ ...Q, revs: FOCUS }, { pattern: 'fix', regex: false, matchCase: false }),
+      );
+    expect(scope(store)).toEqual([API]);
+    // 그 뒤 ref 범위가 바뀌면 그때 되돌린다
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'head' } });
+    expect(scope(store)).toEqual([]);
+  });
+
+  it('그 사이 사용자가 저장소 범위를 바꿨으면 그 값을 존중해 되돌리지 않는다', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().focusTimelineBranch(FOCUS, [API]);
+    await store.getState().setTimelineScope([API, WEB]);
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'all' } });
+    expect(scope(store)).toEqual([API, WEB]);
+  });
+
+  it('더블클릭이 이어지면 처음 걸기 전의 범위를 기억하고, 한 번만 되돌린다', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().setTimelineScope([WEB]);
+    await store.getState().focusTimelineBranch(FOCUS, [API]);
+    const other = { kind: 'branches' as const, names: ['hotfix', 'main'] };
+    await store.getState().focusTimelineBranch(other, [API, WEB]);
+    expect(scope(store)).toEqual([API, WEB]);
+    expect(revs(store)).toEqual(other);
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'solo', name: 'main' } });
+    expect(scope(store)).toEqual([WEB]);
+    // 기억은 한 번 쓰면 사라진다: 다음 ref 범위 변경은 저장소 범위를 건드리지 않는다
+    await store.getState().setTimelineScope([API]);
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'all' } });
+    expect(scope(store)).toEqual([API]);
+  });
+
+  it('좁히지 않는 더블클릭(모든 저장소에 있는 branch)은 저장소 범위 요청을 보내지 않고, 되돌릴 때도 보내지 않는다', async () => {
+    const c = client();
+    const store = await opened(c);
+    const calls = c.folderTimelineScopeSet.mock.calls.length;
+    await store.getState().focusTimelineBranch(FOCUS, []);
+    await store.getState().setTimelineQuery({ ...Q, revs: { kind: 'all' } });
+    expect(c.folderTimelineScopeSet.mock.calls.length).toBe(calls);
+    expect(scope(store)).toEqual([]);
+  });
+});
+
 describe('작성자 후보 (드롭다운을 열 때 읽기)', () => {
   it('처음 열 때 읽고, 읽은 뒤에는 다시 읽지 않으며, 다시 시도(force)는 다시 읽는다', async () => {
     const c = client();

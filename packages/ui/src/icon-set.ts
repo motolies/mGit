@@ -41,6 +41,8 @@ export const ICON_GLYPHS = {
   search: 'search',
   add: 'add',
   fetch: 'git-fetch',
+  // 선택한 branch 업데이트 (BR-09, 세로 툴바의 fetch 옆)
+  update: 'repo-pull',
   // 사라진 워크트리 정리 (저장소 탭 Worktrees 그룹의 머리 단추, W22)
   prune: 'trash',
   // 태그 문서 (C3a, TG-10): 트리 Tags 묶음 끝 단추

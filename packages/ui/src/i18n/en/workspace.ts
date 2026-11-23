@@ -176,11 +176,27 @@ export const enWorkspace: Pick<
       favorite: 'Add or remove selected branch from favorites',
       expandAll: 'Expand all',
       collapseAll: 'Collapse all',
+      update: 'Update selected branch',
+      updateNone: 'Select one local branch that has an upstream',
     },
     menu: {
       checkout: 'Checkout…',
+      update: 'Update',
+      updateIn: (n: number) =>
+        `Update (${formatNumber(n)} ${plural(n, 'repository', 'repositories')})`,
+      updateNone: 'Update (no repository with an upstream)',
       newBranchHere: 'New branch from here…',
       showOnly: 'Show only this branch',
+    },
+    update: {
+      moved: (branch: string, n: number) =>
+        `${branch} ← ${formatNumber(n)} ${plural(n, 'commit', 'commits')}`,
+      upToDate: 'Already up to date',
+      upToDateOf: (branch: string) => `${branch}: already up to date`,
+      ahead: (branch: string, n: number) =>
+        `${branch}: local is ahead (⇡${formatNumber(n)}), nothing to update`,
+      diverged: (branch: string, ahead: number, behind: number) =>
+        `${branch}: diverged, not updated (⇡${formatNumber(ahead)} ⇣${formatNumber(behind)})`,
     },
   },
   filterBar: {
@@ -320,6 +336,11 @@ export const enWorkspace: Pick<
       copyPath: 'Copy path',
       copyRelative: 'Copy relative path',
       many: (label: string, n: number) => `${label} (${formatNumber(n)})`,
+      rollback: 'Rollback…',
+      rollbackTitle: 'Roll back changes?',
+      rollbackMessage: (n: number) =>
+        `Roll back ${formatNumber(n)} ${plural(n, 'file', 'files')} to the last commit (HEAD). Staged changes are rolled back too, and newly added and untracked files are deleted. The contents before the rollback are kept in the discard backups.`,
+      rollbackConfirm: 'Roll back',
     },
   },
   fileView: {

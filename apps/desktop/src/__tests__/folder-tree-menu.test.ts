@@ -1,7 +1,10 @@
+import type { StatusEntry } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { describe, expect, it, vi } from 'vitest';
+import { revealLabel } from '../features/project/file-actions-menu';
 import type { EntryRow, RootRow } from '../features/project/project-tree-model';
 import {
+  type FileMenuSource,
   type FolderTreeMenuActions,
   type FolderTreeMenuInput,
   folderTreeMenu,
@@ -9,7 +12,7 @@ import {
 } from '../features/workspace/folder-tree-menu';
 import { repoTreeMenu } from '../features/workspace/repo-tree-menu';
 import { noteRowId } from '../store/file-tree';
-import { rootToRepo } from '../store/fs-path';
+import { innermostRepo, joinRoot, relativeTo, rootToRepo } from '../store/fs-path';
 
 const ROOT = '/w/acme';
 const REPOS: Record<string, string> = { api: 'api', web: 'web', 'libs/core': 'core' };
@@ -357,3 +360,175 @@ describe('repoTreeMenu — 저장소 탭 프로젝트 트리 (W21, 루트 1개 �
     ]);
   });
 });
+
+describe('파일 동작 (Finder·터미널·변경 되돌리기·ignore) — 트리 메뉴 연결', () => {
+  const API = `${ROOT}/api`;
+  /** api 저장소의 변경: 추가한 .DS_Store, 수정한 pom.xml, untracked 폴더 target/ 아래 파일 */
+  const CHANGES: Record<string, StatusEntry[]> = {
+    [API]: [
+      { ...clean('.DS_Store'), index: 'added' },
+      { ...clean('pom.xml'), worktree: 'modified' },
+      { ...clean('target/out.jar'), worktree: 'untracked' },
+    ],
+  };
+  /** 행을 품은 가장 안쪽 저장소와 그 기준 경로 (컨테이너와 같은 변환) */
+  const files: FileMenuSource = {
+    target: (rel) => {
+      const abs = joinRoot(ROOT, rel);
+      const repoPath = innermostRepo(
+        Object.keys(REPOS).map((r) => `${ROOT}/${r}`),
+        abs,
+      );
+      return repoPath === null ? null : { repoPath, path: relativeTo(repoPath, abs) ?? '' };
+    },
+    entriesOf: (repoPath) => CHANGES[repoPath] ?? [],
+  };
+  const fileActs = () => ({
+    reveal: vi.fn(),
+    terminal: vi.fn(),
+    rollback: vi.fn(),
+    ignore: vi.fn(),
+  });
+  const withFiles = (r: RootRow | EntryRow, targets: string[]) => ({
+    ...input(r, targets, false, withRepos),
+    files,
+  });
+  const m = S.project.menu;
+
+  it('파일: 열기·히스토리 묶음 뒤에 변경 되돌리기, 그 뒤 Finder·터미널, 경로 복사', () => {
+    const f = fileActs();
+    const items = folderTreeMenu(withFiles(row('api/pom.xml', 'file'), ['api/pom.xml']), {
+      ...actions(),
+      files: f,
+    });
+    expect(items.map((i) => (i.separator ? `─${i.label}` : i.label))).toEqual([
+      m.open,
+      m.openPinned,
+      `─${S.menu.fileHistory}`,
+      S.menu.blame,
+      m.rollback,
+      `─${revealLabel()}`,
+      S.actions.openTerminal,
+      `─${m.copyPath}`,
+      m.copyRelative,
+    ]);
+    pick(items, m.rollback);
+    expect(f.rollback).toHaveBeenCalledWith([{ repoPath: API, paths: ['pom.xml'] }]);
+    pick(items, revealLabel());
+    expect(f.reveal).toHaveBeenCalledWith(`${API}/pom.xml`);
+    pick(items, S.actions.openTerminal);
+    expect(f.terminal).toHaveBeenCalledWith(`${API}/pom.xml`);
+  });
+
+  it('여러 개 선택은 대상 전체의 변경 수, untracked 폴더 하나는 되돌리기·ignore(이 폴더/)', () => {
+    const f = fileActs();
+    const many = folderTreeMenu(
+      withFiles(row('api/target'), ['api/.DS_Store', 'api/target', 'README.md']),
+      { ...actions(), files: f },
+    );
+    pick(many, m.many(m.rollback, 2));
+    expect(f.rollback).toHaveBeenCalledWith([
+      { repoPath: API, paths: ['.DS_Store', 'target/out.jar'] },
+    ]);
+    expect(labels(many)).not.toContain(S.safety.ignore);
+
+    const dir = folderTreeMenu(withFiles(row('api/target'), ['api/target']), {
+      ...actions(),
+      files: f,
+    });
+    const ignore = dir.find((i) => i.label === S.safety.ignore);
+    expect(ignore?.children?.map((c) => c.label)).toEqual([S.safety.ignoreDir('target')]);
+    ignore?.children?.[0]?.onSelect?.();
+    expect(f.ignore).toHaveBeenCalledWith(API, ['target/']);
+  });
+
+  it('변경이 없거나 저장소 밖이면 되돌리기·ignore 없이 Finder·터미널만', () => {
+    const act = { ...actions(), files: fileActs() };
+    expect(labels(folderTreeMenu(withFiles(row('README.md', 'file'), ['README.md']), act))).toEqual(
+      [m.open, m.openPinned, revealLabel(), S.actions.openTerminal, m.copyPath, m.copyRelative],
+    );
+    expect(labels(folderTreeMenu(withFiles(row('web/src'), ['web/src']), act))).toEqual([
+      revealLabel(),
+      S.actions.openTerminal,
+      m.copyPath,
+      m.copyRelative,
+    ]);
+  });
+
+  it('저장소 노드: 일괄 작업 뒤에 저장소 전체 되돌리기와 Finder·터미널, 폴더 루트는 Finder·터미널', () => {
+    const f = fileActs();
+    const repo = folderTreeMenu(withFiles(row('api'), ['api']), { ...actions(), files: f });
+    const tail = labels(repo).slice(-4);
+    expect(tail).toEqual([
+      m.many(m.rollback, 3),
+      revealLabel(),
+      S.actions.openTerminal,
+      m.copyPath,
+    ]);
+    pick(repo, m.many(m.rollback, 3));
+    expect(f.rollback).toHaveBeenCalledWith([
+      { repoPath: API, paths: ['.DS_Store', 'pom.xml', 'target/out.jar'] },
+    ]);
+    pick(repo, revealLabel());
+    expect(f.reveal).toHaveBeenCalledWith(API);
+    // 변경이 없는 저장소는 되돌리기 없이
+    expect(
+      labels(folderTreeMenu(withFiles(row('web'), ['web']), { ...actions(), files: f })),
+    ).not.toContain(m.rollback);
+
+    const root = folderTreeMenu(withFiles(ROOT_ROW, ['']), { ...actions(), files: f });
+    expect(labels(root).slice(-3)).toEqual([revealLabel(), S.actions.openTerminal, m.copyPath]);
+    pick(root, S.actions.openTerminal);
+    expect(f.terminal).toHaveBeenCalledWith(ROOT);
+  });
+
+  it('저장소 탭 루트는 새로고침 뒤 Finder·터미널, 그다음 경로 복사', () => {
+    const f = fileActs();
+    const items = repoTreeMenu(
+      {
+        row: ROOT_ROW,
+        targets: [''],
+        root: API,
+        isOpenable: () => false,
+        fileRepo: () => null,
+        roles: () => null,
+        superproject: null,
+        scope: null,
+        busy: false,
+      },
+      {
+        refresh: vi.fn(),
+        openFile: vi.fn(),
+        fileHistory: vi.fn(),
+        blame: vi.fn(),
+        copy: vi.fn(),
+        openRepoTab: vi.fn(),
+        submoduleItems: vi.fn(() => []),
+        selectModule: vi.fn(),
+        hideModule: vi.fn(),
+        files: f,
+      },
+    );
+    expect(items.map((i) => (i.separator ? `─${i.label}` : i.label))).toEqual([
+      S.folder.refresh,
+      `─${revealLabel()}`,
+      S.actions.openTerminal,
+      `─${m.copyPath}`,
+    ]);
+    pick(items, revealLabel());
+    expect(f.reveal).toHaveBeenCalledWith(API);
+  });
+});
+
+/** 깨끗한 status 항목 (필드를 덮어써 쓴다) */
+function clean(path: string): StatusEntry {
+  return {
+    path,
+    origPath: null,
+    index: 'unmodified',
+    worktree: 'unmodified',
+    submodule: null,
+    conflict: null,
+    renameScore: null,
+  };
+}

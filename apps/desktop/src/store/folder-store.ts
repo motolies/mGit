@@ -16,6 +16,7 @@ import {
   type GraphLayoutPrefs,
   type GraphQuery,
   GraphRangeCache,
+  type GraphRevs,
   type IndexTarget,
   type IndexWriteResult,
   type IpcClient,
@@ -115,6 +116,22 @@ export function selectionInScope(
 function samePaths(a: readonly string[], b: readonly string[]): boolean {
   const set = new Set(a);
   return set.size === new Set(b).size && b.every((p) => set.has(p));
+}
+
+/** 두 ref 범위가 같은지 (종류와 이름 순서까지) */
+function sameRevsValue(a: GraphRevs, b: GraphRevs): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * 브랜치 더블클릭이 건 범위의 기억 (`focusTimelineBranch`): 건 ref 범위, 건 저장소 범위, 걸기 전의 저장소 범위.
+ * ref 범위가 다른 것으로 바뀌면 저장소 범위를 걸기 전으로 되돌린다 — 그 사이 사용자가 저장소 범위를 바꿨으면 기억을
+ * 버린다 (사용자가 고른 범위를 덮어쓰지 않는다)
+ */
+interface BranchFocusScope {
+  revs: GraphRevs;
+  scope: string[];
+  before: string[];
 }
 
 /**
@@ -358,6 +375,13 @@ export interface FolderState {
    * 빠지면 선택을 비운다. 작성자 후보는 낡은 것으로 본다. 실패하면 이전 범위로 되돌리고 사유를 `error` 에 둔다
    */
   setTimelineScope(repos: readonly string[]): Promise<void>;
+  /**
+   * 브랜치 더블클릭·Enter: ref 범위와 저장소 범위를 함께 건다 (그 branch 와 기본 branch, 그 branch 가 있는 저장소). 걸기
+   * 전의 저장소 범위를 기억했다가, 뒤에 ref 범위가 다른 것으로 바뀌면(클릭·HEAD 행·다른 더블클릭·branch 필터 해제)
+   * 그 범위로 되돌린다. 그 사이 사용자가 저장소 범위를 직접 바꿨으면 되돌리지 않는다. 더블클릭이 이어지면 처음 걸기
+   * 전의 범위를 계속 기억한다
+   */
+  focusTimelineBranch(revs: GraphRevs, repos: readonly string[]): Promise<void>;
   /** 타임라인 레이아웃 설정을 바꾼다 (보기 옵션의 긴 엣지 접기). 실패하면 이전 값으로 되돌린다 */
   setTimelinePrefs(prefs: GraphLayoutPrefs): Promise<void>;
   /** 필터 오류 표시를 지운다 (입력을 고쳤을 때) */
@@ -611,6 +635,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
   // 저장소 범위 변경 요청 차례와 도는 요청 수 (도는 동안은 타임라인 정보로 범위를 덮어쓰지 않는다)
   let scopeSeq = 0;
   let scopeInflight = 0;
+  // 브랜치 더블클릭이 건 저장소 범위의 기억 (없으면 null). 화면이 그릴 값이 아니라 스토어 상태에 넣지 않는다
+  let branchFocus: BranchFocusScope | null = null;
   // 작성자 후보 요청 차례. 새 요청·범위 변경마다 올려 늦게 온 옛 응답을 버린다
   let authorsSeq = 0;
   // 질의·범위를 바꿀 때마다 오르는 값과, 마지막으로 그린 데이터가 어느 값의 것인지 (바뀐 뒤 처음 온 데이터에서
@@ -1275,6 +1301,15 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
 
       async setTimelineQuery(query) {
+        // 더블클릭이 건 범위에서 ref 범위가 바뀌면 저장소 범위를 걸기 전으로 (사용자가 그 사이 바꿨으면 그대로)
+        const focus = branchFocus;
+        if (focus !== null && !sameRevsValue(query.revs, focus.revs)) {
+          branchFocus = null;
+          const now = get().timeline.scope;
+          if (samePaths(now, focus.scope) && !samePaths(now, focus.before)) {
+            void get().setTimelineScope(focus.before);
+          }
+        }
         const seq = ++querySeq;
         const before = get().timeline;
         queryEpoch += 1;
@@ -1322,6 +1357,10 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         const seq = ++scopeSeq;
         const before = get().timeline;
         const scope = [...repos];
+        // 사용자가 더블클릭이 건 저장소 범위를 바꿨다: 그 값을 존중해 뒤에 되돌리지 않는다
+        if (branchFocus !== null && !samePaths(scope, branchFocus.scope)) {
+          branchFocus = null;
+        }
         queryEpoch += 1;
         const keep = selectionInScope(before.selected, scope);
         if (!keep) {
@@ -1351,6 +1390,27 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         } finally {
           scopeInflight -= 1;
         }
+      },
+
+      async focusTimelineBranch(revs, repos) {
+        const tl = get().timeline;
+        // 더블클릭이 이어지면(앞 더블클릭의 저장소 범위 그대로) 처음 걸기 전의 범위를 계속 기억한다
+        const before =
+          branchFocus !== null && samePaths(tl.scope, branchFocus.scope)
+            ? branchFocus.before
+            : [...tl.scope];
+        const scope = [...repos];
+        // 아래 두 요청이 기억을 지우거나 되돌리지 않게 비워 두고, 요청을 낸 뒤에 새로 기억한다
+        branchFocus = null;
+        const work: Promise<void>[] = [];
+        if (!samePaths(tl.scope, scope)) {
+          work.push(get().setTimelineScope(scope));
+        }
+        if (!sameRevsValue(tl.query.revs, revs)) {
+          work.push(get().setTimelineQuery({ ...tl.query, revs }));
+        }
+        branchFocus = { revs, scope, before };
+        await Promise.all(work);
       },
 
       async setTimelinePrefs(prefs) {

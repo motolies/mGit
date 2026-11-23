@@ -27,16 +27,18 @@ import { Dashboard } from '../folder/Dashboard';
 import { useFolderBatchFlows } from '../folder/FolderBatchBar';
 import { FolderCommitDiff } from '../folder/FolderCommitDiff';
 import { FolderSettingsDialog } from '../folder/FolderSettingsDialog';
+import { ownEntries } from '../project/file-actions-menu';
 import { buildStatusLookup } from '../project/file-status';
 import { type ProjectOpenMode, ProjectTree } from '../project/ProjectTree';
 import { type RowDecoration, repoDecorations } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
+import { useFileActions } from '../project/use-file-actions';
 import { ConflictDoc } from './ConflictDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
 import { EditorArea, EditorEmptyState } from './EditorArea';
 import { editorHints } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
-import { folderTreeMenu, menuTargets } from './folder-tree-menu';
+import { type FileMenuSource, folderTreeMenu, menuTargets } from './folder-tree-menu';
 import { useRepoSessionActions } from './repo-session-actions';
 import { WorktreeDiffDoc } from './WorktreeDiffDoc';
 
@@ -206,6 +208,16 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     [storedDocs, sessionDocs],
   );
   const hints = useMemo(() => editorHints(actions), [actions]);
+  // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 그 저장소의 가벼운 세션에 대고, 끝나면 트리를 다시 읽는다
+  // (트리는 감시하지 않는다 — 상태 색은 폴더 스토어가 코어의 폴더 변경 알림으로 다시 읽는다)
+  const reloadTree = tree?.reload;
+  const fileActions = useFileActions({
+    rollback: (repoPath, paths) => repoActions?.rollback(repoPath, paths) ?? Promise.resolve(false),
+    ignoreAdd: (repoPath, patterns) =>
+      repoActions?.ignoreAdd(repoPath, patterns) ?? Promise.resolve(false),
+    after: () => void reloadTree?.(),
+    repoName: (repoPath) => summaries?.find((s) => s.path === repoPath)?.name ?? baseName(repoPath),
+  });
 
   if (!f || !ws || !tree) {
     return null;
@@ -294,6 +306,25 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
       onBlame: () => repoActions.blame(target.repoPath, target.path, null),
     };
   };
+  /**
+   * 파일 메뉴의 변경 동작 재료: 행을 품은 가장 안쪽 저장소와 그 기준 경로, 그 저장소의 변경 목록(안쪽 저장소 항목 제외).
+   * 저장소 세션을 쓸 수 없으면 없다 (Finder·터미널만)
+   */
+  const files: FileMenuSource | undefined = repoActions
+    ? {
+        target: (rel) => {
+          const abs = joinRoot(root, rel);
+          const repoPath = repoOf(rel);
+          return repoPath === null ? null : { repoPath, path: relativeTo(repoPath, abs) ?? '' };
+        },
+        entriesOf: (repoPath) =>
+          ownEntries(
+            repoPath,
+            repoPaths,
+            f.changes.find((c) => c.path === repoPath)?.entries ?? [],
+          ),
+      }
+    : undefined;
   /** 행의 우클릭 메뉴 (PT-07). 대상은 우클릭한 행이 선택에 있으면 선택 전체, 아니면 그 행 */
   const menu = (row: RootRow | EntryRow) =>
     folderTreeMenu(
@@ -306,6 +337,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
         fileRepo,
         repoCount: f.repos.length,
         busy: flows.running,
+        files,
       },
       {
         refresh,
@@ -322,6 +354,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
         fileHistory: (repoPath, path) => repoActions?.history(repoPath, path),
         blame: (repoPath, path) => repoActions?.blame(repoPath, path, null),
         copy: (text) => void navigator.clipboard.writeText(text).catch(() => {}),
+        files: fileActions.actions,
       },
     );
 
@@ -397,6 +430,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
         }
       />
       {flows.dialogs.element}
+      {fileActions.element}
       <FolderSettingsDialog />
     </>
   );

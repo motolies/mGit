@@ -1,7 +1,8 @@
 // W22: 저장소 탭 Git 도구 창 왼쪽 칸의 브랜치 트리 (BT-11). 앱 전체를 그려 확인한다:
 // - 조립: 검색 + 브랜치 트리뿐이다. 옛 사이드바의 섹션은 모두 옮겼다 (다섯 = 여기, 스태시 = W23, PR = W24, superproject·
 //   모듈·서브모듈·하위 저장소 = W25 의 Project 도구 창).
-// - 클릭 = 그 커밋으로 이동, 더블클릭·Enter = checkout 류, Space = 클릭과 같다 (결정 16번).
+// - 클릭 = 그 커밋으로 이동, 더블클릭·Enter = branch 는 그 branch 와 기본 branch 로 그래프 거르기(태그·워크트리는 그대로),
+//   Space = 클릭과 같다 (결정 16번, 2026-11-23 사용자 결정으로 더블클릭 checkout 을 거르기로 바꿈).
 // - Worktrees 머리 단추(정리·만들기), 세로 툴바 여섯 단추, 우클릭 메뉴(앱에서 열기).
 // - 펼침·검색어·고른 행이 로그 탭을 내렸다 올려도 남는다 (W21 이 남긴 문제).
 
@@ -20,6 +21,7 @@ import {
 } from '../features/branches/repo-branch-tree';
 import { useAppStore } from '../store';
 import { createRepoWorkspace, DEFAULT_DOCK, sessionRevealHooks } from '../store/app-store';
+import { type Notice, notifyHub } from '../store/notify';
 import {
   clearSessionRegistry,
   disposeWorkspace,
@@ -210,7 +212,7 @@ describe('저장소 탭 Git 도구 창의 왼쪽 칸 (W22 조립)', () => {
   });
 });
 
-describe('클릭·더블클릭·Enter·Space (결정 16번 — 저장소 탭은 이동, 더블클릭은 checkout)', () => {
+describe('클릭·더블클릭·Enter·Space (저장소 탭은 클릭 이동, 더블클릭은 그래프 거르기)', () => {
   it('잎을 누르면 고르고 그 커밋으로 이동한다 (로그의 행을 고른다). HEAD 행은 HEAD 커밋, 백업은 백업 커밋', async () => {
     const { st } = await mountRepo();
     const target = (name: string) => st().refs.labels.find((l) => l.shortName === name)?.target;
@@ -237,22 +239,41 @@ describe('클릭·더블클릭·Enter·Space (결정 16번 — 저장소 탭은 
     expect(st().selectedCommit).toBe(b?.oid);
   });
 
-  it('더블클릭은 checkout 류: 로컬·원격·태그 (현재 branch 는 아무것도), 워크트리는 탭으로 연다', async () => {
-    const { mock, id, openRepositoryAt } = await mountRepo();
+  it('branch 더블클릭은 checkout 하지 않고 그래프를 [그 branch, main, origin/main] 으로 거른다 (원격 행·현재 branch 도)', async () => {
+    const { mock, id, st } = await mountRepo();
     const checkout = vi.spyOn(mock, 'checkout');
-    fireEvent.doubleClick(row('ref:refs/heads/main'));
-    await tick();
-    expect(checkout).not.toHaveBeenCalled();
+    const query = vi.spyOn(mock, 'setGraphQuery');
     fireEvent.doubleClick(row('ref:refs/heads/staging'));
     await tick();
-    expect(checkout).toHaveBeenLastCalledWith(id, { kind: 'branch', name: 'staging' }, false);
+    expect(query).toHaveBeenLastCalledWith(id, {
+      ...st().graphQuery,
+      revs: { kind: 'branches', names: ['staging', 'main', 'origin/main'] },
+    });
+    expect(st().graphQuery.revs).toEqual({
+      kind: 'branches',
+      names: ['staging', 'main', 'origin/main'],
+    });
     fireEvent.doubleClick(row('ref:refs/remotes/origin/feature/checkout-redesign'));
     await tick();
-    expect(checkout).toHaveBeenLastCalledWith(
-      id,
-      { kind: 'remoteBranch', remote: 'origin', name: 'feature/checkout-redesign' },
-      false,
-    );
+    expect(st().graphQuery.revs).toEqual({
+      kind: 'branches',
+      names: ['origin/feature/checkout-redesign', 'main', 'origin/main'],
+    });
+    // 기본 branch 자신 (현재 branch): main 과 그 원격 짝만
+    fireEvent.doubleClick(row('ref:refs/heads/main'));
+    await tick();
+    expect(st().graphQuery.revs).toEqual({ kind: 'branches', names: ['main', 'origin/main'] });
+    // 같은 범위면 다시 읽지 않는다
+    const calls = query.mock.calls.length;
+    fireEvent.doubleClick(row('ref:refs/heads/main'));
+    await tick();
+    expect(query.mock.calls.length).toBe(calls);
+    expect(checkout).not.toHaveBeenCalled();
+  });
+
+  it('태그 더블클릭은 그 커밋으로 분리 checkout, 워크트리는 탭으로 연다 (지금까지대로)', async () => {
+    const { mock, openRepositoryAt } = await mountRepo();
+    const checkout = vi.spyOn(mock, 'checkout');
     fireEvent.click(row(REPO_GROUP_IDS.tags));
     fireEvent.doubleClick(row('ref:refs/tags/v2.4.0'));
     await tick();
@@ -266,7 +287,7 @@ describe('클릭·더블클릭·Enter·Space (결정 16번 — 저장소 탭은 
     expect(openRepositoryAt).toHaveBeenCalledTimes(1);
   });
 
-  it('Enter 는 더블클릭(checkout), Space 는 클릭(이동)과 같다', async () => {
+  it('Enter 는 더블클릭(그래프 거르기), Space 는 클릭(이동)과 같다. checkout 은 우클릭 메뉴로 한다', async () => {
     const { mock, id, st } = await mountRepo();
     const checkout = vi.spyOn(mock, 'checkout');
     const t = tree();
@@ -286,6 +307,16 @@ describe('클릭·더블클릭·Enter·Space (결정 16번 — 저장소 탭은 
       st().refs.labels.find((l) => l.shortName === 'development')?.target,
     );
     fireEvent.keyDown(t, { key: 'Enter' });
+    await tick();
+    expect(st().graphQuery.revs).toEqual({
+      kind: 'branches',
+      names: ['development', 'main', 'origin/main'],
+    });
+    expect(checkout).not.toHaveBeenCalled();
+    // checkout 은 우클릭 메뉴
+    fireEvent.contextMenu(row('ref:refs/heads/development'));
+    await tick();
+    act(() => fireEvent.click(screen.getByRole('menuitem', { name: S.menu.checkout })));
     await tick();
     expect(checkout).toHaveBeenCalledWith(id, { kind: 'branch', name: 'development' }, false);
   });
@@ -315,6 +346,7 @@ describe('Worktrees 그룹의 머리 단추와 우클릭 메뉴 (앱에서)', ()
     await tick();
     expect(menuLabels()).toEqual([
       'checkout',
+      '업데이트',
       '이 branch 만 그래프에 표시',
       '현재 branch 와 development 비교…',
       'development 을(를) 현재 branch 에 merge▸',
@@ -359,7 +391,7 @@ describe('Worktrees 그룹의 머리 단추와 우클릭 메뉴 (앱에서)', ()
 });
 
 describe('세로 툴바 (BT-05) — 저장소 탭에서 동작하는 여섯 단추', () => {
-  it('차례: 접기·새 branch·fetch·즐겨찾기·모두 펼치기·모두 접기. fetch 는 세션 fetch(prune), 새 branch 는 branch 만들기 흐름', async () => {
+  it('차례: 접기·새 branch·fetch·업데이트·즐겨찾기·모두 펼치기·모두 접기. fetch 는 세션 fetch(prune), 새 branch 는 branch 만들기 흐름', async () => {
     const { mock, id } = await mountRepo();
     expect(
       toolbar()
@@ -369,6 +401,7 @@ describe('세로 툴바 (BT-05) — 저장소 탭에서 동작하는 여섯 단�
       S.branches.toolbar.togglePanel,
       S.branches.toolbar.newBranch,
       S.branches.toolbar.fetch,
+      S.branches.toolbar.update,
       S.branches.toolbar.favorite,
       S.branches.toolbar.expandAll,
       S.branches.toolbar.collapseAll,
@@ -380,6 +413,42 @@ describe('세로 툴바 (BT-05) — 저장소 탭에서 동작하는 여섯 단�
     fireEvent.click(toolbar().getByRole('button', { name: S.branches.toolbar.newBranch }));
     await tick();
     expect(dialog()?.querySelector('h2')?.textContent).toBe(S.dialog.createBranch);
+  });
+
+  it('선택한 branch 업데이트 (BR-09): 업스트림 있는 로컬 branch 를 고르면 켜지고, 누르면 그 branch 를 옮겨 ↓ 가 사라진다', async () => {
+    const { mock, id, store } = await mountRepo();
+    const button = () =>
+      toolbar().getByRole('button', { name: S.branches.toolbar.update }) as HTMLButtonElement;
+    expect(button().disabled).toBe(true);
+    expect(button().title).toBe(S.branches.toolbar.updateNone);
+    // 업스트림이 없는 branch 는 꺼진 채
+    fireEvent.click(row('ref:refs/heads/feature/search-filters'));
+    await tick();
+    expect(button().disabled).toBe(true);
+    const development = 'ref:refs/heads/development';
+    expect(row(development).textContent).toContain(S.branches.incoming(12));
+    fireEvent.click(row(development));
+    await tick();
+    expect(button().disabled).toBe(false);
+    expect(button().title).toBe(`${S.branches.toolbar.update}: development`);
+    const update = vi.spyOn(mock, 'updateBranch');
+    // 알림 허브는 앱 시작(bootstrap) 때 걸리므로 여기서 받는다
+    const notices: Notice[] = [];
+    notifyHub.setHandler((n) => notices.push(n));
+    try {
+      fireEvent.click(button());
+      await tick();
+    } finally {
+      notifyHub.setHandler(null);
+    }
+    expect(update).toHaveBeenCalledWith(id, 'development');
+    expect(notices.map((n) => [n.kind, n.title])).toEqual([
+      ['success', S.branches.update.moved('development', 12)],
+    ]);
+    // 이 마운트는 세션 이벤트를 받지 않는다: 목이 보낸 refsChanged 대신 목의 상태를 넣는다
+    const { refs } = await mock.repoState(id);
+    act(() => store.setState({ refs }));
+    expect(row(development).textContent).not.toContain(S.branches.incoming(12));
   });
 
   it('진행 중 작업이 있거나 원격이 없으면 fetch 만 꺼지고, 실행 중이면 새 branch 도 꺼진다', async () => {

@@ -1,9 +1,10 @@
 import type { StatusEntry } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
 import { type MouseEvent, useCallback, useMemo, useState } from 'react';
-import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
+import { ContextMenuArea } from '../../components/ContextMenu';
 import { entryInArea, useAppStore, useSession } from '../../store';
 import { groupByModule } from '../modules/module-groups';
+import { ignoreMenuItem, revealLabel } from '../project/file-actions-menu';
 import styles from './ChangesPanel.module.css';
 import { CommitForm } from './CommitForm';
 import { FileList } from './FileList';
@@ -48,25 +49,6 @@ function useAreaSelection(order: readonly string[]) {
     [selected, order],
   );
   return { selected: live, onSelect, clear: () => setSelected(new Set()) };
-}
-
-/** ignore 하위 메뉴 (CHG-10): 파일·확장자·폴더 패턴 */
-function ignoreMenu(path: string, add: (patterns: string[]) => Promise<void>): MenuItem {
-  const slash = path.lastIndexOf('/');
-  const dir = slash > 0 ? path.slice(0, slash) : null;
-  const base = slash >= 0 ? path.slice(slash + 1) : path;
-  const dot = base.lastIndexOf('.');
-  const ext = dot > 0 ? base.slice(dot + 1) : null;
-  const children: MenuItem[] = [
-    { label: S.safety.ignoreFile(path), onSelect: () => void add([path]) },
-  ];
-  if (ext) {
-    children.push({ label: S.safety.ignoreExt(ext), onSelect: () => void add([`*.${ext}`]) });
-  }
-  if (dir) {
-    children.push({ label: S.safety.ignoreDir(dir), onSelect: () => void add([`${dir}/`]) });
-  }
-  return { label: S.safety.ignore, separator: true, children };
 }
 
 /** 영역 하나 (제목·버튼·목록) */
@@ -194,7 +176,7 @@ function Section({
             onSelect: () => void openExternal('editor', `${s.repoPath}/${path}`),
           },
           {
-            label: S.actions.reveal,
+            label: revealLabel(),
             onSelect: () => void openExternal('reveal', `${s.repoPath}/${path}`),
           },
           ...(area === 'conflict'
@@ -211,7 +193,9 @@ function Section({
                   onSelect: () => void s.openDifftool({ kind: 'workTree', path, staged }),
                 },
               ]),
-          ...(area === 'unstaged' ? [ignoreMenu(path, s.ignoreAdd)] : []),
+          ...(area === 'unstaged'
+            ? [ignoreMenuItem(path, (patterns) => void s.ignoreAdd(patterns))]
+            : []),
           ...(area === 'staged' && s.op
             ? [
                 {

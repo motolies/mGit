@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { Button } from './Button';
 import styles from './ConfirmDialog.module.css';
 import { DialogItems } from './DialogItems';
@@ -28,6 +28,33 @@ export interface PromptField {
    * 나눌 때. 없으면 묶지 않는다 (지금까지의 모양)
    */
   group?: string;
+  /**
+   * 입력을 실제로 쓸 값으로 다듬는 규칙 (글자 칸, 예: branch 이름 정규화). 주면 확인 결과에 다듬은 값을 넣고, 다듬은
+   * 값이 입력(앞뒤 공백 제외)과 다를 때만 칸 아래에 `preview(다듬은 값)` 을 보인다. 없으면 입력 그대로 (지금까지의 동작)
+   */
+  normalize?: PromptNormalize;
+}
+
+/** 입력 다듬기 규칙 (`PromptField.normalize`) */
+export interface PromptNormalize {
+  /** 입력 → 실제로 쓸 값 */
+  apply: (value: string) => string;
+  /** 다듬은 값의 미리보기 글자 (예: `만들 이름: feature-x`) */
+  preview: (normalized: string) => string;
+}
+
+/**
+ * 칸 아래에 보일 다듬은 값 미리보기. 규칙이 없거나, 다듬은 값이 비었거나, 입력에서 앞뒤 공백만 뺀 것과 같으면 null —
+ * 끝에 공백을 막 친 순간마다 미리보기가 깜박이지 않게 한다 (앞뒤 공백은 늘 지워진다)
+ */
+export function normalizedPreview(field: PromptField, value: string | boolean | undefined) {
+  if (!field.normalize || typeof value !== 'string') {
+    return null;
+  }
+  const normalized = field.normalize.apply(value);
+  return normalized === '' || normalized === value.trim()
+    ? null
+    : field.normalize.preview(normalized);
 }
 
 /** 지금 값이 확인할 수 없는 사유를 돌려주는 검증 함수. 확인할 수 있으면 null */
@@ -92,13 +119,24 @@ function initialValue(f: PromptField): string | boolean {
   return f.initial ?? (f.type === 'checkbox' ? false : '');
 }
 
-/** 확인 결과로 넘길 값: 끈 칸의 값은 뺀다 (체크할 수 없던 것은 고른 것이 아니다) */
+/**
+ * 확인 결과로 넘길 값: 끈 칸의 값은 뺀다 (체크할 수 없던 것은 고른 것이 아니다). 다듬기 규칙(`normalize`)이 있는 글자
+ * 칸은 다듬은 값을 넣는다
+ */
 export function promptResult(
   fields: readonly PromptField[],
   values: Readonly<Record<string, string | boolean>>,
 ): Record<string, string | boolean> {
   const off = new Set(fields.filter((f) => f.disabled).map((f) => f.key));
-  return Object.fromEntries(Object.entries(values).filter(([key]) => !off.has(key)));
+  const rules = new Map(fields.flatMap((f) => (f.normalize ? [[f.key, f.normalize]] : [])));
+  return Object.fromEntries(
+    Object.entries(values)
+      .filter(([key]) => !off.has(key))
+      .map(([key, value]) => {
+        const rule = rules.get(key);
+        return [key, rule && typeof value === 'string' ? rule.apply(value) : value];
+      }),
+  );
 }
 
 /**
@@ -160,83 +198,94 @@ export function PromptDialog({
   const renderField = (f: PromptField, index: number) => {
     const id = `pf-${f.key}`;
     const noteId = `${id}-note`;
+    const previewId = `${id}-preview`;
+    // 다듬은 값 미리보기 (글자 칸만). 입력 칸의 설명이 되고, 칸의 이름에 섞이지 않게 label 밖 바로 아래에 둔다
+    const preview =
+      f.type === undefined || f.type === 'text' ? normalizedPreview(f, values[f.key]) : null;
     return (
-      <label
-        key={f.key}
-        className={styles.field}
-        htmlFor={id}
-        data-disabled={f.disabled ? 'true' : undefined}
-      >
-        {f.type === 'checkbox' ? (
-          <span className={styles.checkRow}>
-            <input
-              id={id}
-              type="checkbox"
-              disabled={f.disabled}
-              aria-describedby={f.note ? noteId : undefined}
-              checked={!f.disabled && values[f.key] === true}
-              onChange={(e) => setValues({ ...values, [f.key]: e.target.checked })}
-              onKeyDown={(e) => {
-                // 위험한 대화상자: 체크 칸의 Enter 는 폼 제출(암묵적 제출)로 가지 않는다. keydown 을 막으면 제출을
-                // 일으키는 keypress 가 나오지 않는다. 칸 토글은 Space, 실행은 확인 단추로만 한다
-                if (danger && e.key === 'Enter') {
-                  e.preventDefault();
-                }
-              }}
-            />
-            {f.label}
-            {f.note ? (
-              <span id={noteId} className={styles.note}>
-                {f.note}
-              </span>
-            ) : null}
-          </span>
-        ) : (
-          <>
-            <span className={styles.label}>{f.label}</span>
-            {f.type === 'select' ? (
-              <select
-                id={id}
-                className={styles.input}
-                value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
-                onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
-              >
-                {(f.options ?? []).map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            ) : f.type === 'textarea' ? (
-              <textarea
-                id={id}
-                className={styles.input}
-                rows={3}
-                placeholder={f.placeholder}
-                value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
-                onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
-              />
-            ) : (
+      <Fragment key={f.key}>
+        <label
+          className={styles.field}
+          htmlFor={id}
+          data-disabled={f.disabled ? 'true' : undefined}
+        >
+          {f.type === 'checkbox' ? (
+            <span className={styles.checkRow}>
               <input
                 id={id}
-                type={f.type === 'password' ? 'password' : 'text'}
-                className={styles.input}
-                // biome-ignore lint/a11y/noAutofocus: 대화상자의 첫 입력 칸이다 (필드를 함수로 그려 린트가 <dialog> 조상을 보지 못한다)
-                autoFocus={index === 0}
-                placeholder={f.placeholder}
-                value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
-                onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                type="checkbox"
+                disabled={f.disabled}
+                aria-describedby={f.note ? noteId : undefined}
+                checked={!f.disabled && values[f.key] === true}
+                onChange={(e) => setValues({ ...values, [f.key]: e.target.checked })}
                 onKeyDown={(e) => {
-                  // 한글 조합 중 Enter 는 제출로 보지 않는다 (PoC-4)
-                  if (e.key === 'Enter' && isImeKey(e)) {
+                  // 위험한 대화상자: 체크 칸의 Enter 는 폼 제출(암묵적 제출)로 가지 않는다. keydown 을 막으면 제출을
+                  // 일으키는 keypress 가 나오지 않는다. 칸 토글은 Space, 실행은 확인 단추로만 한다
+                  if (danger && e.key === 'Enter') {
                     e.preventDefault();
                   }
                 }}
               />
-            )}
-          </>
-        )}
-      </label>
+              {f.label}
+              {f.note ? (
+                <span id={noteId} className={styles.note}>
+                  {f.note}
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <>
+              <span className={styles.label}>{f.label}</span>
+              {f.type === 'select' ? (
+                <select
+                  id={id}
+                  className={styles.input}
+                  value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
+                  onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                >
+                  {(f.options ?? []).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : f.type === 'textarea' ? (
+                <textarea
+                  id={id}
+                  className={styles.input}
+                  rows={3}
+                  placeholder={f.placeholder}
+                  value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
+                  onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                />
+              ) : (
+                <input
+                  id={id}
+                  type={f.type === 'password' ? 'password' : 'text'}
+                  className={styles.input}
+                  // biome-ignore lint/a11y/noAutofocus: 대화상자의 첫 입력 칸이다 (필드를 함수로 그려 린트가 <dialog> 조상을 보지 못한다)
+                  autoFocus={index === 0}
+                  placeholder={f.placeholder}
+                  aria-describedby={preview ? previewId : undefined}
+                  value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
+                  onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                  onKeyDown={(e) => {
+                    // 한글 조합 중 Enter 는 제출로 보지 않는다 (PoC-4)
+                    if (e.key === 'Enter' && isImeKey(e)) {
+                      e.preventDefault();
+                    }
+                  }}
+                />
+              )}
+            </>
+          )}
+        </label>
+        {preview ? (
+          <span id={previewId} className={styles.preview} data-role="normalized-preview">
+            {preview}
+          </span>
+        ) : null}
+      </Fragment>
     );
   };
 

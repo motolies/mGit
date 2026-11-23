@@ -13,7 +13,7 @@ import {
 import { focusPanel } from '../../actions';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { GitLogSplit, isLogEnter, useGitLogSide } from '../../layout/GitLogSplit';
-import { getSessionStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import { getFolderStore, getSessionStore, repoNameOf, useAppStore, useFolder } from '../../store';
 import {
   sameSelection,
   type TimelineReveal,
@@ -23,6 +23,7 @@ import {
 import { BranchToolbar } from '../branches/BranchToolbar';
 import { BranchTree } from '../branches/BranchTree';
 import { isFavorite, useBranchFavorites } from '../branches/branch-favorites';
+import { branchFocusRevs, folderDefaultRefs, folderFocusScope } from '../branches/branch-focus';
 import {
   type BranchTreeExpansion,
   type BranchTreeNode,
@@ -36,8 +37,11 @@ import {
   headRevs,
   remoteBranchParts,
   revsAfterActivate,
+  revsAfterRename,
   sameRevs,
   selectedBranchNodeIds,
+  selectedLocalBranch,
+  updateTargetsOf,
 } from '../branches/folder-branch-tree';
 import {
   clearedQuery,
@@ -145,7 +149,8 @@ export function sameTimelineRow(
  * 있는지) + 합친 그래프. 브랜치 트리는 항상 렌더하고 접기만 하며, 세로 툴바는 접히는 칸 밖이라 늘 보인다.
  * 브랜치 트리는 폴더 스토어의 브랜치 목록으로 채우므로 타임라인 로드보다 먼저 보인다 (BT-06).
  * 브랜치 트리의 클릭·더블클릭·메뉴가 폴더에서 무엇을 뜻하는지는 여기서 정한다 (BT-03·07):
- * 클릭 = 로그를 그 브랜치로 거르기, 더블클릭 = checkout
+ * 클릭 = 로그를 그 브랜치로 거르기, 더블클릭·Enter = 그 브랜치와 기본 branch(master·origin/master, 없으면 main)로 거르기,
+ * checkout 은 우클릭 메뉴
  */
 export function FolderTimeline() {
   const f = useFolder((st) => ({
@@ -157,6 +162,7 @@ export function FolderTimeline() {
     reloadTimeline: st.reloadTimeline,
     setTimelineQuery: st.setTimelineQuery,
     setTimelineScope: st.setTimelineScope,
+    focusTimelineBranch: st.focusTimelineBranch,
     selectTimelineRow: st.selectTimelineRow,
     revealTimelineCommit: st.revealTimelineCommit,
     ackTimelineReveal: st.ackTimelineReveal,
@@ -314,6 +320,26 @@ export function FolderTimeline() {
     [setRevs, branchOf, timelineQuery],
   );
 
+  const focusTimelineBranch = f?.focusTimelineBranch;
+  /**
+   * 더블클릭·Enter (BT-03): checkout 하지 않고 로그를 그 브랜치와 기본 branch 로 거르고, 저장소 범위를 그 브랜치가 있는
+   * 저장소로 좁힌다 — 그 저장소마다 master(없으면 main)와 그 원격 짝(업스트림, 없으면 origin/<기본>)을 모아 함께 본다
+   * (`folderDefaultRefs`·`folderFocusScope`). 좁힌 저장소 범위는 branch 범위가 바뀌면 스토어가 걸기 전으로 되돌린다
+   * (`focusTimelineBranch`). HEAD 행·그룹은 아무것도 하지 않는다. checkout 은 우클릭 메뉴로 한다
+   */
+  const focus = useCallback(
+    (node: BranchTreeNode) => {
+      const branch = branchOf(node);
+      if (branch && focusTimelineBranch) {
+        void focusTimelineBranch(
+          branchFocusRevs(branch.name, folderDefaultRefs(branches, branch)),
+          folderFocusScope(branch, branchRepos),
+        );
+      }
+    },
+    [branchOf, branches, branchRepos, focusTimelineBranch],
+  );
+
   /**
    * checkout (BT-07): 그 브랜치를 가진 저장소를 체크 목록으로 확인받고 폴더 일괄 checkout 을 부른다.
    * 원격 브랜치는 저장소마다 그 원격을 추적하는 같은 이름의 로컬 브랜치로(없으면 만들어) checkout 한다.
@@ -341,6 +367,31 @@ export function FolderTimeline() {
     [branchOf, branches, branchRepos],
   );
 
+  /**
+   * 이름 변경 (로컬 branch): 새 이름과 그 branch 를 가진 저장소를 체크 목록으로 확인받고 폴더 일괄로 바꾼다. 바꾼 저장소가
+   * 있으면 로그 범위의 옛 이름을 새 이름으로 바꾼다(그대로 두면 사라진 이름으로 걸려 로그가 빈다). 범위는 일괄이 끝난
+   * 순간의 질의를 스토어에서 읽는다. 즐겨찾기는 저장소 탭의 이름 변경처럼 옮기지 않는다
+   */
+  const renameBranch = useCallback(
+    async (branch: FolderBranch) => {
+      const done = await flowsRef.current.renameBranch(
+        branch.name,
+        branch.repos.map((r) => ({ path: r.path, name: repoNameIn(branchRepos, r.path) })),
+      );
+      const renamed = done?.result?.results.filter((r) => r.ok && !r.skipped).length ?? 0;
+      const live = folderId === null ? undefined : getFolderStore(folderId)?.getState();
+      if (!done || renamed === 0 || !live) {
+        return;
+      }
+      const query = live.timeline.query;
+      const next = revsAfterRename(query.revs, branch.name, done.to, renamed < branch.repos.length);
+      if (!sameRevs(query.revs, next)) {
+        void live.setTimelineQuery({ ...query, revs: next });
+      }
+    },
+    [branchRepos, folderId],
+  );
+
   /** 한 브랜치의 즐겨찾기를 뒤집는다 */
   const toggleFavorite = useCallback(
     (node: BranchTreeNode) => {
@@ -359,12 +410,31 @@ export function FolderTimeline() {
         return [];
       }
       const running = flowsRef.current.running;
+      // branch 업데이트 (BR-09): 로컬 branch 만. 그 branch 가 있고 업스트림이 있는 저장소가 없으면 사유를 이름에 적고 끈다
+      const targets = updateTargetsOf(branch);
+      const update: MenuItem[] = branch.remote
+        ? []
+        : [
+            {
+              label:
+                targets.length > 0
+                  ? S.branches.menu.updateIn(targets.length)
+                  : S.branches.menu.updateNone,
+              disabled: targets.length === 0 || running,
+              onSelect: () => void flowsRef.current.updateBranch(branch.name, targets),
+            },
+          ];
+      // 이름 변경: 로컬 branch 만 (원격 branch 는 이름을 바꾸지 않는다)
+      const rename: MenuItem[] = branch.remote
+        ? []
+        : [{ label: S.menu.rename, disabled: running, onSelect: () => void renameBranch(branch) }];
       return [
         {
           label: S.branches.menu.checkout,
           disabled: node.current === true || running,
           onSelect: () => checkout(node),
         },
+        ...update,
         {
           label: S.branches.menu.newBranchHere,
           disabled: running,
@@ -375,6 +445,7 @@ export function FolderTimeline() {
               branch.repos.map((r) => ({ path: r.path, name: repoNameIn(branchRepos, r.path) })),
             ),
         },
+        ...rename,
         {
           label: S.branches.menu.showOnly,
           onSelect: () => setRevs({ kind: 'solo', name: branch.name }),
@@ -390,7 +461,7 @@ export function FolderTimeline() {
         },
       ];
     },
-    [branchOf, checkout, setRevs, toggleFavorite, branchRepos],
+    [branchOf, checkout, setRevs, toggleFavorite, branchRepos, renameBranch],
   );
 
   if (!f) {
@@ -421,6 +492,16 @@ export function FolderTimeline() {
   };
   // 세로 툴바의 즐겨찾기: 선택한 브랜치들이 모두 즐겨찾기면 끄고, 아니면 모두 켠다
   const picked = selectionFavorite(nodes, selectedIds);
+  // 세로 툴바의 "선택한 branch 업데이트" (BR-09): 고른 로컬 branch 하나의, 업스트림이 있는 저장소에서
+  const updatePick = selectedLocalBranch(branches, selectedIds);
+  const updatePaths = updatePick ? updateTargetsOf(updatePick) : [];
+  const updateTitle =
+    updatePick && updatePaths.length > 0
+      ? S.folder.batch.withScope(
+          `${S.branches.toolbar.update}: ${updatePick.name}`,
+          S.folder.batch.repoGroup(updatePaths.length),
+        )
+      : S.branches.toolbar.updateNone;
 
   /** 로그에서 Enter (W19 ③): 고른 커밋의 변경 파일 트리로 포커스를 옮긴다 (IntelliJ 의 로그 → 상세) */
   const onLogKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -447,6 +528,13 @@ export function FolderTimeline() {
           fetchTitle={S.folder.batch.withScope(S.branches.toolbar.fetch, flows.scope)}
           onNewBranch={() => void flows.createBranch()}
           onFetch={() => void flows.fetch()}
+          onUpdate={() => {
+            if (updatePick) {
+              void flows.updateBranch(updatePick.name, updatePaths);
+            }
+          }}
+          updateDisabled={flows.running || updatePaths.length === 0}
+          updateTitle={updateTitle}
           favorite={picked.favorite}
           onToggleFavorite={() => setFavorites(picked.fullNames, !picked.favorite)}
           onExpandAll={() => setExpansion(expansionForAll(nodes, true))}
@@ -462,7 +550,7 @@ export function FolderTimeline() {
           expansion={expansion}
           onExpansionChange={setExpansion}
           onActivate={activate}
-          onOpen={checkout}
+          onOpen={focus}
           menu={menu}
           onToggleFavorite={toggleFavorite}
           // 브랜치 목록을 아직 못 받았으면 읽는 중이다 (타임라인 로드와 무관하다)

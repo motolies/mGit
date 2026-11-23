@@ -161,6 +161,9 @@ export const enRepository: Pick<
     checkoutAfter: 'Check out after creating',
     renameBranch: 'Rename branch',
     newName: 'New name',
+    branchNameWillCreate: (name: string) => `Will create: ${name}`,
+    branchNameWillRename: (name: string) => `Will rename to: ${name}`,
+    branchNameWillUse: (name: string) => `Will use: ${name}`,
     deleteBranch: (name: string) => `Delete branch '${name}'?`,
     deleteBranchMessage:
       'The local branch will be deleted. Commits not yet pushed will remain only in the reflog.',
@@ -677,6 +680,10 @@ export const enRepository: Pick<
       newBranchFromTargets: (n: number) =>
         `Of the ${formatNumber(n)} ${plural(n, 'repository', 'repositories')} with this branch, creates it in the checked ones`,
       checkoutCurrent: (repo: string) => `${repo} (current branch)`,
+      renameTitle: (name: string) => `Rename branch: ${name}`,
+      renameTargets: (n: number) =>
+        `Of the ${formatNumber(n)} ${plural(n, 'repository', 'repositories')} with this branch, renames it in the checked ones. Repositories that already have the new name are skipped`,
+      renameSame: 'Same as the current name',
       batchFailed: "Couldn't run the batch operation",
     },
     batch: {
@@ -724,6 +731,14 @@ export const enRepository: Pick<
       running: (label: string, phase: string) => (phase ? `${label}: ${phase}` : label),
       result: (s: number, k: number, f: number) =>
         `${formatNumber(s)} succeeded · ${formatNumber(k)} skipped · ${formatNumber(f)} failed`,
+      resultMoved: (updated: number, upToDate: number, done: number, k: number, f: number) =>
+        [
+          `${formatNumber(updated)} updated`,
+          `${formatNumber(upToDate)} up to date`,
+          ...(done > 0 ? [`${formatNumber(done)} done`] : []),
+          `${formatNumber(k)} skipped`,
+          `${formatNumber(f)} failed`,
+        ].join(' · '),
       close: 'Close',
       openWorktrees: 'Open the created worktree folders?',
       ok: 'Done',

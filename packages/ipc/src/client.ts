@@ -9,6 +9,7 @@ import type {
   BatchOp,
   BatchResult,
   BlameLine,
+  BranchUpdate,
   ChangedFile,
   CheckoutTarget,
   CloneRequest,
@@ -168,6 +169,8 @@ export interface IpcClient {
   ): Promise<void>;
   /** 백업 id 목록을 돌려준다 */
   discardPaths(session: SessionId, paths: string[]): Promise<number[]>;
+  /** 경로(파일·폴더)의 변경을 HEAD 기준으로 되돌린다 (stage 된 변경 포함). 백업 id 목록을 돌려준다 */
+  rollbackPaths(session: SessionId, paths: string[]): Promise<number[]>;
   discardLines(
     session: SessionId,
     path: string,
@@ -207,6 +210,8 @@ export interface IpcClient {
   deleteBranch(session: SessionId, name: string, force: boolean): Promise<void>;
   deleteRemoteBranch(session: SessionId, remote: string, name: string): Promise<void>;
   setUpstream(session: SessionId, branch: string, upstream: string | null): Promise<void>;
+  /** 로컬 branch 하나를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
+  updateBranch(session: SessionId, name: string): Promise<BranchUpdate>;
   createTag(
     session: SessionId,
     name: string,
@@ -766,6 +771,7 @@ export function createTauriClient(): IpcClient {
     stageLines: (session, path, selection, unstage, options) =>
       voidCall(() => commands.stageLines(session, path, selection, unstage, options)),
     discardPaths: (session, paths) => call(() => commands.discardPaths(session, paths)),
+    rollbackPaths: (session, paths) => call(() => commands.rollbackPaths(session, paths)),
     discardLines: (session, path, selection, options) =>
       call(() => commands.discardLines(session, path, selection, options)),
     listBackups: (session, limit) => call(() => commands.listBackups(session, limit)),
@@ -793,6 +799,7 @@ export function createTauriClient(): IpcClient {
       voidCall(() => commands.deleteRemoteBranch(session, remote, name)),
     setUpstream: (session, branch, upstream) =>
       voidCall(() => commands.setUpstream(session, branch, upstream)),
+    updateBranch: (session, name) => call(() => commands.updateBranch(session, name)),
     createTag: (session, name, target, message, sign) =>
       voidCall(() => commands.createTag(session, name, target, message, sign ?? false)),
     pushTags: (session, remote, names) => call(() => commands.pushTags(session, remote, names)),

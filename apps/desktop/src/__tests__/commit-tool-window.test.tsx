@@ -9,6 +9,7 @@ import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
+import { revealLabel } from '../features/project/file-actions-menu';
 import { getFolderStore, getWorkspaceStore, useAppStore } from '../store';
 import { DEFAULT_DOCK, type LeftTool } from '../store/app-store';
 import { createFolderStore } from '../store/folder-store';
@@ -606,5 +607,66 @@ describe('Commit 도구 창 → 작업 트리 diff 탭 (ED-05)', () => {
       expect.anything(),
     );
     expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Commit 도구 창 파일 메뉴 (Finder·터미널·변경 되돌리기)', () => {
+  /** 열린 메뉴 항목의 이름 (구분선은 `─` 를 앞에 붙인다) */
+  const menuLabels = () => screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+
+  it('파일: 열기·저장소 탭 뒤에 변경 되돌리기와 Finder·터미널. 되돌리기는 파일 목록 확인창 → 그 저장소 세션으로 Rollback', async () => {
+    const { mock } = await mountFolder();
+    // Finder·터미널은 앱 스토어가 만들 때 받은 클라이언트로 부른다
+    const reveal = vi.spyOn(originalClient, 'openExternal').mockResolvedValue();
+    const rollback = vi.spyOn(mock, 'rollbackPaths');
+    fireEvent.contextMenu(crow('orders.ts'));
+    await tick();
+    const m = S.project.menu;
+    expect(menuLabels()).toEqual([
+      m.open,
+      S.project.openAsTab,
+      m.rollback,
+      revealLabel(),
+      S.actions.openTerminal,
+    ]);
+    fireEvent.click(screen.getByRole('menuitem', { name: revealLabel() }));
+    await tick();
+    expect(reveal).toHaveBeenCalledWith('reveal', `${WEB}/${ORDERS}`);
+
+    fireEvent.contextMenu(crow('orders.ts'));
+    await tick();
+    fireEvent.click(screen.getByRole('menuitem', { name: m.rollback }));
+    await tick();
+    const dialog = screen.getByRole('dialog', { name: m.rollbackTitle });
+    expect(dialog.textContent).toContain(ORDERS);
+    expect(dialog.textContent).toContain(m.rollbackMessage(1));
+    fireEvent.click(within(dialog).getByRole('button', { name: m.rollbackConfirm }));
+    await tick();
+    await tick();
+    expect(rollback).toHaveBeenCalledWith(expect.any(Number), [ORDERS]);
+    // 목은 상태에서 그 항목을 빼고 폴더 변경 알림을 낸다 → 폴더 스토어가 (디바운스 뒤) 다시 읽어 변경 트리에서 사라진다
+    await vi.waitFor(() => expect(() => crow('orders.ts')).toThrow(), { timeout: 2000 });
+  });
+
+  it('확인창에서 취소하면 부르지 않고, 저장소 줄은 저장소 탭 열기 뒤 Finder·터미널', async () => {
+    const { mock } = await mountFolder();
+    const rollback = vi.spyOn(mock, 'rollbackPaths');
+    const terminal = vi.spyOn(originalClient, 'openExternal').mockResolvedValue();
+    fireEvent.contextMenu(crow('orders.ts'));
+    await tick();
+    fireEvent.click(screen.getByRole('menuitem', { name: S.project.menu.rollback }));
+    await tick();
+    const dialog = screen.getByRole('dialog', { name: S.project.menu.rollbackTitle });
+    fireEvent.click(within(dialog).getByRole('button', { name: S.confirm.cancel }));
+    await tick();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(crow('orders.ts')).toBeTruthy();
+
+    fireEvent.contextMenu(crow('web-console'));
+    await tick();
+    expect(menuLabels()).toEqual([S.project.openAsTab, revealLabel(), S.actions.openTerminal]);
+    fireEvent.click(screen.getByRole('menuitem', { name: S.actions.openTerminal }));
+    await tick();
+    expect(terminal).toHaveBeenCalledWith('terminal', WEB);
   });
 });

@@ -21,6 +21,13 @@ export interface BranchToolbarProps {
   fetchTitle?: string;
   onNewBranch: () => void;
   onFetch: () => void;
+  /**
+   * 선택한 branch 업데이트 (BR-09, IntelliJ 의 Update Selected). 주면 fetch 옆에 단추를 둔다 (기본은 단추 없음).
+   * `updateDisabled` 는 선택이 업스트림 있는 로컬 branch 가 아니거나 실행할 수 없을 때, `updateTitle` 은 툴팁
+   */
+  onUpdate?: () => void;
+  updateDisabled?: boolean;
+  updateTitle?: string;
   /** 선택한 브랜치가 즐겨찾기인지. 선택이 없거나 즐겨찾기할 수 없는 행이면 null (버튼을 끈다) */
   favorite: boolean | null;
   onToggleFavorite: () => void;
@@ -42,6 +49,9 @@ export function BranchToolbar({
   fetchTitle,
   onNewBranch,
   onFetch,
+  onUpdate,
+  updateDisabled,
+  updateTitle,
   favorite,
   onToggleFavorite,
   onExpandAll,
@@ -81,6 +91,15 @@ export function BranchToolbar({
         disabled={fetchDisabled ?? busy}
         onClick={onFetch}
       />
+      {onUpdate ? (
+        <ToolButton
+          icon="update"
+          label={t.update}
+          title={updateTitle}
+          disabled={updateDisabled ?? busy}
+          onClick={onUpdate}
+        />
+      ) : null}
       <ToolButton
         icon={favorite ? 'star' : 'starEmpty'}
         label={t.favorite}

@@ -178,6 +178,45 @@ async fn batch_fetch_pull_push_branch_checkout_and_exclude() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 일괄 pull 결과의 `moved` 는 checkout 된 branch 가 받은 commit 수다. 이미 최신이면 0(전후 같은 commit),
+/// 건너뛴 저장소에는 없다
+#[tokio::test]
+async fn batch_pull_reports_moved_commits() {
+    let core = core().await;
+    let (root, mut a, _b) = two_repos("moved");
+    let before = a.git_ok(["rev-parse", "HEAD"]).trim().to_string();
+    // 같은 원격의 다른 clone 이 commit 둘을 올린다
+    let remote = a.git_ok(["remote", "get-url", "origin"]).trim().to_string();
+    let mut c = TestRepo::init();
+    c.git_ok(["remote", "add", "origin", &remote]);
+    c.git_ok(["fetch", "-q", "origin"]);
+    c.git_ok(["checkout", "-q", "-b", "main", "--track", "origin/main"]);
+    c.commit("c one");
+    let tip = c.commit("c two").to_hex();
+    c.git_ok(["push", "-q", "origin", "main"]);
+    let (sink, _rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+
+    let r = core.folder_batch(fid, BatchOp::Pull, &[]).await.unwrap();
+    let ra = r.results.iter().find(|x| x.name == "a").unwrap();
+    assert!(ra.ok && ra.skipped.is_none(), "{ra:?}");
+    let moved = ra.moved.clone().unwrap();
+    assert_eq!(moved.branch, "main");
+    assert_eq!(
+        (moved.from.as_str(), moved.to.as_str()),
+        (before.as_str(), tip.as_str())
+    );
+    assert_eq!(moved.commits, 2);
+    let rb = r.results.iter().find(|x| x.name == "b").unwrap();
+    assert!(rb.skipped.is_some() && rb.moved.is_none(), "{rb:?}");
+
+    let r = core.folder_batch(fid, BatchOp::Pull, &[]).await.unwrap();
+    let ra = r.results.iter().find(|x| x.name == "a").unwrap();
+    let moved = ra.moved.clone().unwrap();
+    assert_eq!((moved.commits, moved.from == moved.to), (0, true), "{ra:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test]
 async fn batch_worktree_changes_and_commit() {
     let core = core().await;
@@ -682,5 +721,154 @@ async fn batch_reports_each_target_repo_as_changed() {
         }
     }
     assert_eq!(changed, vec![(Some(root.join("b")), true)]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 현재 branch 이름 (분리 HEAD 면 빈 문자열)
+fn current_branch(repo: &mut TestRepo) -> String {
+    repo.git_ok(["branch", "--show-current"]).trim().to_string()
+}
+
+/// 로컬 branch 가 있는지
+fn has_branch(repo: &mut TestRepo, name: &str) -> bool {
+    !repo
+        .git_ok(["branch", "--list", "--format=%(refname)", name])
+        .trim()
+        .is_empty()
+}
+
+/// 일괄 이름 바꾸기 (BR-04 폴더): 저장소마다 `git branch -m` — 현재 branch 도 바꾸고(HEAD 가 따라간다), 업스트림
+/// 설정도 새 이름으로 옮겨진다. branch 가 없는 저장소·새 이름이 이미 있는 저장소는 건너뛰고 아무것도 바꾸지 않는다.
+/// 같은 이름으로 바꾸기는 실행 전에 거부한다
+#[tokio::test]
+async fn batch_rename_branch_renames_and_skips_missing_or_taken() {
+    let core = core().await;
+    let root = std::env::temp_dir().join(format!("mgit-batch-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // cur: feature/x 가 현재 branch
+    let mut cur = init_at(&root.join("cur"));
+    cur.commit("cur first");
+    cur.git_ok(["checkout", "-q", "-b", "feature/x"]);
+    // plain: feature/x 가 있고 업스트림이 있다 (현재는 main)
+    let mut plain = init_at(&root.join("plain"));
+    plain.commit("plain first");
+    plain.add_bare_remote();
+    plain.git_ok(["branch", "feature/x"]);
+    plain.git_ok(["push", "-q", "-u", "origin", "feature/x"]);
+    // taken: feature/x 와 새 이름 feature-x 가 모두 있다
+    let mut taken = init_at(&root.join("taken"));
+    taken.commit("taken first");
+    taken.git_ok(["branch", "feature/x"]);
+    taken.git_ok(["branch", "feature-x"]);
+    // none: feature/x 가 없다
+    let mut none = init_at(&root.join("none"));
+    none.commit("none first");
+    let (sink, _rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+
+    let op = BatchOp::RenameBranch {
+        from: "feature/x".into(),
+        to: "feature-x".into(),
+    };
+    assert_eq!(op.label(), "일괄 이름 바꾸기: feature/x → feature-x");
+    let r = core.folder_batch(fid, op, &[]).await.unwrap();
+    assert_eq!((r.succeeded, r.skipped, r.failed), (2, 2, 0), "{r:?}");
+    let get = |name: &str| r.results.iter().find(|x| x.name == name).unwrap();
+    for name in ["cur", "plain"] {
+        let x = get(name);
+        assert!(x.ok && x.skipped.is_none(), "{x:?}");
+    }
+    assert_eq!(
+        get("taken").skipped.as_deref(),
+        Some("새 이름이 이미 있음: feature-x")
+    );
+    assert_eq!(get("none").skipped.as_deref(), Some("branch 없음"));
+
+    // 현재 branch: HEAD 가 새 이름을 따라간다
+    assert_eq!(current_branch(&mut cur), "feature-x");
+    assert!(!has_branch(&mut cur, "feature/x"));
+    // 업스트림 설정이 새 이름으로 옮겨진다 (단일 저장소 rename 과 같은 `branch -m`)
+    assert!(has_branch(&mut plain, "feature-x") && !has_branch(&mut plain, "feature/x"));
+    assert_eq!(
+        plain
+            .git_ok(["rev-parse", "--abbrev-ref", "feature-x@{upstream}"])
+            .trim(),
+        "origin/feature/x"
+    );
+    assert_eq!(current_branch(&mut plain), "main");
+    // 건너뛴 저장소는 그대로다
+    assert!(has_branch(&mut taken, "feature/x") && has_branch(&mut taken, "feature-x"));
+    assert!(!has_branch(&mut none, "feature-x"));
+
+    // 같은 이름으로 바꾸기는 저장소를 돌기 전에 거부한다
+    let same = core
+        .folder_batch(
+            fid,
+            BatchOp::RenameBranch {
+                from: "main".into(),
+                to: "main".into(),
+            },
+            &[],
+        )
+        .await;
+    assert!(same.is_err(), "{same:?}");
+    // 잘못된 새 이름도 실행 전에 거부한다 (코어 이름 검사)
+    let bad = core
+        .folder_batch(
+            fid,
+            BatchOp::RenameBranch {
+                from: "main".into(),
+                to: "-x".into(),
+            },
+            &[],
+        )
+        .await;
+    assert!(bad.is_err(), "{bad:?}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 다른 워크트리에서 checkout 된 branch 의 일괄 이름 바꾸기: git 이 그대로 바꾸고 그 워크트리의 HEAD 도 새 이름으로
+/// 옮긴다 (워크트리는 계속 그 branch 에 있다). 화면은 이 경우를 건너뛰지 않는다
+#[tokio::test]
+async fn batch_rename_branch_checked_out_in_other_worktree() {
+    let core = core().await;
+    let root = std::env::temp_dir().join(format!("mgit-batch-rename-wt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut up = init_at(&root.join("up"));
+    up.commit("up first");
+    up.git_ok(["branch", "dev"]);
+    // dev 를 루트 밖 워크트리에서 checkout 한다
+    let wt_dir = tempfile::tempdir().unwrap();
+    let wt_path = wt_dir.path().join("up-dev");
+    let wt_str = wt_path.to_string_lossy().into_owned();
+    up.git_ok(["worktree", "add", "-q", &wt_str, "dev"]);
+    let (sink, _rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::RenameBranch {
+                from: "dev".into(),
+                to: "dev-renamed".into(),
+            },
+            &[root.join("up")],
+        )
+        .await
+        .unwrap();
+    let x = r.results.iter().find(|x| x.name == "up").unwrap();
+    assert!(x.ok && x.skipped.is_none(), "{x:?}");
+    assert!(has_branch(&mut up, "dev-renamed") && !has_branch(&mut up, "dev"));
+    assert_eq!(current_branch(&mut up), "main");
+    let mut wt = TestRepo::at(&wt_path);
+    assert_eq!(current_branch(&mut wt), "dev-renamed");
+    assert!(
+        up.git_ok(["worktree", "list", "--porcelain"])
+            .contains("branch refs/heads/dev-renamed"),
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }

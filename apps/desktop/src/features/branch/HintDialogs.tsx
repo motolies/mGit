@@ -6,6 +6,7 @@ import { type SessionState, useAppStore, useSession, useSessionOf } from '../../
 import { folderHintMode } from '../../store/repo-sessions';
 import type { PendingHint } from '../../store/session-store';
 import { commitPairLine } from '../tags/tag-flows';
+import { branchNameField } from './branch-name';
 
 /** 힌트 대화상자가 읽는 세션 상태와 동작 */
 function pickHint(st: SessionState) {
@@ -117,12 +118,12 @@ function HintDialogsBody({
           title={title(S.dialog.remoteBranchTaken(h.local))}
           message={S.dialog.remoteBranchTakenMessage(h.local, upstream, `${h.remote}/${h.name}`)}
           fields={[
-            {
+            branchNameField({
               key: 'name',
               label: S.dialog.branchName,
               initial: `${h.remote}-${h.name}`,
               required: true,
-            },
+            }),
           ]}
           confirmLabel={S.dialog.createTracking}
           secondaryLabel={oid === null ? undefined : S.dialog.checkoutDetached}
@@ -197,7 +198,7 @@ function HintDialogsBody({
           open
           title={title(S.dialog.detachedHead)}
           message={S.dialog.detachedHeadMessage}
-          fields={[{ key: 'name', label: S.dialog.branchName, required: true }]}
+          fields={[branchNameField({ key: 'name', label: S.dialog.branchName, required: true })]}
           confirmLabel={S.dialog.create}
           onConfirm={(v) => {
             s.dismiss();

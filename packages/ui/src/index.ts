@@ -16,6 +16,7 @@ export type { IconName } from './icon-set';
 export {
   formatShortcut,
   isImeKey,
+  isMac,
   isPrimaryModifier,
   type KeyLike,
   matchShortcut,
@@ -31,10 +32,12 @@ export {
   placePopover,
 } from './Popover';
 export {
+  normalizedPreview,
   PromptDialog,
   type PromptDialogProps,
   type PromptField,
   type PromptFieldSegment,
+  type PromptNormalize,
   type PromptValidate,
   promptResult,
   promptSegments,

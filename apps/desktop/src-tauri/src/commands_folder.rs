@@ -105,6 +105,15 @@ pub enum BatchOpDto {
         dest_root: String,
         create_branch: bool,
     },
+    /// 로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다
+    UpdateBranch {
+        name: String,
+    },
+    /// 로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다
+    RenameBranch {
+        from: String,
+        to: String,
+    },
 }
 
 impl From<BatchOpDto> for BatchOp {
@@ -136,6 +145,30 @@ impl From<BatchOpDto> for BatchOp {
                 dest_root: PathBuf::from(dest_root),
                 create_branch,
             },
+            BatchOpDto::UpdateBranch { name } => BatchOp::UpdateBranch { name },
+            BatchOpDto::RenameBranch { from, to } => BatchOp::RenameBranch { from, to },
+        }
+    }
+}
+
+/// 일괄 작업이 옮긴 branch (pull·branch 업데이트). `commits` 0 이면 이미 최신
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RefMove {
+    pub branch: String,
+    pub from: String,
+    pub to: String,
+    pub commits: u32,
+}
+
+impl From<mgit_core::RefMove> for RefMove {
+    /// 코어 구조체와 1:1
+    fn from(m: mgit_core::RefMove) -> Self {
+        RefMove {
+            branch: m.branch,
+            from: m.from,
+            to: m.to,
+            commits: m.commits,
         }
     }
 }
@@ -149,6 +182,11 @@ pub struct RepoResult {
     pub ok: bool,
     pub skipped: Option<String>,
     pub message: String,
+    /// 옮긴 branch (pull·branch 업데이트가 성공했을 때만). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이
+    /// `RepoResult` 를 만들기 때문이다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub moved: Option<RefMove>,
 }
 
 /// 일괄 작업 결과
@@ -176,6 +214,7 @@ impl From<mgit_core::BatchResult> for BatchResult {
                     ok: r.ok,
                     skipped: r.skipped,
                     message: r.message,
+                    moved: r.moved.map(Into::into),
                 })
                 .collect(),
             succeeded: b.succeeded,

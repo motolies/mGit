@@ -5,17 +5,23 @@
 // 기록을 어디로 보낼지(그 저장소를 품은 폴더 세션의 `folderCommandLogged`, 그 저장소를 연 세션의 `commandLogged`)는
 // `mock-client.ts` 가 정한다. 흉내 내지 않는 것: 읽기 명령(코어도 폴더로는 보내지 않는다), 충돌 해결의 보관 ref 쓰기
 // (`hash-object`·`mktree`·`commit-tree`·`update-ref`), 전역 `-c` 설정 인자, 일괄 작업 뒤의 상태 변화(push 해도 ahead 가
-// 그대로라 다시 하면 같은 결과다)
+// 그대로라 다시 하면 같은 결과다). 예외: pull·branch 업데이트(BR-09)가 옮긴 로컬 branch 는 ↓ 를 0 으로 만든다
+// (`applyMockBatchMoves` — 화면에서 업데이트 뒤 ↓ 가 사라지는 것을 보도록)
 
 import { IpcClientError } from '../client';
 import type {
   BatchOp,
   BatchResult,
+  BranchUpdate,
   CommandLogRecord,
   ConflictSide,
+  FolderBranch,
+  FolderBranchIn,
   IndexTarget,
   IndexWriteResult,
   OpKind,
+  RefLabel,
+  RefMove,
   RepoResult,
   RepoSummary,
   StatusEntry,
@@ -61,6 +67,13 @@ function elapsedOf(key: string, base: number, spread: number): number {
 /** 짧은 커밋 해시 흉내 (7자) */
 function shortOf(key: string): string {
   return hashOf(key).toString(16).padStart(8, '0').slice(0, 7);
+}
+
+/** 40자 커밋 해시 흉내 (같은 키면 늘 같은 값) */
+function oidOf(key: string): string {
+  return Array.from({ length: 5 }, (_, i) =>
+    hashOf(`${key}:${i}`).toString(16).padStart(8, '0'),
+  ).join('');
 }
 
 /** 성공한 명령 */
@@ -122,13 +135,22 @@ export function mockBatchLabel(op: BatchOp): string {
       );
     case 'worktree':
       return pick(`일괄 워크트리: ${op.branch}`, `Batch worktree: ${op.branch}`);
+    case 'updateBranch':
+      return pick(`일괄 업데이트: ${op.name}`, `Batch update: ${op.name}`);
+    case 'renameBranch':
+      return pick(`일괄 이름 바꾸기: ${op.from} → ${op.to}`, `Batch rename: ${op.from} → ${op.to}`);
   }
+}
+
+/** 원 저장소 경로 (워크트리는 원 저장소의 브랜치를 본다 — 브랜치 목록 기준) */
+function ownerOf(data: MockFolderData, repo: string): string {
+  const index = data.folderCommitDetail.repoIndex[repo];
+  return index === undefined ? repo : (data.folderTimeline[index]?.path ?? repo);
 }
 
 /** 장면 저장소가 가진 브랜치인지 (브랜치 목록 기준 — 워크트리는 원 저장소의 브랜치를 본다) */
 function hasBranch(data: MockFolderData, repo: string, name: string, remote: boolean): boolean {
-  const index = data.folderCommitDetail.repoIndex[repo];
-  const owner = index === undefined ? repo : (data.folderTimeline[index]?.path ?? repo);
+  const owner = ownerOf(data, repo);
   return data.folderBranches.branches.some(
     (b) => b.remote === remote && b.name === name && b.repos.some((r) => r.path === owner),
   );
@@ -140,8 +162,33 @@ function isDirty(entries: readonly StatusEntry[]): boolean {
   return entries.some((e) => e.conflict || !idle.includes(e.index) || !idle.includes(e.worktree));
 }
 
-/** 저장소 하나에 일괄 작업을 적용한 결과: 건너뜀(명령 없음) 또는 돌린 명령 하나 */
-type BatchStep = { skip: string } | { failed: string } | { command: MockCommand };
+/** 그 저장소의 로컬 branch `name` 의 상태 (브랜치 목록 기준). 없으면 undefined */
+function localBranchIn(
+  data: MockFolderData,
+  repo: string,
+  name: string,
+): FolderBranchIn | undefined {
+  const owner = ownerOf(data, repo);
+  return data.folderBranches.branches
+    .find((b) => !b.remote && b.name === name)
+    ?.repos.find((r) => r.path === owner);
+}
+
+/** 옮긴 branch 흉내: 전후 커밋은 저장소·branch 로 고른 해시다. `commits` 0 이면 전후가 같다 */
+function movedOf(repo: string, branch: string, commits: number): RefMove {
+  const from = oidOf(`${repo}:${branch}:from`);
+  return { branch, from, to: commits > 0 ? oidOf(`${repo}:${branch}:to`) : from, commits };
+}
+
+/**
+ * 저장소 하나에 일괄 작업을 적용한 결과: 건너뜀(명령 없음), 돌린 명령 하나, 또는 branch 를 옮긴 명령들(pull·branch
+ * 업데이트 — 결과의 `moved`)
+ */
+type BatchStep =
+  | { skip: string }
+  | { failed: string }
+  | { command: MockCommand }
+  | { run: MockCommand[]; moved: RefMove };
 
 /**
  * 저장소 하나의 일괄 작업 (코어 `run_batch_one` 의 건너뜀 규칙 흉내). 요약에 실패한 저장소는 상태를 못 읽어 명령 없이
@@ -203,7 +250,11 @@ function batchStep(
           },
         };
       }
-      return { command: ran(args, elapsedOf(key, 520, 900), `From ${url}`) };
+      // 받은 commit 수 = behind (ff-only 흉내). 이미 최신이면 0
+      return {
+        run: [ran(args, elapsedOf(key, 520, 900), `From ${url}`)],
+        moved: movedOf(repo, branch ?? '', behind),
+      };
     }
     case 'push': {
       if (!upstream) {
@@ -313,6 +364,79 @@ function batchStep(
           ];
       return { command: ran(args, elapsedOf(key, 40, 160)) };
     }
+    case 'updateBranch': {
+      // 코어 `update_branch_one` 흉내: branch·업스트림 → (현재 branch 면 진행 중·더티) → 업스트림만 fetch → 비교 → 옮김
+      const local = localBranchIn(data, repo, op.name);
+      if (!local) {
+        return { skip: mockReason.noBranch() };
+      }
+      const upstreamName = local.upstream ?? null;
+      if (upstreamName === null) {
+        return { skip: mockReason.noUpstream() };
+      }
+      // 다른 워크트리에서 checkout 중이면 건드리지 않는다: 워크트리에서 본 원 저장소의 현재 branch, 또는 원 저장소에서 본
+      // 워크트리의 현재 branch
+      const owner = ownerOf(data, repo);
+      const elsewhere =
+        repo !== owner && local.current
+          ? owner
+          : data.folderSummaries.find(
+              (s) => s.path !== repo && ownerOf(data, s.path) === owner && s.branch === op.name,
+            )?.path;
+      if (elsewhere !== undefined) {
+        return { skip: mockReason.otherWorktree(elsewhere) };
+      }
+      const current = branch === op.name;
+      if (current && inOp) {
+        return { skip: mockReason.inProgress() };
+      }
+      if (current && dirty) {
+        return { skip: mockReason.dirty() };
+      }
+      const remoteBranch = upstreamName.replace(/^origin\//, '');
+      if (local.gone) {
+        // 업스트림이 원격에서 사라졌다: 코어는 fetch 가 실패한다
+        return { failed: `fatal: couldn't find remote ref refs/heads/${remoteBranch}` };
+      }
+      const fetched = ran(
+        [
+          'fetch',
+          '--end-of-options',
+          'origin',
+          `+refs/heads/${remoteBranch}:refs/remotes/${upstreamName}`,
+        ],
+        elapsedOf(`${key}:fetch`, 380, 700),
+        `From ${url}`,
+      );
+      const a = local.ahead ?? 0;
+      const b = local.behind ?? 0;
+      if (a > 0 && b > 0) {
+        return { skip: mockReason.diverged(a, b) };
+      }
+      if (a > 0) {
+        return { skip: mockReason.ahead(a) };
+      }
+      const moved = movedOf(repo, op.name, b);
+      if (b === 0) {
+        return { run: [fetched], moved };
+      }
+      const move = current
+        ? ['merge', '--ff-only', moved.to]
+        : ['branch', '-f', '--end-of-options', op.name, moved.to];
+      return { run: [fetched, ran(move, elapsedOf(`${key}:move`, 8, 40))], moved };
+    }
+    case 'renameBranch': {
+      // 코어 `rename_args` 흉내: branch 없음 → 새 이름 있음 → `branch -m` (현재 branch·다른 워크트리 branch 도 바꾼다)
+      if (!localBranchIn(data, repo, op.from)) {
+        return { skip: mockReason.noBranch() };
+      }
+      if (localBranchIn(data, repo, op.to)) {
+        return { skip: mockReason.nameTaken(op.to) };
+      }
+      return {
+        command: ran(['branch', '-m', '--end-of-options', op.from, op.to], elapsedOf(key, 8, 30)),
+      };
+    }
     case 'worktree': {
       const dest = `${op.destRoot.replace(/\/+$/, '')}/${name}`;
       const args = op.createBranch
@@ -357,6 +481,12 @@ export function mockFolderBatch(
     if ('failed' in step) {
       return { path, name, ok: false, skipped: null, message: step.failed };
     }
+    if ('run' in step) {
+      for (const command of step.run) {
+        commands.push({ cwd: path, command });
+      }
+      return { path, name, ok: true, skipped: null, message: '', moved: step.moved };
+    }
     commands.push({ cwd: path, command: step.command });
     const ok = step.command.status === 0;
     return { path, name, ok, skipped: null, message: ok ? '' : step.command.stderr.trim() };
@@ -371,6 +501,142 @@ export function mockFolderBatch(
       skipped,
       failed,
     },
+    commands,
+  };
+}
+
+/**
+ * pull·branch 업데이트가 옮긴 로컬 branch 를 장면에 반영한다 (BR-09): 받은 commit 이 있으면 그 저장소의 그 branch 는
+ * ↓ 가 0 이 되고, 현재 branch 면 요약의 behind 도 0 이 된다. 브랜치 목록·요약을 새 객체로 바꿔 다시 읽으면 바뀐 값이
+ * 온다. 그래프의 ref 위치는 옮기지 않는다
+ */
+export function applyMockBatchMoves(data: MockFolderData, results: readonly RepoResult[]): void {
+  const moves = results.flatMap((r) =>
+    r.moved && r.moved.commits > 0
+      ? [{ owner: ownerOf(data, r.path), path: r.path, moved: r.moved }]
+      : [],
+  );
+  if (moves.length === 0) {
+    return;
+  }
+  const hit = (path: string, branch: string) =>
+    moves.some((m) => m.owner === path && m.moved.branch === branch);
+  data.folderBranches = {
+    ...data.folderBranches,
+    branches: data.folderBranches.branches.map((b) =>
+      b.remote || !b.repos.some((r) => hit(r.path, b.name))
+        ? b
+        : {
+            ...b,
+            repos: b.repos.map((r) => (hit(r.path, b.name) ? { ...r, behind: 0 } : r)),
+          },
+    ),
+  };
+  data.folderSummaries = data.folderSummaries.map((s) =>
+    moves.some((m) => m.path === s.path && m.moved.branch === s.branch) ? { ...s, behind: 0 } : s,
+  );
+}
+
+/**
+ * 일괄 이름 바꾸기가 바꾼 branch 를 장면에 반영한다: 바꾼 저장소(워크트리면 원 저장소)를 `from` 의 저장소 목록에서
+ * `to` 로 옮기고(없으면 `to` 를 만든다, 비면 `from` 을 지운다), 그 branch 가 현재인 요약의 이름도 바꾼다. 브랜치
+ * 목록·요약을 새 객체로 바꿔 다시 읽으면 바뀐 값이 온다. 그래프의 ref 이름은 바꾸지 않는다
+ */
+export function applyMockBatchRenames(
+  data: MockFolderData,
+  op: BatchOp,
+  results: readonly RepoResult[],
+): void {
+  if (op.kind !== 'renameBranch') {
+    return;
+  }
+  const owners = new Set(
+    results.filter((r) => r.ok && !r.skipped).map((r) => ownerOf(data, r.path)),
+  );
+  if (owners.size === 0) {
+    return;
+  }
+  const from = data.folderBranches.branches.find((b) => !b.remote && b.name === op.from);
+  const moving = (from?.repos ?? []).filter((r) => owners.has(r.path));
+  const others = data.folderBranches.branches.filter((b) => b !== from);
+  const target = others.find((b) => !b.remote && b.name === op.to);
+  const renamed: FolderBranch = target
+    ? { ...target, repos: [...target.repos, ...moving] }
+    : { name: op.to, remote: false, remoteName: null, repos: moving };
+  const left = (from?.repos ?? []).filter((r) => !owners.has(r.path));
+  data.folderBranches = {
+    ...data.folderBranches,
+    branches: [
+      ...others.filter((b) => b !== target),
+      ...(from && left.length > 0 ? [{ ...from, repos: left }] : []),
+      renamed,
+    ],
+  };
+  data.folderSummaries = data.folderSummaries.map((s) =>
+    s.branch === op.from && owners.has(ownerOf(data, s.path)) ? { ...s, branch: op.to } : s,
+  );
+}
+
+/**
+ * 저장소 탭 branch 업데이트 흉내 (BR-09, 코어 `Core::update_branch`): 라벨의 ahead·behind 로 결과를 정하고, 옮겼으면 그
+ * 라벨을 업스트림 라벨의 커밋으로 옮기고 ↓ 를 0 으로 둔 라벨 목록을 준다 (옮기지 않았으면 null). 돌린 명령도 준다.
+ * branch·업스트림이 없거나 다른 워크트리에서 checkout 중이면 코어처럼 오류 문구로 던진다
+ */
+export function mockUpdateLocalBranch(
+  labels: readonly RefLabel[],
+  name: string,
+): { result: BranchUpdate; labels: RefLabel[] | null; commands: MockCommand[] } {
+  const full = `refs/heads/${name}`;
+  const label = labels.find((l) => l.fullName === full);
+  if (!label) {
+    throw new Error(mockReason.noBranch());
+  }
+  if (!label.upstream) {
+    throw new Error(mockReason.noUpstream());
+  }
+  if (label.worktreePath && !label.isCurrent) {
+    throw new Error(mockReason.otherWorktree(label.worktreePath));
+  }
+  const upstream = label.upstream.replace(/^refs\/remotes\//, '');
+  const remoteRef = `refs/heads/${upstream.split('/').slice(1).join('/')}`;
+  if (label.upstreamGone) {
+    // 업스트림이 원격에서 사라졌다: 코어는 fetch 가 실패한다
+    throw new Error(`fatal: couldn't find remote ref ${remoteRef}`);
+  }
+  const commands = [
+    ran(
+      [
+        'fetch',
+        '--progress',
+        '--end-of-options',
+        upstream.split('/')[0] ?? 'origin',
+        `+${remoteRef}:refs/remotes/${upstream}`,
+      ],
+      elapsedOf(`${full}:fetch`, 380, 700),
+    ),
+  ];
+  const ahead = label.ahead ?? 0;
+  const behind = label.behind ?? 0;
+  if (ahead > 0 && behind > 0) {
+    return { result: { kind: 'diverged', ahead, behind }, labels: null, commands };
+  }
+  if (ahead > 0) {
+    return { result: { kind: 'ahead', commits: ahead }, labels: null, commands };
+  }
+  if (behind === 0) {
+    return { result: { kind: 'upToDate' }, labels: null, commands };
+  }
+  const to =
+    labels.find((l) => l.fullName === `refs/remotes/${upstream}`)?.target ?? oidOf(`${full}:to`);
+  commands.push(
+    ran(
+      label.isCurrent ? ['merge', '--ff-only', to] : ['branch', '-f', '--end-of-options', name, to],
+      elapsedOf(`${full}:move`, 8, 40),
+    ),
+  );
+  return {
+    result: { kind: 'updated', from: label.target, to, commits: behind },
+    labels: labels.map((l) => (l.fullName === full ? { ...l, target: to, behind: 0 } : l)),
     commands,
   };
 }

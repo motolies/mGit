@@ -21,6 +21,8 @@ import type {
   TagRefResult,
 } from '../types';
 import {
+  applyMockBatchMoves,
+  applyMockBatchRenames,
   createMockRecorder,
   type MockCommand,
   mockBatchLabel,
@@ -30,6 +32,7 @@ import {
   mockOpCommand,
   mockResolveCommands,
   mockUnresolveCommand,
+  mockUpdateLocalBranch,
 } from './mock-console';
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
@@ -82,6 +85,7 @@ import {
   mockModules,
   mockPullRequests,
   mockRemoteProject,
+  mockRollback,
   mockStatusWith,
   mockWorkTreeDiff,
   parseMockHosting,
@@ -1213,6 +1217,43 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           });
           applyMockLabels(session, labels);
         },
+        /**
+         * branch 업데이트 (BR-09): 라벨의 ahead·behind 로 결과를 정하고, 옮겼으면 라벨을 업스트림 커밋으로 옮겨 ↓ 를 0 으로
+         * 둔 뒤 코어처럼 `refsChanged`·`graphReloaded` 를 보낸다. 현재 branch 면 상태의 behind 도 0 이다. 진행 표시는
+         * 흉내 내지 않는다 (fetch 단계의 op)
+         */
+        async updateBranch(session, name) {
+          countMockCall('updateBranch');
+          recordMockWrite({ method: 'updateBranch', session, name });
+          const entry = entryOf(session);
+          const data = dataOf(session);
+          let outcome: ReturnType<typeof mockUpdateLocalBranch>;
+          try {
+            outcome = mockUpdateLocalBranch(data.repoState.refs.labels, name);
+          } catch (e) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: e instanceof Error ? e.message : String(e),
+            });
+          }
+          for (const command of outcome.commands) {
+            logCommand(entry.path, command);
+          }
+          const moved = outcome.result;
+          if (outcome.labels && moved.kind === 'updated') {
+            const status = data.repoState.status;
+            const head = data.repoState.refs.head;
+            if (head.state === 'attached' && head.branch === name) {
+              data.repoState = {
+                ...data.repoState,
+                refs: { ...data.repoState.refs, head: { ...head, oid: moved.to } },
+                status: { ...status, branch: { ...status.branch, oid: moved.to, behind: 0 } },
+              };
+            }
+            applyMockLabels(session, outcome.labels);
+          }
+          return moved;
+        },
         // 호스팅 (W24 Pull Requests 도구 창): 장면 값을 조절값(`hosting`)에 맞춰 준다. 만들기·체크아웃은 상태를 바꾸지
         // 않고 인자만 남긴다 (`__mgitMockBatches` 의 `{method, session, …}`)
         hostingRemoteProject: async (session) => mockRemoteProject(dataOf(session), hostingMode()),
@@ -1342,6 +1383,39 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           countMockCall('discardLines');
           recordMockWrite({ method: 'discardLines', session, path, selection });
           return createNullClient().discardLines(session, path, selection, options);
+        },
+        // 파일 메뉴 Rollback (HEAD 기준 되돌리기): 세션 상태에서 고른 항목을 빼고, 디스크에서도 사라지는 파일
+        // (untracked·추가)은 목 파일 트리에서 지운다. 폴더 장면 저장소면 폴더 변경 표·폴더 세션 이벤트도 맞춘다.
+        // 백업 id 는 주지 않는다 (목에는 백업 영역이 없다). 호출은 `__mgitMockBatches` 의 `{method, session, paths}`
+        async rollbackPaths(session, paths) {
+          countMockCall('rollbackPaths');
+          recordMockWrite({ method: 'rollbackPaths', session, paths: [...paths] });
+          const entry = entryOf(session);
+          const data = dataOf(session);
+          const target = folderRepoOf(session);
+          const { entries, removed, error } = mockRollback(
+            target ? target.entries : data.repoState.status.entries,
+            paths,
+            data.repoState.op ?? null,
+          );
+          if (error !== null) {
+            throw new IpcClientError({ kind: 'internal', message: error });
+          }
+          for (const path of removed) {
+            scene.fs.remove(fsRootOf(session), path);
+          }
+          if (target) {
+            applySessionWrite(target.repo, entries);
+            return [];
+          }
+          data.repoState = mockStatusWith(data.repoState, entries);
+          entry.emit({
+            type: 'statusChanged',
+            session,
+            status: data.repoState.status,
+            op: data.repoState.op ?? null,
+          });
+          return [];
         },
 
         // 세션의 충돌 흐름 (W15): 폴더 장면 저장소의 세션이면 상태를 바꾸고 이벤트를 낸다 (그 밖의 장면은 널 스텁
@@ -1705,6 +1779,10 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           recordMockWrite({ op, repos: [...repos] });
           const folder = folderOf(session);
           const { result, commands } = mockFolderBatch(folder.data, op, repos);
+          // pull·branch 업데이트가 옮긴 branch 는 ↓ 를 0 으로 (BR-09) — 아래 folderChanged 로 다시 읽으면 보인다
+          applyMockBatchMoves(folder.data, result.results);
+          // 이름을 바꾼 branch 는 브랜치 목록·요약에서 새 이름으로 — 아래 folderChanged 로 다시 읽으면 보인다
+          applyMockBatchRenames(folder.data, op, result.results);
           const opId = nextOpId++;
           const total = result.results.length;
           folder.emit({

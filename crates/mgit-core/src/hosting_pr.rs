@@ -440,12 +440,12 @@ impl Core {
                 .await?;
             }
             Some(old) if old == new => {}
+            // branch 업데이트(BR-09)와 같은 fast-forward 이동 (조상 검사 → merge --ff-only 또는 branch -f)
             Some(old) => {
-                let is_ff = self
-                    .read_git(session, &["merge-base", "--is-ancestor", &old, &new])
-                    .await
-                    .is_some();
-                if !is_ff {
+                if !self
+                    .fast_forward_branch(session, branch, on_branch, &old, &new)
+                    .await?
+                {
                     return Err(CoreError::Invalid(tr!(
                         "로컬 브랜치 {branch} 에 받은 커밋에 없는 내용이 있어 덮어쓰지 않았습니다. \
                          브랜치 이름을 바꾸거나 지운 뒤 다시 시도하세요",
@@ -453,13 +453,6 @@ impl Core {
                          Rename or delete the branch and try again"
                     )));
                 }
-                let spec = if on_branch {
-                    WriteSpec::new(["merge", "--ff-only", &new])
-                } else {
-                    WriteSpec::new(["branch", "-f", "--end-of-options", branch, &new])
-                };
-                self.run_write(session, spec.label(format!("update {branch}")))
-                    .await?;
             }
         }
         match worktree {

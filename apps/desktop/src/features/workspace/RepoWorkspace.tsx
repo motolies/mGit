@@ -13,7 +13,7 @@ import {
   useShownLeftTool,
   useWorkspace,
 } from '../../store';
-import { baseName, innermostRepo, joinRoot, rootToRepo } from '../../store/fs-path';
+import { baseName, innermostRepo, joinRoot, relativeTo, rootToRepo } from '../../store/fs-path';
 import { allDocs, fileViewDoc } from '../../store/workspace-store';
 import { ChangesPanel } from '../changes/ChangesPanel';
 import { RepoCommitTool } from '../commit/RepoCommitTool';
@@ -21,16 +21,18 @@ import { SessionConflictPane } from '../conflict/ConflictPane';
 import { SessionDiffPane } from '../diff/DiffPane';
 import { PullRequestsTool } from '../hosting/PullRequestsTool';
 import { useRepoStructure } from '../modules/RepoStructure';
+import { ownEntries } from '../project/file-actions-menu';
 import { buildStatusLookup } from '../project/file-status';
 import { type ProjectOpenMode, ProjectTree } from '../project/ProjectTree';
 import { type RowDecoration, repoDecoration } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
+import { useFileActions } from '../project/use-file-actions';
 import { TagsDoc } from '../tags/TagsDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
 import { EditorArea, EditorEmptyState } from './EditorArea';
 import { editorHints, tagsDocLink } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
-import { menuTargets } from './folder-tree-menu';
+import { type FileMenuSource, menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
 import { repoTreeMenu } from './repo-tree-menu';
 import docStyles from './WorktreeDiffDoc.module.css';
@@ -66,6 +68,8 @@ function pickRepo(st: SessionState) {
     openFileHistory: st.openFileHistory,
     openBlame: st.openBlame,
     jumpToCommit: st.jumpToCommit,
+    rollback: st.rollback,
+    ignoreAdd: st.ignoreAdd,
   };
 }
 
@@ -236,6 +240,15 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
   );
   const hints = useMemo(() => editorHints(actions), [actions]);
   const emptyAction = useMemo(() => tagsDocLink(actions), [actions]);
+  // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 이 탭의 세션, 끝나면 트리를 다시 읽는다 (트리는 감시하지
+  // 않는다 — 상태 색은 세션의 상태 이벤트로 바뀐다)
+  const reloadTree = tree?.reload;
+  const fileActions = useFileActions({
+    rollback: (_repo, paths) => s.rollback(paths),
+    ignoreAdd: (_repo, patterns) => s.ignoreAdd(patterns),
+    after: () => void reloadTree?.(),
+    repoName: () => s.name,
+  });
 
   if (!ws || !tree || tabId === null) {
     return null;
@@ -294,8 +307,22 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
   };
 
   /**
-   * 행의 우클릭 메뉴 (PT-07): 루트는 (상위 저장소 열기)·새로고침·경로 복사, 폴더·파일은 폴더 탭과 같은 항목. 서브모듈·하위
-   * 저장소·모듈 디렉터리는 그 항목이 앞에 붙는다 (W25)
+   * 파일 메뉴의 변경 동작 재료: 이 저장소(하위 저장소·서브모듈 밖)의 행이면 작업 트리 기준 경로, 변경 목록은 이 세션의
+   * status 에서 하위 저장소·서브모듈 경로의 항목을 뺀 것 (그 저장소들은 이 탭의 세션이 쓰지 않는다)
+   */
+  const files: FileMenuSource = {
+    target: (rel) => {
+      const abs = joinRoot(root, rel);
+      return innermostRepo(structure.ownerRepos, abs) === root
+        ? { repoPath: root, path: relativeTo(root, abs) ?? '' }
+        : null;
+    },
+    entriesOf: () => ownEntries(root, structure.ownerRepos, entries),
+  };
+
+  /**
+   * 행의 우클릭 메뉴 (PT-07): 루트는 (상위 저장소 열기)·새로고침·Finder·터미널·경로 복사, 폴더·파일은 폴더 탭과 같은 항목.
+   * 서브모듈·하위 저장소·모듈 디렉터리는 그 항목이 앞에 붙는다 (W25)
    */
   const menu = (row: RootRow | EntryRow) =>
     repoTreeMenu(
@@ -305,6 +332,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
         root,
         isOpenable: (rel) => openableFiles.has(rel),
         fileRepo,
+        files,
         roles: structure.roles,
         superproject: structure.superproject,
         scope: structure.scope,
@@ -316,6 +344,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
         fileHistory: (_repo, path) => void s.openFileHistory(path),
         blame: (_repo, path) => void s.openBlame(path, null),
         copy: (text) => void navigator.clipboard.writeText(text).catch(() => {}),
+        files: fileActions.actions,
         ...structure.menu,
       },
     );
@@ -407,6 +436,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
               revealSeq={tree.revealSeq}
             />
             {structure.dialogs}
+            {fileActions.element}
           </>
         )
       }

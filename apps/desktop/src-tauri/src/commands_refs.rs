@@ -410,6 +410,58 @@ pub async fn set_upstream(
     Ok(())
 }
 
+/// branch 업데이트 결과 (BR-09)
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BranchUpdateDto {
+    /// 갱신함: `from` → `to` (받은 commit 수)
+    Updated {
+        from: String,
+        to: String,
+        commits: u32,
+    },
+    /// 이미 최신
+    UpToDate,
+    /// 로컬이 앞섬 (받을 것 없음)
+    Ahead { commits: u32 },
+    /// 갈라짐 (갱신하지 않음)
+    Diverged { ahead: u32, behind: u32 },
+}
+
+impl From<mgit_core::BranchUpdate> for BranchUpdateDto {
+    /// 코어 열거형과 1:1
+    fn from(u: mgit_core::BranchUpdate) -> Self {
+        use mgit_core::BranchUpdate as U;
+        match u {
+            U::Updated { from, to, commits } => BranchUpdateDto::Updated { from, to, commits },
+            U::UpToDate => BranchUpdateDto::UpToDate,
+            U::Ahead { commits } => BranchUpdateDto::Ahead { commits },
+            U::Diverged { ahead, behind } => BranchUpdateDto::Diverged { ahead, behind },
+        }
+    }
+}
+
+/// 로컬 branch 하나를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신하고 Undo 할 수 있다.
+/// 진행률(업스트림 fetch)은 operation 이벤트로 온다
+#[tauri::command]
+#[specta::specta]
+pub async fn update_branch(
+    state: State<'_, AppState>,
+    session: u32,
+    name: String,
+) -> Result<BranchUpdateDto, IpcError> {
+    let core = &state.core()?.core;
+    let op = core.begin_operation(SessionId(session), "fetch", &format!("update {name}"))?;
+    Ok(core
+        .update_branch(SessionId(session), &name, Some(op))
+        .await?
+        .into())
+}
+
 /// 태그 생성 (message 가 있으면 annotated)
 #[tauri::command]
 #[specta::specta]

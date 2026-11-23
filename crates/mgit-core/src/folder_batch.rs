@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mgit_git::cmd::{
-    discover, in_progress_op, list_unmerged, rev_resolves, scanned_repo_status,
+    Discovered, discover, in_progress_op, list_unmerged, rev_resolves, scanned_repo_status,
     staged_conflict_markers,
 };
 use mgit_l10n::{pick, tr};
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::branch_update::{self, BranchUpdate, NotUpdatable};
 use crate::core::{Core, CoreInner};
 use crate::error::CoreError;
 use crate::events::{CoreEvent, EventSink, SessionId};
@@ -104,6 +105,19 @@ pub enum BatchOp {
         dest_root: PathBuf,
         create_branch: bool,
     },
+    /// 로컬 branch `name` 을 업스트림으로 fast-forward 한다 (BR-09). checkout 하지 않은 branch 도 갱신한다.
+    /// branch·업스트림이 없는 저장소, 다른 워크트리에서 checkout 된 저장소는 건너뛰고, 이 작업 트리의 branch 면
+    /// pull 과 같이 진행 중 작업·커밋하지 않은 변경이 있을 때 건너뛴다. 갈라졌거나 로컬이 앞서면 옮기지 않는다
+    UpdateBranch {
+        name: String,
+    },
+    /// 로컬 branch `from` 의 이름을 `to` 로 바꾼다 (BR-04 의 폴더 일괄, 단일 저장소 `rename_branch` 와 같은
+    /// `git branch -m`). `from` 이 없는 저장소, `to` 가 이미 있는 저장소는 건너뛴다. 현재 branch 와 다른 워크트리에서
+    /// checkout 된 branch 도 바꾸며, git 이 그 워크트리들의 HEAD 를 새 이름으로 함께 옮긴다
+    RenameBranch {
+        from: String,
+        to: String,
+    },
 }
 
 impl BatchOp {
@@ -135,6 +149,15 @@ impl BatchOp {
             BatchOp::Worktree { branch, .. } => {
                 tr!("일괄 워크트리: {branch}", "Batch worktree: {branch}")
             }
+            BatchOp::UpdateBranch { name } => {
+                tr!("일괄 업데이트: {name}", "Batch update: {name}")
+            }
+            BatchOp::RenameBranch { from, to } => {
+                tr!(
+                    "일괄 이름 바꾸기: {from} → {to}",
+                    "Batch rename: {from} → {to}"
+                )
+            }
         }
     }
 
@@ -147,7 +170,21 @@ impl BatchOp {
                 check_ref_name(name)?;
                 start_point.as_deref().map_or(Ok(()), check_ref_name)
             }
-            BatchOp::Checkout { name } => check_ref_name(name),
+            BatchOp::Checkout { name } | BatchOp::UpdateBranch { name } => check_ref_name(name),
+            BatchOp::RenameBranch { from, to } => {
+                check_ref_name(from)?;
+                check_ref_name(to)?;
+                if from == to {
+                    return Err(CoreError::Invalid(
+                        pick(
+                            "새 이름이 지금 이름과 같습니다",
+                            "The new name is the same as the current name",
+                        )
+                        .into(),
+                    ));
+                }
+                Ok(())
+            }
             BatchOp::CheckoutRemote { remote, branch } => {
                 check_ref_name(remote)?;
                 check_ref_name(branch)
@@ -175,22 +212,22 @@ fn short_ref(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// 여러 작업이 함께 쓰는 건너뜀 사유 (지금 언어)
-mod reason {
+/// 여러 작업이 함께 쓰는 건너뜀 사유 (지금 언어). branch 업데이트(`branch_update.rs`)도 같은 문구를 쓴다
+pub(crate) mod reason {
     use mgit_l10n::pick;
 
     /// 진행 중인 작업(merge·rebase 등)이나 해결하지 않은 충돌이 있다
-    pub(super) fn in_progress() -> &'static str {
+    pub(crate) fn in_progress() -> &'static str {
         pick("진행 중인 작업이 있음", "Operation in progress")
     }
 
     /// 커밋하지 않은 변경이 있다
-    pub(super) fn dirty() -> &'static str {
+    pub(crate) fn dirty() -> &'static str {
         pick("커밋하지 않은 변경이 있음", "Uncommitted changes")
     }
 
     /// 업스트림이 없다
-    pub(super) fn no_upstream() -> &'static str {
+    pub(crate) fn no_upstream() -> &'static str {
         pick("업스트림 없음", "No upstream")
     }
 
@@ -198,6 +235,25 @@ mod reason {
     pub(super) fn already_on_branch() -> &'static str {
         pick("이미 그 branch", "Already on that branch")
     }
+
+    /// 그 이름의 로컬 branch 가 없다 (branch 업데이트·이름 바꾸기)
+    pub(crate) fn no_branch() -> &'static str {
+        pick("branch 없음", "No such branch")
+    }
+}
+
+/// 일괄 작업이 옮긴 branch (pull·branch 업데이트). `from == to`(`commits` 0)면 이미 최신이었다
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RefMove {
+    /// 짧은 branch 이름
+    pub branch: String,
+    /// 전 commit
+    pub from: String,
+    /// 뒤 commit
+    pub to: String,
+    /// `from..to` 의 commit 수 (받은 commit)
+    pub commits: u32,
 }
 
 /// 저장소 하나의 결과
@@ -212,6 +268,29 @@ pub struct RepoResult {
     pub skipped: Option<String>,
     /// 출력 또는 오류 메시지
     pub message: String,
+    /// 옮긴 branch (pull·branch 업데이트가 성공했을 때만)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved: Option<RefMove>,
+}
+
+impl RepoResult {
+    /// 아직 결과가 없는 저장소 한 줄 (실패로 시작한다)
+    fn new(path: PathBuf) -> Self {
+        RepoResult {
+            name: repo_name(&path),
+            path,
+            ok: false,
+            skipped: None,
+            message: String::new(),
+            moved: None,
+        }
+    }
+
+    /// 건너뛰기 (성공으로 센다)
+    fn skip(&mut self, why: &str) {
+        self.skipped = Some(why.into());
+        self.ok = true;
+    }
 }
 
 /// 일괄 작업 결과
@@ -337,24 +416,10 @@ async fn run_batch_one(
     settings: Arc<FolderSettings>,
     cancel: CancelToken,
 ) -> RepoResult {
-    let name = repo_name(&found.path);
-    let mut r = RepoResult {
-        path: found.path.clone(),
-        name: name.clone(),
-        ok: false,
-        skipped: None,
-        message: String::new(),
-    };
-    /// 건너뛰기 (성공으로 센다)
-    fn skip(r: &mut RepoResult, why: &str) {
-        r.skipped = Some(why.into());
-        r.ok = true;
-    }
+    let mut r = RepoResult::new(found.path.clone());
+    let name = r.name.clone();
     if settings.exclude.iter().any(|x| x == &name) {
-        skip(
-            &mut r,
-            pick("제외됨 (폴더 설정)", "Excluded (folder settings)"),
-        );
+        r.skip(pick("제외됨 (폴더 설정)", "Excluded (folder settings)"));
         return r;
     }
     let runner = inner.runner();
@@ -369,12 +434,12 @@ async fn run_batch_one(
     let _queued = tokio::select! {
         guard = lock.lock() => guard,
         () = cancel.cancelled() => {
-            skip(&mut r, messages::cancelled());
+            r.skip(messages::cancelled());
             return r;
         }
     };
     if cancel.is_cancelled() {
-        skip(&mut r, messages::cancelled());
+        r.skip(messages::cancelled());
         return r;
     }
     let status = match scanned_repo_status(runner, &d.work_tree).await {
@@ -401,15 +466,15 @@ async fn run_batch_one(
         }
         BatchOp::Pull => {
             if in_op {
-                skip(&mut r, reason::in_progress());
+                r.skip(reason::in_progress());
                 return r;
             }
             if dirty {
-                skip(&mut r, reason::dirty());
+                r.skip(reason::dirty());
                 return r;
             }
             if status.branch.upstream.is_none() {
-                skip(&mut r, reason::no_upstream());
+                r.skip(reason::no_upstream());
                 return r;
             }
             let mode = match settings.pull_mode {
@@ -421,11 +486,11 @@ async fn run_batch_one(
         }
         BatchOp::Push => {
             if status.branch.upstream.is_none() {
-                skip(&mut r, reason::no_upstream());
+                r.skip(reason::no_upstream());
                 return r;
             }
             if status.branch.ahead == 0 {
-                skip(&mut r, pick("보낼 commit 없음", "No commits to push"));
+                r.skip(pick("보낼 commit 없음", "No commits to push"));
                 return r;
             }
             (strs(&["push"]), true)
@@ -436,20 +501,17 @@ async fn run_batch_one(
             start_point,
         } => {
             if *checkout && in_op {
-                skip(&mut r, reason::in_progress());
+                r.skip(reason::in_progress());
                 return r;
             }
             if let Some(start) = start_point
                 && !rev_resolves(runner, &d.work_tree, start).await
             {
-                skip(
-                    &mut r,
-                    &tr!(
-                        "시작점이 없음: {}",
-                        "Start point not found: {}",
-                        short_ref(start)
-                    ),
-                );
+                r.skip(&tr!(
+                    "시작점이 없음: {}",
+                    "Start point not found: {}",
+                    short_ref(start)
+                ));
                 return r;
             }
             // 시작점이 원격 브랜치면 git 은 기본으로 새 브랜치가 그것을 추적하게 한다
@@ -467,26 +529,26 @@ async fn run_batch_one(
         }
         BatchOp::Checkout { name } => {
             if in_op {
-                skip(&mut r, reason::in_progress());
+                r.skip(reason::in_progress());
                 return r;
             }
             if dirty {
-                skip(&mut r, reason::dirty());
+                r.skip(reason::dirty());
                 return r;
             }
             if status.branch.head.as_deref() == Some(name.as_str()) {
-                skip(&mut r, reason::already_on_branch());
+                r.skip(reason::already_on_branch());
                 return r;
             }
             (strs(&["checkout", "-q", name, "--"]), false)
         }
         BatchOp::CheckoutRemote { remote, branch } => {
             if in_op {
-                skip(&mut r, reason::in_progress());
+                r.skip(reason::in_progress());
                 return r;
             }
             if dirty {
-                skip(&mut r, reason::dirty());
+                r.skip(reason::dirty());
                 return r;
             }
             let tracking = format!("refs/remotes/{remote}/{branch}");
@@ -502,20 +564,17 @@ async fn run_batch_one(
                     }
                 };
             if !upstreams.contains_key(&tracking) {
-                skip(
-                    &mut r,
-                    &tr!(
-                        "원격 branch 가 없음: {remote}/{branch}",
-                        "Remote branch not found: {remote}/{branch}"
-                    ),
-                );
+                r.skip(&tr!(
+                    "원격 branch 가 없음: {remote}/{branch}",
+                    "Remote branch not found: {remote}/{branch}"
+                ));
                 return r;
             }
             match upstreams.get(&local) {
                 // 같은 이름의 로컬이 정확히 그 원격 브랜치를 추적한다: 그 로컬로 전환한다
                 Some(Some(upstream)) if upstream == &tracking => {
                     if status.branch.head.as_deref() == Some(branch.as_str()) {
-                        skip(&mut r, reason::already_on_branch());
+                        r.skip(reason::already_on_branch());
                         return r;
                     }
                     (strs(&["switch", "-q", "--end-of-options", branch]), false)
@@ -524,24 +583,18 @@ async fn run_batch_one(
                 // 브랜치와 무관한 커밋에 서게 되므로 건드리지 않는다 (단일 저장소의
                 // `LocalBranchTracksOther` 와 같은 상황. 일괄에서는 묻지 않고 건너뛴다)
                 Some(Some(upstream)) => {
-                    skip(
-                        &mut r,
-                        &tr!(
-                            "로컬 {branch} 이(가) {} 을(를) 추적 중",
-                            "Local {branch} tracks {}",
-                            short_ref(upstream)
-                        ),
-                    );
+                    r.skip(&tr!(
+                        "로컬 {branch} 이(가) {} 을(를) 추적 중",
+                        "Local {branch} tracks {}",
+                        short_ref(upstream)
+                    ));
                     return r;
                 }
                 Some(None) => {
-                    skip(
-                        &mut r,
-                        &tr!(
-                            "로컬 {branch} 이(가) {remote}/{branch} 을(를) 추적하지 않음",
-                            "Local {branch} does not track {remote}/{branch}"
-                        ),
-                    );
+                    r.skip(&tr!(
+                        "로컬 {branch} 이(가) {remote}/{branch} 을(를) 추적하지 않음",
+                        "Local {branch} does not track {remote}/{branch}"
+                    ));
                     return r;
                 }
                 // 전체 ref 로 가리켜 `origin/x` 라는 로컬 브랜치가 있어도 모호하지 않게 한다
@@ -566,7 +619,7 @@ async fn run_batch_one(
         } => {
             let dest = dest_root.join(&name);
             if dest.exists() {
-                skip(&mut r, pick("경로가 이미 있음", "Path already exists"));
+                r.skip(pick("경로가 이미 있음", "Path already exists"));
                 return r;
             }
             let dest_s = dest.to_string_lossy().into_owned();
@@ -583,6 +636,23 @@ async fn run_batch_one(
             };
             (a, false)
         }
+        // 명령 하나로 끝나지 않는다 (fetch → 비교 → 이동): 따로 돈다
+        BatchOp::UpdateBranch { name: branch } => {
+            return update_branch_one(&inner, &d, branch, dirty, in_op, r).await;
+        }
+        BatchOp::RenameBranch { from, to } => {
+            match rename_args(runner, &d.work_tree, from, to).await {
+                Ok(args) => (args, false),
+                Err(RenameSkip::Skip(why)) => {
+                    r.skip(&why);
+                    return r;
+                }
+                Err(RenameSkip::Failed(e)) => {
+                    r.message = e;
+                    return r;
+                }
+            }
+        }
     };
     // fetch·pull 은 수동 fetch 경로다: 로컬 tag 집합이 바뀌면 열린 탭의 원격 tag 캐시를 오래됨으로 (TG-08 ④)
     let fetches = matches!(&*op, BatchOp::Fetch { .. } | BatchOp::Pull);
@@ -591,13 +661,173 @@ async fn run_batch_one(
     } else {
         None
     };
+    // pull 은 전후 HEAD 로 무엇을 받았는지 센다 (이미 최신이면 0)
+    let head_before = match &*op {
+        BatchOp::Pull => head_oid(runner, &d.work_tree).await,
+        _ => None,
+    };
     let (ok, msg) = run_git(&inner, &d.work_tree, &args, network).await;
     if tags_before.is_some() {
         let tags_after = inner.tag_marks_at(&d.common_dir, &d.work_tree).await;
         inner.stale_if_tags_changed(&d.common_dir, tags_before, tags_after);
     }
+    if ok
+        && let (Some(from), Some(branch)) = (head_before, status.branch.head.clone())
+        && let Some(to) = head_oid(runner, &d.work_tree).await
+    {
+        let commits = if from == to {
+            0
+        } else {
+            commit_count(runner, &d.work_tree, &from, &to).await
+        };
+        r.moved = Some(RefMove {
+            branch,
+            from,
+            to,
+            commits,
+        });
+    }
     r.ok = ok;
     r.message = msg;
+    r
+}
+
+/// 일괄 이름 바꾸기를 하지 않는 이유: 건너뜀(사유) 또는 읽기 실패(메시지)
+enum RenameSkip {
+    Skip(String),
+    Failed(String),
+}
+
+/// 일괄 이름 바꾸기 한 저장소의 git 인자 (단일 저장소 `rename_branch` 와 같다). `from` 이 없거나 `to` 가 이미 있으면
+/// 건너뛴다 — 둘 다 전체 ref 이름으로 정확히 찾는다 (`for-each-ref` 패턴이 하위 ref 를 맞춰도 헷갈리지 않게)
+async fn rename_args(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>, RenameSkip> {
+    let old = format!("refs/heads/{from}");
+    let new = format!("refs/heads/{to}");
+    let found = ref_upstreams(runner, work_tree, &[old.as_str(), new.as_str()])
+        .await
+        .map_err(RenameSkip::Failed)?;
+    if !found.contains_key(&old) {
+        return Err(RenameSkip::Skip(reason::no_branch().into()));
+    }
+    if found.contains_key(&new) {
+        return Err(RenameSkip::Skip(tr!(
+            "새 이름이 이미 있음: {to}",
+            "New name already exists: {to}"
+        )));
+    }
+    Ok(strs(&["branch", "-m", "--end-of-options", from, to]))
+}
+
+/// 읽기 git 하나의 stdout (앞뒤 공백 제거). 실패하면 None
+async fn read_out(runner: &dyn GitRunner, work_tree: &Path, args: &[&str]) -> Option<String> {
+    let req = GitRequest::new(work_tree, args.iter().map(|a| (*a).to_string()))
+        .with_env(EnvProfile::ReadInteractive);
+    let out = runner.run(req).await.ok()?;
+    out.exit
+        .success()
+        .then(|| out.stdout_lossy().trim().to_string())
+}
+
+/// 지금 HEAD 가 가리키는 commit (없으면 None)
+async fn head_oid(runner: &dyn GitRunner, work_tree: &Path) -> Option<String> {
+    read_out(
+        runner,
+        work_tree,
+        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+    )
+    .await
+}
+
+/// `from..to` 의 commit 수 (읽지 못하면 0)
+async fn commit_count(runner: &dyn GitRunner, work_tree: &Path, from: &str, to: &str) -> u32 {
+    read_out(
+        runner,
+        work_tree,
+        &["rev-list", "--count", &format!("{from}..{to}"), "--"],
+    )
+    .await
+    .and_then(|n| n.parse().ok())
+    .unwrap_or(0)
+}
+
+/// 일괄 branch 업데이트 (BR-09) 한 저장소. 호출자가 그 저장소의 쓰기 잠금을 쥐고 있다.
+/// 대상 판정 → (이 작업 트리의 branch 면 진행 중·더티 검사) → 업스트림 ref 만 fetch(원격 tag 캐시 처리는 일괄 fetch 와
+/// 같다) → 비교 → fast-forward 일 때만 옮긴다. 이미 최신이면 `moved.commits` 0, 갈라짐·로컬이 앞섬은 건너뜀
+async fn update_branch_one(
+    inner: &Arc<CoreInner>,
+    d: &Discovered,
+    branch: &str,
+    dirty: bool,
+    in_op: bool,
+    mut r: RepoResult,
+) -> RepoResult {
+    let runner = inner.runner();
+    let target = match branch_update::inspect(runner, &d.work_tree, branch).await {
+        Ok(target) => target,
+        Err(NotUpdatable::Failed(e)) => {
+            r.message = e;
+            return r;
+        }
+        Err(why) => {
+            r.skip(&why.message());
+            return r;
+        }
+    };
+    if target.current && in_op {
+        r.skip(reason::in_progress());
+        return r;
+    }
+    if target.current && dirty {
+        r.skip(reason::dirty());
+        return r;
+    }
+    if let Some(args) = branch_update::fetch_args(&target, false) {
+        let tags_before = inner.tag_marks_at(&d.common_dir, &d.work_tree).await;
+        let (ok, msg) = run_git(inner, &d.work_tree, &args, true).await;
+        if tags_before.is_some() {
+            let tags_after = inner.tag_marks_at(&d.common_dir, &d.work_tree).await;
+            inner.stale_if_tags_changed(&d.common_dir, tags_before, tags_after);
+        }
+        if !ok {
+            r.message = msg;
+            return r;
+        }
+    }
+    match branch_update::compare(runner, &d.work_tree, &target).await {
+        Err(e) => r.message = e,
+        Ok(BranchUpdate::Updated { from, to, commits }) => {
+            let args = branch_update::ff_args(branch, target.current, &to);
+            let (ok, msg) = run_git(inner, &d.work_tree, &args, false).await;
+            r.ok = ok;
+            r.message = msg;
+            if ok {
+                r.moved = Some(RefMove {
+                    branch: branch.to_string(),
+                    from,
+                    to,
+                    commits,
+                });
+            }
+        }
+        Ok(BranchUpdate::UpToDate) => {
+            r.ok = true;
+            r.moved = Some(RefMove {
+                branch: branch.to_string(),
+                from: target.oid.clone(),
+                to: target.oid,
+                commits: 0,
+            });
+        }
+        Ok(BranchUpdate::Ahead { commits }) => r.skip(&branch_update::ahead_reason(commits)),
+        Ok(BranchUpdate::Diverged { ahead, behind }) => {
+            r.skip(&branch_update::diverged_reason(ahead, behind));
+        }
+    }
     r
 }
 
@@ -701,13 +931,9 @@ impl Core {
             set.spawn(async move {
                 let _permit = sem.acquire().await;
                 if cancel.is_cancelled() {
-                    return RepoResult {
-                        name: repo_name(&found.path),
-                        path: found.path,
-                        ok: true,
-                        skipped: Some(messages::cancelled().into()),
-                        message: String::new(),
-                    };
+                    let mut r = RepoResult::new(found.path);
+                    r.skip(messages::cancelled());
+                    return r;
                 }
                 run_batch_one(inner, found, op, settings, cancel).await
             });
@@ -819,14 +1045,7 @@ impl Core {
             .collect();
         let mut results = Vec::new();
         for found in targets {
-            let name = repo_name(&found.path);
-            let mut r = RepoResult {
-                path: found.path.clone(),
-                name,
-                ok: false,
-                skipped: None,
-                message: String::new(),
-            };
+            let mut r = RepoResult::new(found.path.clone());
             let d = match discover(inner.runner(), &found.path).await {
                 Ok(d) => d,
                 Err(e) => {

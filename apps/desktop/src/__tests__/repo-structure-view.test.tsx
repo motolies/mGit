@@ -13,6 +13,7 @@ import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
+import { revealLabel } from '../features/project/file-actions-menu';
 import { ProjectTree } from '../features/project/ProjectTree';
 import { flattenProjectTree } from '../features/project/project-tree-model';
 import { useAppStore } from '../store';
@@ -395,6 +396,9 @@ describe('트리 위 띠 — 범위 표시와 상위 저장소 링크', () => {
       '─',
       S.folder.refresh,
       '─',
+      revealLabel(),
+      S.actions.openTerminal,
+      '─',
       S.project.menu.copyPath,
     ]);
     act(() =>
@@ -418,6 +422,13 @@ describe('행 장식과 행 메뉴', () => {
     expect(menuShape()).toEqual([
       S.modules.scopeTo,
       S.modules.hide,
+      '─',
+      // 모듈 안의 변경 4개를 되돌리기, untracked 항목이 있어 ignore (파일 메뉴)
+      S.project.menu.many(S.project.menu.rollback, 4),
+      `${S.safety.ignore}▸`,
+      '─',
+      revealLabel(),
+      S.actions.openTerminal,
       '─',
       S.project.menu.copyPath,
       S.project.menu.copyRelative,
@@ -456,6 +467,10 @@ describe('행 장식과 행 메뉴', () => {
       S.submodule.setBranch,
       '─',
       S.submodule.remove,
+      '─',
+      // 서브모듈 안 변경은 그 저장소 몫이라 되돌리기가 없다 (Finder·터미널만)
+      revealLabel(),
+      S.actions.openTerminal,
       '─',
       S.project.menu.copyPath,
       S.project.menu.copyRelative,
@@ -509,6 +524,10 @@ describe('행 장식과 행 메뉴', () => {
     await contextMenu(row());
     expect(menuShape()).toEqual([
       S.project.openAsTab,
+      '─',
+      // 하위 저장소(통째로 untracked 인 디렉터리)는 백업할 수 없어 되돌리기·ignore 대상이 아니다
+      revealLabel(),
+      S.actions.openTerminal,
       '─',
       S.project.menu.copyPath,
       S.project.menu.copyRelative,

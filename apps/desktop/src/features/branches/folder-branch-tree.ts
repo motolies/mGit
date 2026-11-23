@@ -21,6 +21,30 @@ export function folderBranchNodeId(branch: Pick<FolderBranch, 'name' | 'remote'>
   return refNodeId(folderBranchFullName(branch));
 }
 
+/**
+ * branch 업데이트(BR-09)의 대상 저장소 경로: 그 로컬 branch 가 있고 업스트림이 있는(원격에서 사라지지 않은) 저장소.
+ * 원격 branch 는 대상이 없다. 다른 워크트리에서 checkout 된 저장소 등은 코어가 실행할 때 건너뛴다
+ */
+export function updateTargetsOf(branch: FolderBranch): string[] {
+  return branch.remote
+    ? []
+    : branch.repos.filter((r) => (r.upstream ?? null) !== null && !r.gone).map((r) => r.path);
+}
+
+/**
+ * 세로 툴바의 "선택한 branch 업데이트"(BR-09)가 업데이트할 로컬 branch: 고른 행이 하나이고 그것이 로컬 branch 일 때만.
+ * 대상 저장소(`updateTargetsOf`)가 없으면 단추를 끈다
+ */
+export function selectedLocalBranch(
+  branches: readonly FolderBranch[],
+  selectedIds: readonly string[],
+): FolderBranch | null {
+  if (selectedIds.length !== 1) {
+    return null;
+  }
+  return branches.find((b) => !b.remote && folderBranchNodeId(b) === selectedIds[0]) ?? null;
+}
+
 export interface FolderBranchTreeInput {
   /** 코어가 이름으로 합쳐 준 브랜치 목록 (`folderBranches`) */
   branches: readonly FolderBranch[];
@@ -217,6 +241,24 @@ export function revsAfterActivate(revs: GraphRevs, name: string, additive: boole
   return revsOfBranchNames(
     names.includes(name) ? names.filter((other) => other !== name) : [...names, name],
   );
+}
+
+/**
+ * branch 이름을 바꾼 뒤의 범위: 범위가 고른 이름에 `from` 이 있으면 `to` 로 바꾼다 — 사라진 이름으로 걸린 로그가 비지
+ * 않게. `keepOld` 면(바꾸지 않은 저장소에 `from` 이 남았다) `from` 도 남긴다. 범위에 `from` 이 없으면 그대로다
+ */
+export function revsAfterRename(
+  revs: GraphRevs,
+  from: string,
+  to: string,
+  keepOld: boolean,
+): GraphRevs {
+  const names = branchNamesOfRevs(revs);
+  if (!names.includes(from)) {
+    return revs;
+  }
+  const next = names.flatMap((name) => (name !== from ? [name] : keepOld ? [from, to] : [to]));
+  return revsOfBranchNames([...new Set(next)]);
 }
 
 /** 범위에 맞춰 선택된 것으로 그릴 노드 id. HEAD 범위면 HEAD 행 하나다 */

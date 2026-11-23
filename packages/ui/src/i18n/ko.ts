@@ -175,11 +175,27 @@ export const ko = {
       favorite: '선택한 branch 즐겨찾기 추가/해제',
       expandAll: '모두 펼치기',
       collapseAll: '모두 접기',
+      // 선택한 로컬 branch 를 업스트림으로 fast-forward (BR-09, IntelliJ 의 Update Selected). 꺼졌을 때의 툴팁
+      update: '선택한 branch 업데이트',
+      updateNone: '업스트림이 있는 로컬 branch 하나를 고르세요',
     },
     menu: {
       checkout: 'checkout…',
+      // branch 업데이트 (BR-09): 저장소 탭은 이름만, 폴더 탭은 대상 저장소 수(업스트림이 있는 저장소)와 함께
+      update: '업데이트',
+      updateIn: (n: number) => `업데이트 (${n}개 저장소)`,
+      updateNone: '업데이트 (업스트림이 있는 저장소 없음)',
       newBranchHere: '여기서 새 branch…',
       showOnly: '이 branch 만 보기',
+    },
+    // branch 업데이트 결과 (BR-09): 저장소 탭 알림과 폴더 일괄 결과 칸
+    update: {
+      moved: (branch: string, n: number) => `${branch} ← commit ${n}개`,
+      upToDate: '이미 최신',
+      upToDateOf: (branch: string) => `${branch}: 이미 최신`,
+      ahead: (branch: string, n: number) => `${branch}: 로컬이 앞섬 (⇡${n}), 받을 것 없음`,
+      diverged: (branch: string, ahead: number, behind: number) =>
+        `${branch}: 갈라져 갱신하지 않음 (⇡${ahead} ⇣${behind})`,
     },
   },
   // 로그 필터 바 (LG-06, W17): 텍스트·해시 입력 + 저장소·branch·작성자·날짜 드롭다운. 폴더·저장소 탭 공용
@@ -352,6 +368,12 @@ export const ko = {
       copyRelative: '상대 경로 복사',
       // 여러 항목에 거는 동작: 수를 붙인다
       many: (label: string, n: number) => `${label} (${n}개)`,
+      // 파일 동작의 변경 되돌리기 (HEAD 기준 Rollback): 트리와 폴더 탭 Commit 도구 창이 함께 쓴다
+      rollback: '변경 되돌리기…',
+      rollbackTitle: '변경 사항을 되돌릴까요?',
+      rollbackMessage: (n: number) =>
+        `${n}개 파일을 마지막 커밋(HEAD) 상태로 되돌립니다. stage 된 변경도 함께 되돌리고, 새로 추가한 파일과 untracked 파일은 지웁니다. 되돌리기 전 내용은 폐기 백업에 보관됩니다.`,
+      rollbackConfirm: '되돌리기',
     },
   },
   // 파일 보기 탭 (ED-04): 읽기 전용 텍스트와 읽을 수 없는 상태의 문구
@@ -750,6 +772,10 @@ export const ko = {
     checkoutAfter: '만든 뒤 checkout',
     renameBranch: 'branch 이름 변경',
     newName: '새 이름',
+    // branch 이름 정규화 미리보기 (앞뒤 공백 제거, 가운데 공백 → 하이픈): 입력과 다를 때만 칸 아래에 보인다
+    branchNameWillCreate: (name: string) => `만들 이름: ${name}`,
+    branchNameWillRename: (name: string) => `바꿀 이름: ${name}`,
+    branchNameWillUse: (name: string) => `쓸 이름: ${name}`,
     deleteBranch: (name: string) => `branch '${name}' 을(를) 지울까요?`,
     deleteBranchMessage:
       '로컬 branch 가 지워집니다. 아직 push 하지 않은 commit 은 reflog 에만 남습니다.',
@@ -1285,6 +1311,11 @@ export const ko = {
       newBranchFromTargets: (n: number) =>
         `이 branch 가 있는 저장소 ${n}개 중 체크한 저장소에 만듭니다`,
       checkoutCurrent: (repo: string) => `${repo} (현재 branch)`,
+      // 브랜치 트리의 이름 변경 (로컬 branch): 새 이름과 대상 저장소를 체크 목록으로 확인받는다
+      renameTitle: (name: string) => `branch 이름 변경: ${name}`,
+      renameTargets: (n: number) =>
+        `이 branch 가 있는 저장소 ${n}개 중 체크한 저장소에서 이름을 바꿉니다. 새 이름이 이미 있는 저장소는 건너뜁니다`,
+      renameSame: '지금 이름과 같습니다',
       batchFailed: '일괄 작업을 실행하지 못했습니다',
     },
     batch: {
@@ -1329,6 +1360,16 @@ export const ko = {
         `${mode} · 커밋하지 않은 변경·진행 중인 작업·업스트림이 없는 저장소는 건너뜁니다`,
       running: (label: string, phase: string) => (phase ? `${label}: ${phase}` : label),
       result: (s: number, k: number, f: number) => `성공 ${s} · 건너뜀 ${k} · 실패 ${f}`,
+      // pull·branch 업데이트처럼 branch 를 옮기는 작업의 요약 (BR-09): 성공을 갱신·이미 최신으로 나눈다. `done` 은 옮긴 것을
+      // 알 수 없는 성공 (0 이면 빠진다)
+      resultMoved: (updated: number, upToDate: number, done: number, k: number, f: number) =>
+        [
+          `갱신 ${updated}`,
+          `이미 최신 ${upToDate}`,
+          ...(done > 0 ? [`완료 ${done}`] : []),
+          `건너뜀 ${k}`,
+          `실패 ${f}`,
+        ].join(' · '),
       close: '닫기',
       openWorktrees: '만든 워크트리 폴더를 열까요?',
       ok: '완료',
@@ -1481,6 +1522,8 @@ export const ko = {
     openEditor: '에디터에서 열기',
     openTerminal: '터미널에서 열기',
     reveal: '파일 탐색기에서 보기',
+    // macOS 의 같은 동작 (`isMac()` 으로 고른다)
+    revealFinder: 'Finder 에서 보기',
     settings: '설정…',
     themeLight: '테마: 라이트',
     themeDark: '테마: 다크',

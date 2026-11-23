@@ -1,17 +1,27 @@
 // 저장소 탭 브랜치 트리의 메뉴와 동작 (BT-11, W22). 옛 사이드바(`Sidebar.tsx`)의 다섯 섹션 메뉴·더블클릭·머리 버튼을
-// 그대로 옮겼다 — 항목·순서·구분선·하위 메뉴·비활성 조건·확인창 문구가 옛 것과 같다. 구조는 순수 함수가 만들고,
+// 옮겼다 — 메뉴의 항목·순서·구분선·하위 메뉴·비활성 조건·확인창 문구가 옛 것과 같다. 다만 branch 더블클릭·Enter 는
+// checkout 대신 그래프 거르기다 (2026-11-23 사용자 결정, checkout 은 메뉴). 구조는 순수 함수가 만들고,
 // 실행은 컨테이너가 주입한 동작 묶음(`RepoBranchDeps`: 세션 동작·대화상자·탭 열기·복사)을 부른다.
 
-import { type GraphQuery, remoteBranchName, type SessionId, type WorktreeInfo } from '@mgit/ipc';
+import {
+  type GraphQuery,
+  type RefLabel,
+  remoteBranchName,
+  type SessionId,
+  type WorktreeInfo,
+} from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import type { TagsDocRequestInput } from '../../actions';
 import type { MenuItem } from '../../components/ContextMenu';
 import { bool, str, type useDialogs } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
+import { branchNameField } from '../branch/branch-name';
 import { tagWriteItems } from '../tags/tag-flows';
 import { isChecked, type TagReports, tagGroupSync } from '../tags/tag-sync';
 import { createWorktreeFlow } from '../worktree/create-worktree';
 import type { BranchRowAction } from './BranchTree';
+import { branchFocusRevs, defaultBranchRefs, labelRefLookup } from './branch-focus';
+import { sameRevs } from './folder-branch-tree';
 import { REPO_GROUP_IDS, type RepoBranchTarget } from './repo-branch-tree';
 
 /** 메뉴의 비활성 조건과 기본값이 보는 세션 상태 */
@@ -52,6 +62,7 @@ export type RepoBranchSession = Pick<
   | 'rebase'
   | 'renameBranch'
   | 'setUpstream'
+  | 'updateBranch'
   | 'deleteBranch'
   | 'fetch'
   | 'push'
@@ -142,7 +153,22 @@ export async function removeWorktreeFlow(wt: WorktreeInfo, deps: RepoBranchDeps)
   }
 }
 
-/** 로컬 브랜치 메뉴 12개 (옛 사이드바 그대로) */
+/**
+ * 로컬 branch 를 업데이트(BR-09)할 수 없는지: 실행 중, 업스트림이 없거나 원격에서 사라짐, 다른 워크트리에서 checkout 중,
+ * 이 작업 트리의 branch 인데 진행 중 작업이 있음 (코어 `update_branch` 가 거부하는 것과 같다). 메뉴·세로 툴바 공용
+ */
+export function updateBlocked(label: RefLabel, state: Pick<RepoBranchMenuState, 'busy' | 'inOp'>) {
+  const otherWorktree = !label.isCurrent && (label.worktreePath ?? null) !== null;
+  return (
+    state.busy ||
+    !label.upstream ||
+    label.upstreamGone ||
+    otherWorktree ||
+    (label.isCurrent && state.inOp)
+  );
+}
+
+/** 로컬 브랜치 메뉴 13개 (옛 사이드바 12개 + checkout 다음의 업데이트, BR-09) */
 function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: RepoBranchDeps) {
   const { state, session: s, dialogs } = deps;
   const name = target.label.shortName;
@@ -154,6 +180,11 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
       label: S.menu.checkout,
       disabled: disabled || current,
       onSelect: () => void s.checkout({ kind: 'branch', name }),
+    },
+    {
+      label: S.branches.menu.update,
+      disabled: updateBlocked(target.label, state),
+      onSelect: () => void s.updateBranch(name),
     },
     {
       label: S.menu.graphSolo,
@@ -202,7 +233,12 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
         void dialogs
           .prompt({
             title: S.dialog.renameBranch,
-            fields: [{ key: 'name', label: S.dialog.newName, initial: name, required: true }],
+            fields: [
+              branchNameField(
+                { key: 'name', label: S.dialog.newName, initial: name, required: true },
+                'rename',
+              ),
+            ],
             confirmLabel: S.dialog.rename,
           })
           .then((v) => (v ? s.renameBranch(name, str(v, 'name')) : undefined)),
@@ -485,12 +521,12 @@ function backupItems(target: Extract<RepoBranchTarget, { kind: 'backup' }>, deps
           .prompt({
             title: S.safety.restoreTitle,
             fields: [
-              {
+              branchNameField({
                 key: 'name',
                 label: S.safety.restoreName,
                 initial: `${b.branch}-backup`,
                 required: true,
-              },
+              }),
             ],
             confirmLabel: S.dialog.create,
           })
@@ -602,28 +638,34 @@ export function repoBranchRowActions(nodeId: string, deps: RepoBranchDeps): Bran
 }
 
 /**
- * 더블클릭·Enter (결정 16번 — checkout 류, 옛 사이드바 그대로): 로컬은 그 브랜치 checkout(현재면 아무것도 안 함),
- * 원격은 원격 브랜치 checkout, 태그는 그 커밋으로 분리 checkout — 셋 다 쓰기를 막는 상태면 아무것도 하지 않는다.
- * 워크트리는 그 워크트리를 탭으로 연다(지금 연 워크트리면 아무것도 안 함). HEAD 행·백업은 아무것도 하지 않는다
+ * branch 더블클릭·Enter 의 그래프 범위: 그 branch 와 기본 branch(master 우선, 없으면 main)의 로컬·원격 (`branchFocusRevs`).
+ * 이름은 ref 라벨의 짧은 이름이다 (원격은 `origin/x`)
  */
-export function openRepoBranch(target: RepoBranchTarget, deps: RepoBranchDeps): void {
+export function repoFocusRevs(name: string, labels: readonly RefLabel[]) {
+  return branchFocusRevs(name, defaultBranchRefs(labelRefLookup(labels)));
+}
+
+/**
+ * 더블클릭·Enter: 로컬·원격 branch 는 checkout 하지 않고 그래프를 그 branch 와 기본 branch 로 거른다 (`repoFocusRevs`,
+ * 범위가 이미 같으면 다시 읽지 않는다 — checkout 은 우클릭 메뉴). 태그는 그 커밋으로 분리 checkout(쓰기를 막는 상태면
+ * 아무것도 안 함), 워크트리는 그 워크트리를 탭으로 연다(지금 연 워크트리면 아무것도 안 함). HEAD 행·백업은 아무것도
+ * 하지 않는다. `labels` 는 기본 branch 를 찾을 ref 라벨이다
+ */
+export function openRepoBranch(
+  target: RepoBranchTarget,
+  deps: RepoBranchDeps,
+  labels: readonly RefLabel[],
+): void {
   const { state, session: s } = deps;
   switch (target.kind) {
     case 'local':
-      if (!writeBlocked(state) && !target.label.isCurrent) {
-        void s.checkout({ kind: 'branch', name: target.label.shortName });
+    case 'remote': {
+      const revs = repoFocusRevs(target.label.shortName, labels);
+      if (!sameRevs(state.graphQuery.revs, revs)) {
+        void s.setGraphQuery({ ...state.graphQuery, revs });
       }
       return;
-    case 'remote':
-      if (!writeBlocked(state) && !target.label.isCurrent) {
-        // 원격 브랜치 이름은 fullName 기준으로 원격을 뗀다 (원격 이름에 `/` 가 있어도 맞게)
-        void s.checkout({
-          kind: 'remoteBranch',
-          remote: target.remote,
-          name: remoteBranchName(target.label),
-        });
-      }
-      return;
+    }
     case 'tag':
       if (!writeBlocked(state) && !target.label.isCurrent) {
         void s.checkout({ kind: 'commit', oid: target.label.target });

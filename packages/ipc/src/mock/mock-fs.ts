@@ -80,6 +80,8 @@ export interface MockFsLayout {
 export interface MockFs {
   list(root: string, dir: string, limit?: number | null): FsDirListing;
   read(root: string, path: string): FsFile;
+  /** 파일·링크 하나를 지운다 (Rollback 흉내). 디렉터리나 없는 경로는 그대로 둔다 */
+  remove(root: string, path: string): void;
 }
 
 // ── 경로 검증 (코어와 같은 순서·문구) ─────────────────────────────────────────────
@@ -626,6 +628,18 @@ export function createMockFs(layout: MockFsLayout): MockFs {
         return { kind: node };
       }
       return node.kind === 'file' ? node.read() : { kind: 'unsupported', fileKind: node.kind };
+    },
+    remove(root, path) {
+      const parts = parseRel(path);
+      const name = parts.pop();
+      const parent = walk(rootOf(root), parts, path);
+      if (name === undefined || typeof parent === 'string' || parent.kind !== 'dir') {
+        return;
+      }
+      const map = parent.entries();
+      if (map.get(name)?.kind !== 'dir') {
+        map.delete(name);
+      }
     },
   };
 }

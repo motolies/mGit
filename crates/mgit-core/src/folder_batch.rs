@@ -66,6 +66,18 @@ impl Default for FolderSettings {
     }
 }
 
+impl FolderSettings {
+    /// 일괄 작업·자동 fetch 에서 뺄 저장소인지 (이름으로 맞춘다)
+    pub(crate) fn excludes(&self, name: &str) -> bool {
+        self.exclude.iter().any(|x| x == name)
+    }
+
+    /// 동시 실행 수 (1~16 으로 자른다)
+    pub(crate) fn parallelism(&self) -> usize {
+        self.concurrency.clamp(1, 16) as usize
+    }
+}
+
 /// 일괄 작업 종류 (MR-05·06·07)
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
@@ -368,6 +380,18 @@ async fn run_git(
     args: &[String],
     network: bool,
 ) -> (bool, String) {
+    run_git_env(inner, work_tree, args, network, &[]).await
+}
+
+/// `run_git` 에 환경 변수를 더해 돈다 (자동 fetch 의 묻지 않는 인증 `MGIT_HELPER_SILENT`). 네트워크 명령이면 인증 태그를
+/// 붙이고 끝나면 인증 결과를 알린다. 실패 메시지는 URL 토큰을 가린다
+pub(crate) async fn run_git_env(
+    inner: &CoreInner,
+    work_tree: &Path,
+    args: &[String],
+    network: bool,
+    env: &[(&str, &str)],
+) -> (bool, String) {
     let mut req = GitRequest::new(work_tree, args.iter().cloned()).with_env(if network {
         EnvProfile::Network
     } else {
@@ -376,6 +400,9 @@ async fn run_git(
     let auth_tag = network.then(|| inner.auth_tag());
     if let Some(tag) = &auth_tag {
         req = req.with_env_var(mgit_helper::ENV_TAG, tag);
+    }
+    for (k, v) in env {
+        req = req.with_env_var(k, v);
     }
     let result = inner.runner().run(req).await;
     if let Some(tag) = &auth_tag {
@@ -418,7 +445,7 @@ async fn run_batch_one(
 ) -> RepoResult {
     let mut r = RepoResult::new(found.path.clone());
     let name = r.name.clone();
-    if settings.exclude.iter().any(|x| x == &name) {
+    if settings.excludes(&name) {
         r.skip(pick("제외됨 (폴더 설정)", "Excluded (folder settings)"));
         return r;
     }
@@ -920,7 +947,7 @@ impl Core {
             label: label.clone(),
         });
         let total = targets.len();
-        let sem = Arc::new(Semaphore::new(settings.concurrency.clamp(1, 16) as usize));
+        let sem = Arc::new(Semaphore::new(settings.parallelism()));
         let mut set = JoinSet::new();
         for found in targets {
             let inner = Arc::clone(&inner);

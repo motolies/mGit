@@ -14,6 +14,7 @@ export const enTools: Pick<
   | 'rebase'
   | 'dnd'
   | 'confirm'
+  | 'selection'
   | 'panel'
   | 'graph'
   | 'history'
@@ -114,6 +115,9 @@ export const enTools: Pick<
     languageEn: LANGUAGE_NAMES.en,
     languageRestartsTerminals:
       'Changing the language redraws the window and restarts open terminals',
+    autoFetch: 'Auto fetch interval',
+    autoFetchOff: 'Off',
+    autoFetchMinutes: (n: number) => `${formatNumber(n)} ${plural(n, 'minute', 'minutes')}`,
     save: 'Save',
   },
   external: {
@@ -224,6 +228,11 @@ export const enTools: Pick<
     ok: 'OK',
     cancel: 'Cancel',
     more: (n: number) => `… and ${formatNumber(n)} more`,
+  },
+  // 여러 개 체크 목록의 전체 선택·해제
+  selection: {
+    all: 'Select all',
+    none: 'Deselect all',
   },
   panel: {
     sidebar: 'Branches & tags',

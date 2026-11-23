@@ -296,6 +296,93 @@ describe('드롭다운 (LG-06)', () => {
     expect(scopes).toHaveLength(1);
   });
 
+  it('전체 선택·해제: 검색으로 보이는 항목에만 적용하고, 닫을 때 한 번만 적용한다', () => {
+    const { scopes } = setup();
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    const search = document.activeElement as HTMLInputElement;
+    const bulk = (name: string) =>
+      within(popover() as HTMLElement).getByRole<HTMLButtonElement>('button', { name });
+    // 아무것도 체크하지 않았으면 해제할 것이 없다
+    expect(bulk(S.selection.all).disabled).toBe(false);
+    expect(bulk(S.selection.none).disabled).toBe(true);
+    // 'e' 로 거르면 api-gateway·web-console 만 보인다
+    act(() => fireEvent.change(search, { target: { value: 'e' } }));
+    expect(
+      within(popover() as HTMLElement)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['api-gateway', 'web-console']);
+    // 누르는 동안 포커스를 검색 칸에 둔다 (mousedown 기본 동작을 막는다)
+    expect(fireEvent.mouseDown(bulk(S.selection.all))).toBe(false);
+    act(() => fireEvent.click(bulk(S.selection.all)));
+    expect(option('api-gateway').getAttribute('aria-selected')).toBe('true');
+    expect(option('web-console').getAttribute('aria-selected')).toBe('true');
+    expect(bulk(S.selection.all).disabled).toBe(true);
+    expect(document.activeElement).toBe(search);
+    expect(popover()).not.toBeNull();
+    // 검색을 지우면 보이지 않던 infra-scripts 는 체크되지 않은 채다
+    act(() => fireEvent.change(search, { target: { value: '' } }));
+    expect(option('infra-scripts').getAttribute('aria-selected')).toBe('false');
+    expect(bulk(S.selection.all).disabled).toBe(false);
+    // 안내는 그대로다
+    expect(popover()?.textContent).toContain(S.filterBar.repoNone);
+    expect(scopes).toHaveLength(0);
+    act(() => {
+      fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
+    });
+    expect(scopes).toEqual([['/r/api', '/r/web']]);
+  });
+
+  it('전체 해제도 보이는 항목만 풀고, 전체 선택 후 다시 해제하면 바뀐 것이 없어 적용하지 않는다', () => {
+    const { scopes } = setup();
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    const search = document.activeElement as HTMLInputElement;
+    const bulk = (name: string) =>
+      within(popover() as HTMLElement).getByRole<HTMLButtonElement>('button', { name });
+    act(() => fireEvent.click(bulk(S.selection.all)));
+    act(() => fireEvent.change(search, { target: { value: 'e' } }));
+    act(() => fireEvent.click(bulk(S.selection.none)));
+    expect(bulk(S.selection.none).disabled).toBe(true);
+    act(() => fireEvent.change(search, { target: { value: '' } }));
+    expect(option('infra-scripts').getAttribute('aria-selected')).toBe('true');
+    expect(option('api-gateway').getAttribute('aria-selected')).toBe('false');
+    act(() => {
+      fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
+    });
+    expect(scopes).toEqual([['/r/infra']]);
+    // 열고 전체 선택 → 전체 해제 로 처음 값으로 돌아오면 적용하지 않는다
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    act(() => fireEvent.click(bulk(S.selection.all)));
+    act(() => fireEvent.click(bulk(S.selection.none)));
+    act(() => fireEvent.click(option('infra-scripts')));
+    act(() => {
+      fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
+    });
+    expect(scopes).toHaveLength(1);
+  });
+
+  it('branch 의 전체 선택은 HEAD 를 더하지 않고, 체크돼 있던 HEAD 는 뺀다', () => {
+    const { calls } = setup();
+    act(() => fireEvent.click(dropButton(S.filterBar.branch)));
+    act(() => fireEvent.click(option(S.branches.head)));
+    act(() =>
+      fireEvent.click(
+        within(popover() as HTMLElement).getByRole('button', { name: S.selection.all }),
+      ),
+    );
+    expect(option(S.branches.head).getAttribute('aria-selected')).toBe('false');
+    act(() => {
+      fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
+    });
+    const revs = calls.at(-1)?.revs;
+    expect(revs?.kind).toBe('branches');
+    expect(revs?.kind === 'branches' ? [...revs.names].sort() : []).toEqual([
+      'feature/x',
+      'main',
+      'origin/main',
+    ]);
+  });
+
   it('바깥을 누르면 닫히며 적용하고, 포커스를 단추로 가져오지 않는다', () => {
     const { calls } = setup();
     act(() => fireEvent.click(dropButton(S.filterBar.branch)));

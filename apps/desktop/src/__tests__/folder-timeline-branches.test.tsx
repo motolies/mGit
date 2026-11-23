@@ -14,8 +14,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PREF_BRANCH_FAVORITES } from '../features/branches/branch-favorites';
 import { batchNotice, batchSummary, repoResultState } from '../features/folder/batch-report';
-import { FolderBatchBar } from '../features/folder/FolderBatchBar';
 import { FolderTimeline } from '../features/folder/FolderTimeline';
+import { TaskHistoryPanel } from '../features/folder/TaskHistoryPanel';
 import { useAppStore } from '../store';
 import type { SessionMeta } from '../store/app-store';
 import { createFolderStore, DEFAULT_TIMELINE_QUERY, type FolderStore } from '../store/folder-store';
@@ -663,6 +663,42 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
     ).toBe(false);
   });
 
+  it('"여기서 새 branch…" 의 대상 묶음에 전체 선택·해제가 있다: 해제하면 만들기가 꺼지고 선택하면 다시 켜진다', async () => {
+    const { batch } = await setup();
+    await openMenu(LOCAL('main'));
+    act(() => fireEvent.click(screen.getByText(S.branches.menu.newBranchHere)));
+    await tick();
+    const open = dialog() as HTMLDialogElement;
+    fireEvent.change(within(open).getByRole('textbox'), { target: { value: 'main-2' } });
+    const group = within(open).getByRole('group', { name: S.folder.batch.repoGroup(3) });
+    const repos = () =>
+      within(group)
+        .getAllByRole<HTMLInputElement>('checkbox')
+        .map((b) => b.checked);
+    const create = () =>
+      within(open).getByRole<HTMLButtonElement>('button', { name: S.dialog.create });
+    act(() => fireEvent.click(within(group).getByRole('button', { name: S.selection.none })));
+    expect(repos()).toEqual([false, false, false]);
+    expect(create().disabled).toBe(true);
+    // checkout 옵션은 묶음 밖이라 바뀌지 않는다
+    expect(
+      within(open).getByRole<HTMLInputElement>('checkbox', { name: S.folder.batch.branchCheckout })
+        .checked,
+    ).toBe(false);
+    act(() => fireEvent.click(within(group).getByRole('button', { name: S.selection.all })));
+    expect(repos()).toEqual([true, true, true]);
+    expect(create().disabled).toBe(false);
+    // 단추는 제출하지 않는다
+    expect(batch).not.toHaveBeenCalled();
+    submit();
+    await tick();
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      { kind: 'createBranch', name: 'main-2', checkout: false, startPoint: 'refs/heads/main' },
+      [pathOf('api'), pathOf('web'), pathOf('docs')],
+    );
+  });
+
   it('원격 브랜치에서 새 branch 를 만들면 시작점은 그 원격 ref 다', async () => {
     const { batch } = await setup();
     await openMenu(REMOTE('origin/hotfix'));
@@ -1147,7 +1183,7 @@ describe('일괄 결과의 실제 변화 (BR-09)', () => {
     );
   });
 
-  it('개요의 결과 칸: 머리 줄은 갱신·이미 최신 수, 저장소 줄은 "완료" 대신 무엇이 바뀌었는지', async () => {
+  it('작업 기록의 줄: 요약은 갱신·이미 최신 수, 펼친 저장소 줄은 "완료" 대신 무엇이 바뀌었는지', async () => {
     const { store } = await setup();
     const result: BatchResult = {
       label: '일괄 pull',
@@ -1173,12 +1209,27 @@ describe('일괄 결과의 실제 변화 (BR-09)', () => {
       skipped: 0,
       failed: 0,
     };
-    act(() => store.setState({ batchResult: result }));
-    const { container } = render(<FolderBatchBar />);
-    const items = [...container.querySelectorAll('li')].map((li) => li.textContent);
-    expect(container.textContent).toContain(
-      `일괄 pull · ${S.folder.batch.resultMoved(1, 1, 0, 0, 0)}`,
+    act(() =>
+      store.setState({
+        taskHistory: [
+          {
+            id: 1,
+            kind: 'batch',
+            label: result.label,
+            startedAt: 0,
+            finishedAt: 0,
+            result,
+            error: null,
+          },
+        ],
+      }),
     );
+    const { container } = render(<TaskHistoryPanel />);
+    const toggle = within(container).getByRole('button', { expanded: false });
+    expect(toggle.textContent).toContain('일괄 pull');
+    expect(toggle.textContent).toContain(S.folder.batch.resultMoved(1, 1, 0, 0, 0));
+    act(() => fireEvent.click(toggle));
+    const items = [...container.querySelectorAll('li[data-state]')].map((li) => li.textContent);
     expect(items).toEqual([
       `api${S.branches.update.moved('development', 54)}`,
       `docs${S.branches.update.upToDate}`,

@@ -1,0 +1,194 @@
+/* 도구 창 슬롯의 내용 자리를 채운다 (높이는 슬롯이 정한다). 줄의 모양·시각 칸은 콘솔(CommandLogPanel)과 맞춘다 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+
+/* 머리: 제목·수 ... 기록 지우기 */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  padding: var(--space-1) 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  font-weight: 600;
+}
+
+.count {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--fg-muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 한 줄: 시각 | 라벨·요약(펼침 단추). 펼친 저장소별 결과는 줄 아래 전체 폭 */
+.row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.time {
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.toggle {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+button.toggle {
+  cursor: pointer;
+}
+
+button.toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.chevron {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--fg-muted);
+}
+
+.label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.summary {
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 실패를 담은 줄: 요약을 강조한다 (요약 글자의 "실패 N"·"실행하지 못함" 으로도 전한다) */
+.row[data-failed="true"] .summary {
+  color: var(--danger);
+}
+
+.repeat {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.details {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 2px 0 4px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  max-height: 200px;
+  overflow: auto;
+}
+
+/* 상태 칸은 최소 120px, 건너뜀 사유가 길면 한 줄이 될 만큼 넓어진다. 메시지(셋째 칸)는 실패 행에만 있고 그 행의 상태는
+   짧아 120px 에 맞춰 줄이 맞는다 (건너뜀 행은 메시지가 없다) */
+.repo {
+  display: grid;
+  grid-template-columns: 160px minmax(120px, max-content) minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.repo:last-child {
+  border-bottom: none;
+}
+
+.repoState {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo[data-state="failed"] .repoState {
+  color: var(--danger);
+}
+
+.repo[data-state="ok"] .repoState {
+  color: var(--success);
+}
+
+.repo[data-state="skipped"] .repoState {
+  color: var(--fg-muted);
+}
+
+.repoName {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repoMsg {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 실행하지 못한 사유 (펼친 줄) */
+.errorText {
+  grid-column: 1 / -1;
+  margin: 2px 0 4px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}

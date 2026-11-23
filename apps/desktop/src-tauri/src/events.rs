@@ -77,6 +77,12 @@ pub enum SessionEvent {
         session: u32,
         refs: Vec<String>,
     },
+    /// 폴더 자동 fetch 한 바퀴의 결과 (RM-02). 폴더 세션 채널로만 온다. ref 가 바뀌었거나 실패한 저장소만 싣고, 그런
+    /// 저장소가 없으면 오지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `folderChanged`(`refs: true`)가 따로 온다
+    FolderAutoFetched {
+        session: u32,
+        repos: Vec<AutoFetchedRepoDto>,
+    },
     OperationStarted {
         session: u32,
         op_id: u32,
@@ -128,6 +134,29 @@ pub enum SessionEvent {
         repo: String,
         record: CommandLogRecord,
     },
+}
+
+/// 폴더 자동 fetch 의 저장소 하나 (`folderAutoFetched`). `path` 는 폴더 목록의 대표 경로(요약의 `path` 와 같은 꼴),
+/// `refs` 는 바뀐 원격 추적 ref(`origin/main` 꼴, 실패면 빈 목록), `error` 는 실패 메시지(URL 토큰을 가림)
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFetchedRepoDto {
+    pub path: String,
+    pub name: String,
+    pub refs: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl From<mgit_core::AutoFetchedRepo> for AutoFetchedRepoDto {
+    /// 경로를 문자열로 바꾼다
+    fn from(r: mgit_core::AutoFetchedRepo) -> Self {
+        AutoFetchedRepoDto {
+            path: r.path.display().to_string(),
+            name: r.name,
+            refs: r.refs,
+            error: r.error,
+        }
+    }
 }
 
 impl From<CoreEvent> for SessionEvent {
@@ -223,6 +252,10 @@ impl From<CoreEvent> for SessionEvent {
             CoreEvent::AutoFetched { session, refs } => SessionEvent::AutoFetched {
                 session: session.0,
                 refs,
+            },
+            CoreEvent::FolderAutoFetched { session, repos } => SessionEvent::FolderAutoFetched {
+                session: session.0,
+                repos: repos.into_iter().map(Into::into).collect(),
             },
             CoreEvent::OperationStarted {
                 session,
@@ -325,6 +358,45 @@ impl EventSink for ChannelSink {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// 폴더 자동 fetch 이벤트의 wire 모양: `{type:'folderAutoFetched', session, repos:[{path,name,refs,error}]}`. 실패가 없으면
+    /// `error` 는 null 로 나간다
+    #[test]
+    fn folder_auto_fetched_wire_shape() {
+        let event = SessionEvent::from(CoreEvent::FolderAutoFetched {
+            session: mgit_core::SessionId(3),
+            repos: vec![
+                mgit_core::AutoFetchedRepo {
+                    path: "/f/api".into(),
+                    name: "api".into(),
+                    refs: vec!["origin/main".into()],
+                    error: None,
+                },
+                mgit_core::AutoFetchedRepo {
+                    path: "/f/web".into(),
+                    name: "web".into(),
+                    refs: Vec::new(),
+                    error: Some("fatal: could not read Username".into()),
+                },
+            ],
+        });
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "type": "folderAutoFetched",
+                "session": 3,
+                "repos": [
+                    { "path": "/f/api", "name": "api", "refs": ["origin/main"], "error": null },
+                    {
+                        "path": "/f/web",
+                        "name": "web",
+                        "refs": [],
+                        "error": "fatal: could not read Username"
+                    }
+                ]
+            })
+        );
+    }
 
     /// 폴더 콘솔 이벤트의 wire 모양 (W19 ②): `{type:'folderCommandLogged', session, repo, record}`. 기록은
     /// 저장소 세션의 `commandLogged` 와 같은 DTO(카멜 표기, 숫자 시각)다

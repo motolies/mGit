@@ -12,6 +12,7 @@ export {
   type FolderFilter,
   type FolderSort,
   type FolderState,
+  type TaskEntry,
   type TimelineState,
   visibleSummaries,
 } from './folder-store';

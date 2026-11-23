@@ -27,73 +27,9 @@
   margin: 0 4px;
 }
 
-.spacer {
-  flex: 1 1 auto;
-}
-
 .progress {
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
-}
-
-.result {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-}
-
-.resultHead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.resultList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 200px;
-  overflow: auto;
-}
-
-/* 상태 칸은 최소 120px, 건너뜀 사유가 길면 한 줄이 될 만큼 넓어진다. 메시지(셋째 칸)는 실패 행에만 있고 그 행의 상태는
-   짧아 120px 에 맞춰 줄이 맞는다 (건너뜀 행은 메시지가 없다) */
-.resultItem {
-  display: grid;
-  grid-template-columns: 160px minmax(120px, max-content) minmax(0, 1fr);
-  gap: 8px;
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.resultItem[data-state="failed"] .resultState {
-  color: var(--danger);
-}
-
-.resultItem[data-state="ok"] .resultState {
-  color: var(--success);
-}
-
-.resultItem[data-state="skipped"] .resultState {
-  color: var(--fg-muted);
-}
-
-.resultName {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.resultMsg {
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .panel {

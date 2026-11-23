@@ -240,15 +240,18 @@ impl RepoSession {
         }
     }
 
-    /// 자동 fetch 태스크를 보관한다
-    pub fn set_auto_fetch(&self, handle: JoinHandle<()>) {
+    /// 자동 fetch 태스크를 다시 건다: 돌던 태스크를 끊고 `start` 가 만든 태스크를 보관한다(`None` 이면 멈춘 채로 둔다).
+    /// `start` 는 이 잠금 안에서 간격을 읽고 태스크를 띄운다 — 간격 읽기와 보관이 한 구간이라, 새 탭 열기·승격과 간격
+    /// 변경이 겹쳐도 먼저 읽은 옛 간격의 태스크가 나중 것을 덮지 않는다. `start` 안에서 다른 잠금을 잡지 않는다
+    pub(crate) fn rearm_auto_fetch(&self, start: impl FnOnce() -> Option<JoinHandle<()>>) {
         let mut slot = self
             .auto_fetch
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(old) = slot.replace(handle) {
+        if let Some(old) = slot.take() {
             old.abort();
         }
+        *slot = start();
     }
 
     /// 자동 fetch 를 멈춘다

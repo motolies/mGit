@@ -673,3 +673,58 @@ async fn auto_fetch_skips_repo_local_ssh_command() {
     );
     assert!(marker.exists(), "수동 fetch 는 사용자의 설정을 따른다");
 }
+
+/// 지금까지 받은 이벤트를 비운다
+fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<CoreEvent>) -> Vec<CoreEvent> {
+    let mut out = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        out.push(e);
+    }
+    out
+}
+
+/// 자동 fetch 간격은 실행 중에 바꾼다: 꺼져 있던 탭도 켜면 곧바로 돌고, 다시 끄면 멈추고, 긴 간격에서 짧은 간격으로
+/// 바꾸면 이전 타이머를 기다리지 않는다
+#[tokio::test]
+async fn auto_fetch_interval_changes_apply_to_open_tabs() {
+    let core = core().await;
+    assert_eq!(core.auto_fetch_interval(), None);
+    let (mut a, _remote, mut b) = two_clones();
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(a.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let auto_fetched = |e: &CoreEvent| matches!(e, CoreEvent::AutoFetched { .. });
+
+    // 꺼져 있으면 원격이 바뀌어도 돌지 않는다
+    b.commit("one");
+    b.git_ok(["push", "-q", "origin", "main"]);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!drain(&mut rx).iter().any(auto_fetched));
+
+    // 켜면 열린 탭에 곧바로 걸린다
+    core.set_auto_fetch_interval(Some(Duration::from_millis(150)));
+    assert_eq!(core.auto_fetch_interval(), Some(Duration::from_millis(150)));
+    wait_for(&mut rx, Duration::from_secs(10), auto_fetched).await;
+
+    // 끄면 멈춘다 (돌던 바퀴의 늦은 이벤트는 버린다)
+    core.set_auto_fetch_interval(None);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drain(&mut rx);
+    let pushed = b.commit("two");
+    b.git_ok(["push", "-q", "origin", "main"]);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(!drain(&mut rx).iter().any(auto_fetched), "끈 뒤에 돌았다");
+    assert_ne!(
+        a.git_ok(["rev-parse", "refs/remotes/origin/main"]).trim(),
+        pushed.to_hex()
+    );
+
+    // 긴 간격으로 켰다가 짧게 바꾸면 긴 타이머를 기다리지 않는다
+    core.set_auto_fetch_interval(Some(Duration::from_secs(3600)));
+    core.set_auto_fetch_interval(Some(Duration::from_millis(150)));
+    wait_for(&mut rx, Duration::from_secs(10), auto_fetched).await;
+    assert_eq!(
+        a.git_ok(["rev-parse", "refs/remotes/origin/main"]).trim(),
+        pushed.to_hex()
+    );
+}

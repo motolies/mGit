@@ -1,5 +1,6 @@
-// 폴더 일괄 작업의 결과 알림 (W5 에서 FolderTimeline 에 있던 것을 W12 에서 옮겼다). 브랜치 트리·툴바·프로젝트 트리
-// 메뉴에서 실행한 작업은 개요 탭의 결과 표가 보이지 않을 수 있으므로 어디서든 보이는 토스트로 알린다.
+// 폴더 일괄 작업의 결과 알림 (W5 에서 FolderTimeline 에 있던 것을 W12 에서 옮겼다). 개요 탭·브랜치 트리·툴바·프로젝트
+// 트리 메뉴 어디서 실행하든 끝나면 토스트로 요약하고, 저장소별 결과는 Git 도구 창의 작업 기록 탭(`TaskHistoryPanel`)이
+// 같은 요약·상태 글자로 보인다.
 
 import type { BatchResult, RepoResult } from '@mgit/ipc';
 import { S } from '@mgit/ui';
@@ -25,7 +26,7 @@ export function movedCounts(
   return { updated, upToDate, done: succeeded.length - updated - upToDate };
 }
 
-/** 결과 머리 줄·토스트의 수: 옮긴 결과가 있으면 "갱신 · 이미 최신 · 건너뜀 · 실패", 아니면 "성공 · 건너뜀 · 실패" */
+/** 작업 기록 줄·토스트의 수: 옮긴 결과가 있으면 "갱신 · 이미 최신 · 건너뜀 · 실패", 아니면 "성공 · 건너뜀 · 실패" */
 export function batchSummary(result: BatchResult): string {
   const t = S.folder.batch;
   const moved = movedCounts(result);

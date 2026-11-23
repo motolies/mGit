@@ -163,6 +163,6 @@ describe('일괄 커밋 뒤 다시 읽기 (W14)', () => {
     expect(client.folderSummaries).toHaveBeenCalledWith(9, [A]);
     expect(client.folderChanges).toHaveBeenCalledWith(9, [A]);
     expect(store.getState().batchRunning).toBe(false);
-    expect(store.getState().batchResult).toBe(result);
+    expect(store.getState().taskHistory[0]).toMatchObject({ kind: 'commit', result });
   });
 });

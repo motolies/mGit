@@ -112,6 +112,7 @@ export const enWorkspace: Pick<
     git: 'Git',
     tabs: {
       log: 'Log',
+      history: 'Task history',
       console: 'Console',
     },
     maximize: 'Maximize tool window',

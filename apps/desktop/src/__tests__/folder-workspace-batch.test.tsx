@@ -10,7 +10,7 @@ import {
   type RepoSummary,
   type StatusEntry,
 } from '@mgit/ipc';
-import { S } from '@mgit/ui';
+import { formatTime, S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppBody } from '../App';
@@ -440,6 +440,56 @@ describe('툴바의 Fetch·Pull·Push (WS-09)', () => {
     expect(fetch().getAttribute('title')).toBe(
       S.folder.batch.withScope(S.branches.toolbar.fetch, S.folder.batch.selected(1)),
     );
+  });
+});
+
+describe('개요의 일괄 작업 결과 → 토스트·작업 기록', () => {
+  const DETAILED: BatchResult = {
+    label: '일괄 fetch',
+    results: [
+      { path: pathOf('api'), name: 'api', ok: true, skipped: null, message: '' },
+      { path: pathOf('web'), name: 'web', ok: false, skipped: null, message: 'fatal: x' },
+    ],
+    succeeded: 1,
+    skipped: 0,
+    failed: 1,
+  };
+
+  it('개요에서 fetch 하면 결과 목록을 남기지 않고 토스트로 알리며, 작업 기록 탭에 끝난 시각과 함께 남는다', async () => {
+    await mount({ folderBatch: async () => DETAILED });
+    act(() => fireEvent.click(area('editor').getByRole('button', { name: S.folder.batch.fetch })));
+    await tick();
+    // 개요에는 저장소별 결과가 남지 않는다 (닫기 단추도 없다)
+    expect(area('editor').queryByText('fatal: x')).toBeNull();
+    expect(document.querySelector('[data-panel="editor"] li[data-state]')).toBeNull();
+    expect(useAppStore.getState().toasts.map((t) => [t.kind, t.title])).toEqual([
+      ['error', DETAILED.label],
+    ]);
+
+    const dock = within(screen.getByRole('region', { name: S.dock.label }));
+    act(() => fireEvent.click(dock.getByRole('tab', { name: S.dock.tabs.history })));
+    await tick();
+    const entry = getFolderStore(FOLDER_ID)?.getState().taskHistory[0];
+    const panel = within(dock.getByRole('region', { name: S.folder.history.title }));
+    const toggle = panel.getByRole('button', { expanded: false });
+    const line = toggle.closest('li') as HTMLElement;
+    expect(line.textContent).toContain(formatTime(entry?.finishedAt ?? 0));
+    expect(toggle.textContent).toContain(DETAILED.label);
+    expect(toggle.textContent).toContain(S.folder.batch.result(1, 0, 1));
+    expect(line.getAttribute('data-failed')).toBe('true');
+    act(() => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(
+      [...line.querySelectorAll('li[data-state]')].map((li) => li.getAttribute('data-state')),
+    ).toEqual(['ok', 'failed']);
+    expect(panel.getByText('fatal: x')).toBeTruthy();
+
+    // 기록 지우기: 빈 상태 안내가 보이고 단추가 꺼진다
+    act(() => fireEvent.click(panel.getByRole('button', { name: S.folder.history.clear })));
+    expect(panel.getByText(S.folder.history.empty)).toBeTruthy();
+    expect(
+      panel.getByRole<HTMLButtonElement>('button', { name: S.folder.history.clear }).disabled,
+    ).toBe(true);
   });
 });
 

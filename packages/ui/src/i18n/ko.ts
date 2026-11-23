@@ -97,6 +97,8 @@ export const ko = {
     git: 'Git',
     tabs: {
       log: '로그',
+      // 폴더 탭에만 있는 탭: 일괄 작업·자동 fetch 결과를 시각과 함께 쌓는다
+      history: '작업 기록',
       console: '콘솔',
     },
     maximize: '도구 창 최대화',
@@ -1370,7 +1372,6 @@ export const ko = {
           `건너뜀 ${k}`,
           `실패 ${f}`,
         ].join(' · '),
-      close: '닫기',
       openWorktrees: '만든 워크트리 폴더를 열까요?',
       ok: '완료',
       skipped: '건너뜀',
@@ -1391,6 +1392,34 @@ export const ko = {
       worktreeRoot: '기본 워크트리 폴더',
       save: '저장',
       saved: '저장됨',
+    },
+    // Git 도구 창의 작업 기록 탭 (폴더 탭): 일괄 작업·commit·자동 fetch 의 결과를 끝난 시각과 함께 쌓는다
+    history: {
+      title: '작업 기록',
+      count: (n: number) => `${formatNumber(n)}개`,
+      empty:
+        '이 폴더의 일괄 작업(fetch·pull·push·commit 등)과 자동 fetch 결과가 끝난 시각과 함께 여기에 쌓입니다. 폴더 탭을 닫으면 사라집니다',
+      clear: '기록 지우기',
+      autoFetch: '자동 fetch',
+      autoFetchSummary: (updated: number, failed: number) =>
+        `저장소 ${formatNumber(updated)}개 갱신 · 실패 ${formatNumber(failed)}`,
+      // 같은 실패가 이어진 자동 fetch 를 한 줄로 합친 횟수
+      repeat: (n: number) => `×${formatNumber(n)}`,
+      repeatTip: (n: number) => `같은 결과가 ${formatNumber(n)}번 이어졌습니다`,
+      notRun: '실행하지 못함',
+      // 실행하지 못한 일괄 작업의 라벨 (성공·부분 실패는 코어가 준 라벨을 쓴다)
+      ops: {
+        fetch: '일괄 fetch',
+        pull: '일괄 pull',
+        push: '일괄 push',
+        createBranch: '일괄 branch 만들기',
+        checkout: '일괄 checkout',
+        checkoutRemote: '일괄 checkout',
+        worktree: '일괄 워크트리',
+        updateBranch: '일괄 업데이트',
+        renameBranch: '일괄 이름 바꾸기',
+        commit: '일괄 commit',
+      },
     },
   },
   submodule: {
@@ -1573,6 +1602,10 @@ export const ko = {
     languageEn: LANGUAGE_NAMES.en,
     // 터미널이 열려 있을 때만 보이는 안내 (언어를 바꾸면 화면을 다시 그린다)
     languageRestartsTerminals: '언어를 바꾸면 화면을 다시 그리면서 열린 터미널이 새로 시작됩니다',
+    // 자동 fetch 간격 (RM-02, 앱 전체 값 하나 — 저장소 탭·폴더 탭 공용)
+    autoFetch: '자동 fetch 간격',
+    autoFetchOff: '끔',
+    autoFetchMinutes: (n: number) => `${formatNumber(n)}분`,
     save: '저장',
   },
   external: {
@@ -1680,6 +1713,11 @@ export const ko = {
     ok: '확인',
     cancel: '취소',
     more: (n: number) => `… 외 ${n}개`,
+  },
+  // 여러 개 체크 목록의 전체 선택·해제 (필터 드롭다운의 체크 목록, 대화상자의 대상 저장소 묶음)
+  selection: {
+    all: '전체 선택',
+    none: '전체 해제',
   },
   panel: {
     sidebar: '브랜치·태그',

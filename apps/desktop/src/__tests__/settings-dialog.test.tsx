@@ -26,11 +26,17 @@ vi.mock('../App', async () => {
 
 const APPS: ExternalApps = { editor: 'vscode', editorCustom: '', terminal: '', terminalCustom: '' };
 
-/** 설정 대화상자를 연 상태로 스토어를 채운다. 저장·닫기·언어 바꾸기를 부른 차례를 `order` 에 적는다 */
-function openSettings(language: LanguagePreference) {
+/**
+ * 설정 대화상자를 연 상태로 스토어를 채운다. 저장·자동 fetch 간격 저장·닫기·언어 바꾸기를 부른 차례를 `order` 에
+ * 적는다. `autoFetch` 는 저장돼 있는 자동 fetch 간격(분)이다
+ */
+function openSettings(language: LanguagePreference, autoFetch = 5) {
   const order: string[] = [];
   const externalAppsSet = vi.fn(async (_apps: ExternalApps) => {
     order.push('save');
+  });
+  const autoFetchSet = vi.fn(async (minutes: number) => {
+    order.push(`autoFetch:${minutes}`);
   });
   const setSettingsOpen = vi.fn((open: boolean) => {
     order.push(`open:${open}`);
@@ -45,11 +51,24 @@ function openSettings(language: LanguagePreference) {
       language,
       externalAppsGet: async () => APPS,
       externalAppsSet,
+      autoFetchGet: async () => autoFetch,
+      autoFetchSet,
       setSettingsOpen,
       setLanguage,
     });
   });
-  return { order, externalAppsSet, setLanguage };
+  return { order, externalAppsSet, autoFetchSet, setLanguage };
+}
+
+/** 대화상자의 자동 fetch 간격 select */
+function autoFetchSelect() {
+  const dialog = screen.getByRole('dialog', { name: S.settings.title });
+  return within(dialog).getByLabelText(S.settings.autoFetch) as HTMLSelectElement;
+}
+
+/** 대화상자를 제출한다 */
+function submit() {
+  fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
 }
 
 /** 언어 select 와 대화상자의 select 목록 */
@@ -133,6 +152,78 @@ describe('설정 대화상자 (⌘,)', () => {
       'English',
     ]);
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+});
+
+describe('설정 대화상자의 자동 fetch 간격', () => {
+  it('외부 앱 필드 뒤 맨 아래에 있고, 끔·5·10·15·30·60분 중 저장된 값이 골라져 있다', async () => {
+    openSettings('ko', 10);
+    render(<SettingsDialog />);
+    await tick();
+    const { selects } = languageSelect();
+    const select = autoFetchSelect();
+    expect(selects.indexOf(select)).toBe(3);
+    expect(select.value).toBe('10');
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['0', '끔'],
+      ['5', '5분'],
+      ['10', '10분'],
+      ['15', '15분'],
+      ['30', '30분'],
+      ['60', '60분'],
+    ]);
+  });
+
+  it('저장된 값이 목록에 없으면 그 값을 크기 순서 자리에 더해 보인다', async () => {
+    openSettings('ko', 45);
+    render(<SettingsDialog />);
+    await tick();
+    const select = autoFetchSelect();
+    expect(select.value).toBe('45');
+    expect([...select.options].map((o) => o.value)).toEqual([
+      '0',
+      '5',
+      '10',
+      '15',
+      '30',
+      '45',
+      '60',
+    ]);
+  });
+
+  it('간격을 바꿔 저장하면 외부 앱 다음에 간격을 저장하고 닫는다', async () => {
+    const { order, autoFetchSet } = openSettings('ko', 5);
+    render(<SettingsDialog />);
+    await tick();
+    fireEvent.change(autoFetchSelect(), { target: { value: '0' } });
+    submit();
+    await tick();
+    expect(autoFetchSet).toHaveBeenCalledWith(0);
+    expect(order).toEqual(['save', 'autoFetch:0', 'open:false']);
+  });
+
+  it('간격을 그대로 두고 저장하면 간격은 저장하지 않는다', async () => {
+    const { order, autoFetchSet } = openSettings('ko', 30);
+    render(<SettingsDialog />);
+    await tick();
+    submit();
+    await tick();
+    expect(autoFetchSet).not.toHaveBeenCalled();
+    expect(order).toEqual(['save', 'open:false']);
+  });
+
+  it('영어 화면에서는 영어 라벨과 분 단위로 쓴다', async () => {
+    setStringsLocale('en');
+    openSettings('system', 1);
+    render(<SettingsDialog />);
+    await tick();
+    const select = autoFetchSelect();
+    expect(within(screen.getByRole('dialog')).getByLabelText('Auto fetch interval')).toBe(select);
+    expect([...select.options].map((o) => o.textContent).slice(0, 3)).toEqual([
+      'Off',
+      '1 minute',
+      '5 minutes',
+    ]);
   });
 });
 

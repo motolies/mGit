@@ -19,6 +19,9 @@ pub const ENV_SOCKET: &str = "MGIT_HELPER_SOCKET";
 pub const ENV_TOKEN: &str = "MGIT_HELPER_TOKEN";
 /// 명령 태그 환경 변수. 어떤 명령이 어떤 저장된 비밀을 썼는지 잇는다
 pub const ENV_TAG: &str = "MGIT_HELPER_TAG";
+/// 묻지 않는 명령 표시 환경 변수 (값 `1`). 사용자가 누르지 않은 백그라운드 명령(자동 fetch)에 붙인다 — 앱은 저장된
+/// 비밀만 주고 대화상자를 띄우지 않는다
+pub const ENV_SILENT: &str = "MGIT_HELPER_SILENT";
 /// 사용자가 대화상자에 답할 때까지 기다리는 최대 시간
 pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -45,6 +48,10 @@ pub struct AskRequest {
     /// 요청을 보낸 명령의 태그 (`MGIT_HELPER_TAG`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// 묻지 않는 명령의 요청 (`MGIT_HELPER_SILENT=1`). 저장된 비밀이 없으면 대화상자 없이 취소로 답한다.
+    /// 이 필드가 없는 요청(이전 헬퍼)은 묻는 요청이다
+    #[serde(default)]
+    pub silent: bool,
 }
 
 /// 앱의 답
@@ -205,6 +212,17 @@ pub async fn request_tagged(
     prompt: &str,
     tag: Option<String>,
 ) -> Option<String> {
+    request_with(socket, token, prompt, tag, false).await
+}
+
+/// 명령 태그와 묻지 않음 표시(`silent`)를 붙여 프롬프트를 보낸다
+pub async fn request_with(
+    socket: &str,
+    token: &str,
+    prompt: &str,
+    tag: Option<String>,
+    silent: bool,
+) -> Option<String> {
     let name = to_name(socket).ok()?;
     let stream = Stream::connect(name).await.ok()?;
     let mut writer = &stream;
@@ -215,6 +233,7 @@ pub async fn request_tagged(
         target,
         prompt: prompt.to_string(),
         tag,
+        silent,
     };
     let mut line = serde_json::to_string(&req).ok()?;
     line.push('\n');
@@ -250,7 +269,8 @@ pub fn askpass_main(prompt: &str) -> i32 {
         Err(_) => return 1,
     };
     let tag = std::env::var(ENV_TAG).ok();
-    match rt.block_on(request_tagged(&socket, &token, prompt, tag)) {
+    let silent = std::env::var(ENV_SILENT).is_ok_and(|v| v == "1");
+    match rt.block_on(request_with(&socket, &token, prompt, tag, silent)) {
         Some(secret) => {
             println!("{secret}");
             0
@@ -300,6 +320,30 @@ mod tests {
             parse_prompt("Something else:"),
             (PromptKind::Other, "Something else".into())
         );
+    }
+
+    /// 묻지 않음 표시는 서버까지 그대로 가고, 표시가 없는 요청(이전 헬퍼의 JSON)은 묻는 요청으로 읽힌다
+    #[tokio::test]
+    async fn silent_flag_reaches_the_handler_and_defaults_to_asking() {
+        let old: AskRequest = serde_json::from_str(
+            r#"{"token":"t","kind":"password","target":"https://h","prompt":"p"}"#,
+        )
+        .unwrap();
+        assert!(!old.silent);
+
+        let handler: Handler = Arc::new(|req: AskRequest| {
+            Box::pin(async move {
+                AskReply {
+                    secret: Some(if req.silent { "silent" } else { "asked" }.into()),
+                }
+            })
+        });
+        let server = AskpassServer::start(handler).unwrap();
+        let p = "Password for 'https://h': ";
+        let silent = request_with(&server.socket, &server.token, p, None, true).await;
+        assert_eq!(silent.as_deref(), Some("silent"));
+        let asked = request_tagged(&server.socket, &server.token, p, None).await;
+        assert_eq!(asked.as_deref(), Some("asked"));
     }
 
     #[tokio::test]

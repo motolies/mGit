@@ -124,6 +124,23 @@ export function promptSegments(fields: readonly PromptField[]): PromptFieldSegme
   return segments;
 }
 
+/**
+ * 묶음의 전체 선택·해제가 바꿀 체크 칸의 키: 켜진(끄지 않은) 체크 칸만이다. 위험한 대화상자(`danger`, tag 지울 곳 등)나
+ * 그런 칸이 2개 미만인 묶음은 빈 목록이다 — 단추를 그리지 않는다 (지울 곳을 한 번에 다 고르지 않게, 칸 하나는 그냥 누른다)
+ */
+export function groupToggleKeys(
+  fields: readonly { field: PromptField }[],
+  danger: boolean,
+): string[] {
+  if (danger) {
+    return [];
+  }
+  const keys = fields
+    .filter(({ field }) => field.type === 'checkbox' && !field.disabled)
+    .map(({ field }) => field.key);
+  return keys.length >= 2 ? keys : [];
+}
+
 /** 필드의 처음 값. 끈 체크 칸은 초깃값과 상관없이 빈 칸이다 */
 function initialValue(f: PromptField): string | boolean {
   if (f.type === 'checkbox' && f.disabled) {
@@ -208,6 +225,26 @@ export function PromptDialog({
   const warning = notice ? notice(values) : null;
   // 여러 줄 칸이 있으면 대화상자 폭을 넓게 정한다 (없으면 내용 폭에 맞추는 지금 모양)
   const wide = fields.some((f) => f.type === 'textarea');
+
+  /** 묶음의 켜진 체크 칸(`keys`)을 모두 체크하거나 모두 푼다. 끈 칸은 건드리지 않는다 (늘 빈 칸) */
+  const setGroup = (keys: readonly string[], checked: boolean) =>
+    setValues((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, checked])) }));
+
+  /**
+   * 묶음 제목 줄 오른쪽의 전체 선택·해제 단추 (legend 밖 — 묶음의 이름에 섞이지 않게). 바꿀 칸이 없으면 그리지 않는다.
+   * `type="button"` 이라 제출하지 않는다
+   */
+  const renderGroupTools = (keys: readonly string[]) =>
+    keys.length === 0 ? null : (
+      <div className={styles.groupTools}>
+        <button type="button" className={styles.groupTool} onClick={() => setGroup(keys, true)}>
+          {S.selection.all}
+        </button>
+        <button type="button" className={styles.groupTool} onClick={() => setGroup(keys, false)}>
+          {S.selection.none}
+        </button>
+      </div>
+    );
 
   /** 필드 하나 (`index` 는 전체 목록에서의 차례 — 첫 입력 칸이 포커스를 받는다) */
   const renderField = (f: PromptField, index: number) => {
@@ -339,6 +376,7 @@ export function PromptDialog({
             : [
                 <fieldset key={`group:${segment.fields[0]?.field.key}`} className={styles.group}>
                   <legend className={styles.groupTitle}>{segment.group}</legend>
+                  {renderGroupTools(groupToggleKeys(segment.fields, danger))}
                   <div className={styles.groupBody}>
                     {segment.fields.map(({ field, index }) => renderField(field, index))}
                   </div>

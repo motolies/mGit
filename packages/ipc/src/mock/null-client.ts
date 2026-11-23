@@ -150,6 +150,8 @@ export function createNullClient(): IpcClient {
     }),
     externalAppsSet: async () => {},
     openExternal: async () => {},
+    autoFetchGet: async () => 5,
+    autoFetchSet: async () => {},
     systemLocale: async () => null,
     setLanguage: async () => {},
     undoState: async () => ({ entries: [], redoCount: 0 }),

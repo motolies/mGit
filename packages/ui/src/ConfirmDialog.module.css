@@ -120,6 +120,7 @@
 
 /* 필드 묶음 (PromptDialog, W19): 제목이 있는 구획. 목록이 길면 구획 안에서 스크롤해 단추가 늘 보인다 */
 .group {
+  position: relative;
   margin: 0;
   padding: 0 0 0 var(--space-1);
   border: none;
@@ -132,6 +133,37 @@
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+/*
+ * 묶음의 전체 선택·해제 (PromptDialog): 제목 줄 오른쪽. legend 밖의 요소라 내용 영역 위(= legend 줄)로 올려 두고,
+ * legend 처럼 바탕색으로 구획 선을 끊는다. 글자 크기(줄 높이)를 legend 와 맞춰 같은 줄에 선다
+ */
+.groupTools {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  display: flex;
+  gap: var(--space-4);
+  padding: 0 0 0 var(--space-3);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.groupTool {
+  all: unset;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.groupTool:hover {
+  text-decoration: underline;
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.groupTool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .groupBody {

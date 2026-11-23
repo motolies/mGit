@@ -1,4 +1,4 @@
-//! 앱 수준 커맨드 (S7): 자격 증명 응답, 외부 앱 열기, 외부 앱 설정, 화면 언어 (다국어 L3)
+//! 앱 수준 커맨드 (S7): 자격 증명 응답, 외부 앱 열기, 외부 앱 설정, 자동 fetch 간격 (RM-02), 화면 언어 (다국어 L3)
 
 use std::path::Path;
 use std::process::Stdio;
@@ -38,6 +38,50 @@ pub struct ExternalApps {
 const SETTING_KEY: &str = "externalApps";
 /// 외부 명령의 종료를 기다리는 시간. 더 오래 돌면 앱이 떠 있는 것으로 본다
 const LAUNCH_WAIT: Duration = Duration::from_secs(3);
+
+/// 자동 fetch 간격 설정 키. 값은 `{"minutes": n}`
+const AUTO_FETCH_KEY: &str = "autoFetch";
+/// 저장된 자동 fetch 간격이 없을 때의 값 (분). 저장소 탭의 이전 고정값과 같다
+pub(crate) const AUTO_FETCH_DEFAULT_MINUTES: u32 = 5;
+/// 자동 fetch 간격 상한 (분, 하루)
+const AUTO_FETCH_MAX_MINUTES: u32 = 1440;
+
+/// 저장하는 자동 fetch 설정 (RM-02, 앱 전체 값 하나). `minutes` 가 0 이면 끔
+#[derive(Debug, Serialize, Deserialize)]
+struct AutoFetchSetting {
+    minutes: u32,
+}
+
+/// 저장된 자동 fetch 간격 (분). 값이 없거나 읽지 못하거나 범위를 벗어나면 기본값이다. 앱 시작(`state.rs`)과
+/// `auto_fetch_get` 이 함께 쓴다
+pub(crate) fn saved_auto_fetch_minutes(store: &dyn mgit_model::Store) -> u32 {
+    store
+        .setting_get(AUTO_FETCH_KEY)
+        .ok()
+        .flatten()
+        .and_then(|j| serde_json::from_str::<AutoFetchSetting>(&j).ok())
+        .map(|s| s.minutes)
+        .filter(|m| *m <= AUTO_FETCH_MAX_MINUTES)
+        .unwrap_or(AUTO_FETCH_DEFAULT_MINUTES)
+}
+
+/// 분 단위 간격을 코어 간격으로 바꾼다 (0 이면 끔)
+pub(crate) fn auto_fetch_interval(minutes: u32) -> Option<Duration> {
+    (minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60))
+}
+
+/// 자동 fetch 간격 입력 검사 (0~1440분)
+fn check_auto_fetch_minutes(minutes: u32) -> Result<(), IpcError> {
+    if minutes > AUTO_FETCH_MAX_MINUTES {
+        return Err(IpcError::Internal {
+            message: tr!(
+                "자동 fetch 간격은 0~{AUTO_FETCH_MAX_MINUTES}분이어야 합니다: {minutes}",
+                "Auto fetch interval must be 0–{AUTO_FETCH_MAX_MINUTES} minutes: {minutes}"
+            ),
+        });
+    }
+    Ok(())
+}
 
 /// 자격 증명 대화상자 답 (AU-01). `secret` 이 없으면 취소
 #[tauri::command]
@@ -96,6 +140,35 @@ pub async fn external_apps_set(
         .map_err(|e| IpcError::Internal {
             message: e.to_string(),
         })?;
+    Ok(())
+}
+
+/// 자동 fetch 간격 읽기 (분, 0 이면 끔). 저장된 값이 없으면 5분이다
+#[tauri::command]
+#[specta::specta]
+pub async fn auto_fetch_get(state: State<'_, AppState>) -> Result<u32, IpcError> {
+    Ok(saved_auto_fetch_minutes(
+        state.core()?.core.store().as_ref(),
+    ))
+}
+
+/// 자동 fetch 간격 저장 (분, 0~1440, 0 이면 끔). 저장한 뒤 곧바로 적용한다 — 열린 저장소 탭과 폴더의 자동 fetch 를
+/// 새 간격으로 다시 건다
+#[tauri::command]
+#[specta::specta]
+pub async fn auto_fetch_set(state: State<'_, AppState>, minutes: u32) -> Result<(), IpcError> {
+    check_auto_fetch_minutes(minutes)?;
+    let json =
+        serde_json::to_string(&AutoFetchSetting { minutes }).map_err(|e| IpcError::Internal {
+            message: e.to_string(),
+        })?;
+    let core = &state.core()?.core;
+    core.store()
+        .setting_set(AUTO_FETCH_KEY, &json)
+        .map_err(|e| IpcError::Internal {
+            message: e.to_string(),
+        })?;
+    core.set_auto_fetch_interval(auto_fetch_interval(minutes));
     Ok(())
 }
 
@@ -364,6 +437,39 @@ mod tests {
         tauri::async_runtime::block_on(launch_first(&list, None, Duration::from_millis(200)))
             .unwrap();
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    /// 저장된 값이 없거나 깨졌거나 범위를 벗어나면 5분, 저장된 값(끔 0 포함)은 그대로 읽는다
+    #[test]
+    fn saved_auto_fetch_minutes_defaults_and_reads_back() {
+        let store = mgit_model::MemoryStore::new();
+        assert_eq!(saved_auto_fetch_minutes(&store), 5);
+        use mgit_model::Store as _;
+        for (raw, want) in [
+            (r#"{"minutes":0}"#, 0),
+            (r#"{"minutes":15}"#, 15),
+            (r#"{"minutes":1440}"#, 1440),
+            (r#"{"minutes":1441}"#, 5),
+            (r#"{"min":10}"#, 5),
+            ("not json", 5),
+        ] {
+            store.setting_set(AUTO_FETCH_KEY, raw).unwrap();
+            assert_eq!(saved_auto_fetch_minutes(&store), want, "{raw}");
+        }
+    }
+
+    /// 0 은 끔, 나머지는 분 → 초. 1440 을 넘는 입력은 거부한다
+    #[test]
+    fn auto_fetch_minutes_map_to_interval_and_are_bounded() {
+        assert_eq!(auto_fetch_interval(0), None);
+        assert_eq!(auto_fetch_interval(5), Some(Duration::from_secs(300)));
+        assert_eq!(auto_fetch_interval(1440), Some(Duration::from_secs(86_400)));
+        assert!(check_auto_fetch_minutes(0).is_ok());
+        assert!(check_auto_fetch_minutes(1440).is_ok());
+        assert!(matches!(
+            check_auto_fetch_minutes(1441),
+            Err(IpcError::Internal { .. })
+        ));
     }
 
     /// 테스트가 끝나면(패닉 포함) 프로세스 전역 언어를 기본값(한국어)으로 되돌린다

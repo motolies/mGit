@@ -110,6 +110,47 @@ async fn vault_first_then_prompt_and_remember() {
     assert!(vars.iter().any(|(k, _)| k == "MGIT_HELPER_TOKEN"));
 }
 
+/// 묻지 않는 요청(자동 fetch): 키체인에 있으면 그 값을 주고, 없으면 대화상자를 띄우지 않고 취소한다
+#[tokio::test]
+async fn silent_request_never_prompts_but_uses_the_vault() {
+    let vault = Arc::new(MemoryVault::default());
+    let prompt = fake_prompt("typed", true);
+    let service = AskpassService::start(vault.clone(), prompt.clone()).unwrap();
+    let silent = |p: &'static str| {
+        mgit_helper::request_with(
+            service.socket(),
+            service.token(),
+            p,
+            Some("bg".into()),
+            true,
+        )
+    };
+
+    assert_eq!(silent(PASSWORD).await, None, "키체인에 없으면 취소");
+    assert_eq!(prompt.calls.load(Ordering::SeqCst), 0, "대화상자를 띄웠다");
+    assert_eq!(
+        vault.get(&vault_key(PromptKind::Password, "https://u@github.com")),
+        None,
+        "묻지 않았으니 저장할 것도 없다"
+    );
+
+    vault
+        .set(
+            &vault_key(PromptKind::Password, "https://u@github.com"),
+            "stored",
+        )
+        .unwrap();
+    assert_eq!(silent(PASSWORD).await.as_deref(), Some("stored"));
+    assert_eq!(prompt.calls.load(Ordering::SeqCst), 0);
+
+    // 같은 서비스에서 묻는 요청은 그대로 대화상자로 간다
+    assert_eq!(
+        ask(&service, "Username for 'https://x': ").await.as_deref(),
+        Some("typed")
+    );
+    assert_eq!(prompt.calls.load(Ordering::SeqCst), 1);
+}
+
 /// 태그를 붙여 프롬프트를 보낸다
 async fn ask_tagged(s: &AskpassService, p: &str, tag: &str) -> Option<String> {
     mgit_helper::request_tagged(s.socket(), s.token(), p, Some(tag.to_string())).await

@@ -163,6 +163,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_app::credential_forget,
             commands_app::external_apps_get,
             commands_app::external_apps_set,
+            commands_app::auto_fetch_get,
+            commands_app::auto_fetch_set,
             commands_app::open_external,
             commands_app::system_locale,
             commands_app::set_language,

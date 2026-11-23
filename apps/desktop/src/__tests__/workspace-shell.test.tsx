@@ -279,10 +279,11 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
     ).toBe('true');
     expect(editor.getAllByRole('row')).toHaveLength(1 + SUMMARIES.length);
 
-    // Git 도구 창: 로그 탭이 골라져 있고 타임라인을 한 번 열었다 (PF-04)
+    // Git 도구 창: [로그][작업 기록][콘솔], 로그 탭이 골라져 있고 타임라인을 한 번 열었다 (PF-04)
     const dock = within(screen.getByRole('region', { name: S.dock.label }));
     expect(dock.getAllByRole('tab').map((t) => t.textContent)).toEqual([
       S.dock.tabs.log,
+      S.dock.tabs.history,
       S.dock.tabs.console,
     ]);
     expect(dock.getByRole('tab', { name: S.dock.tabs.log }).getAttribute('aria-selected')).toBe(

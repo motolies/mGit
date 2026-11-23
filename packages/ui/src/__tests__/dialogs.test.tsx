@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import styles from '../ConfirmDialog.module.css';
 import dialogCss from '../ConfirmDialog.module.css?raw';
 import {
+  groupToggleKeys,
   normalizedPreview,
   PromptDialog,
   type PromptField,
@@ -392,6 +393,104 @@ describe('PromptDialog 영향 목록·위험 (tag 지울 곳, A5)', () => {
     expect(confirm.classList.contains(styles.danger as string)).toBe(false);
     const local = screen.getByRole<HTMLInputElement>('checkbox', { name: '로컬' });
     expect(fireEvent.keyDown(local, { key: 'Enter' })).toBe(true);
+  });
+});
+
+describe('PromptDialog 묶음의 전체 선택·해제', () => {
+  /** 대상 저장소 묶음 모양: 켜진 칸 셋(a·c·d) + 끈 칸 하나(b), 묶음 밖 옵션 칸 하나 */
+  const fields: PromptField[] = [
+    { key: 'opt', label: '옵션', type: 'checkbox', initial: false },
+    { key: 'a', label: 'a', type: 'checkbox', initial: true, group: '대상' },
+    { key: 'b', label: 'b', type: 'checkbox', initial: true, disabled: true, group: '대상' },
+    { key: 'c', label: 'c', type: 'checkbox', initial: false, group: '대상' },
+    { key: 'd', label: 'd', type: 'checkbox', initial: true, group: '대상' },
+  ];
+  const box = (name: string) => screen.getByRole<HTMLInputElement>('checkbox', { name });
+  const tool = (name: string) => screen.queryByRole<HTMLButtonElement>('button', { name });
+
+  it('켜진 칸만 바꿀 키다. danger 이거나 켜진 체크 칸이 2개 미만이면 빈 목록이다', () => {
+    const segment = promptSegments(fields)[1]?.fields ?? [];
+    expect(groupToggleKeys(segment, false)).toEqual(['a', 'c', 'd']);
+    expect(groupToggleKeys(segment, true)).toEqual([]);
+    const one = promptSegments([
+      { key: 'x', label: 'x', type: 'checkbox', group: 'g' },
+      { key: 'y', label: 'y', type: 'checkbox', disabled: true, group: 'g' },
+      { key: 'z', label: 'z', group: 'g' },
+    ])[0]?.fields;
+    expect(groupToggleKeys(one ?? [], false)).toEqual([]);
+  });
+
+  it('제목 줄의 단추가 켜진 칸만 모두 체크·해제하고 끈 칸은 빈 칸 그대로다. 단추는 묶음 이름에 섞이지 않는다', async () => {
+    const onConfirm = vi.fn();
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={fields}
+        validate={requireChecked(['a', 'b', 'c', 'd'], '없음')}
+        confirmLabel="실행"
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    // legend 밖·구획 안, 체크 칸 목록 앞에 있다. 구획의 이름은 legend 그대로다
+    const group = screen.getByRole('group', { name: '대상' });
+    const tools = tool(S.selection.all)?.parentElement as HTMLElement;
+    expect(group.contains(tools)).toBe(true);
+    expect(tools.previousElementSibling?.tagName).toBe('LEGEND');
+    expect(tools.classList.contains(styles.groupTools as string)).toBe(true);
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: '실행' });
+    fireEvent.click(tool(S.selection.none) as HTMLButtonElement);
+    expect(['a', 'b', 'c', 'd'].map((k) => box(k).checked)).toEqual([false, false, false, false]);
+    // 묶음 밖 칸은 그대로다
+    expect(box('옵션').checked).toBe(false);
+    // 전체 해제 = 대상 없음 → 확인이 꺼진다 (requireChecked 그대로)
+    expect(confirm.disabled).toBe(true);
+    expect(screen.getByRole('status').textContent).toBe('없음');
+    fireEvent.click(tool(S.selection.all) as HTMLButtonElement);
+    expect(['a', 'b', 'c', 'd'].map((k) => box(k).checked)).toEqual([true, false, true, true]);
+    expect(box('옵션').checked).toBe(false);
+    expect(confirm.disabled).toBe(false);
+    // 단추는 제출하지 않는다 (type="button")
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(tool(S.selection.all)?.type).toBe('button');
+    expect(tool(S.selection.none)?.type).toBe('button');
+    // 끈 칸은 확인 결과에도 들지 않는다
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    expect(onConfirm).toHaveBeenCalledWith({ opt: false, a: true, c: true, d: true });
+  });
+
+  it('danger 대화상자(tag 지울 곳)와 켜진 체크 칸이 2개 미만인 묶음에는 단추가 없다', async () => {
+    const { rerender } = render(
+      <PromptDialog
+        open
+        danger
+        title="t"
+        fields={fields}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    expect(screen.getByRole('group', { name: '대상' })).toBeTruthy();
+    expect(tool(S.selection.all)).toBeNull();
+    expect(tool(S.selection.none)).toBeNull();
+    rerender(
+      <PromptDialog
+        open
+        title="t"
+        fields={[
+          { key: 'a', label: 'a', type: 'checkbox', initial: true, group: '대상' },
+          { key: 'b', label: 'b', type: 'checkbox', disabled: true, group: '대상' },
+        ]}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await tick();
+    expect(screen.getByRole('group', { name: '대상' })).toBeTruthy();
+    expect(tool(S.selection.all)).toBeNull();
   });
 });
 

@@ -6,6 +6,7 @@
 //! `GitRunner`·`Watcher`·`Store` 구현체를 주입받으므로 tauri 를 모른다.
 
 mod authors;
+mod auto_fetch;
 mod branch;
 mod branch_update;
 mod changes;
@@ -18,6 +19,7 @@ mod credentials;
 mod error;
 mod events;
 mod folder;
+mod folder_auto_fetch;
 mod folder_batch;
 mod folder_branches;
 mod folder_index;
@@ -77,6 +79,7 @@ pub use credentials::{
 pub use error::CoreError;
 pub use events::{CoreEvent, EventSink, SessionId};
 pub use folder::{FolderOpened, FolderRepo, FolderSession, SCAN_DEPTH};
+pub use folder_auto_fetch::AutoFetchedRepo;
 pub use folder_batch::{
     BatchOp, BatchPullMode, BatchResult, FolderSettings, RefMove, RepoChanges, RepoResult,
 };

@@ -120,6 +120,12 @@ pub enum CoreEvent {
         refs: bool,
         repo: Option<std::path::PathBuf>,
     },
+    /// 폴더 자동 fetch 한 바퀴의 결과 (RM-02). 원격 추적 ref 가 바뀌었거나 fetch 가 실패한 저장소만 싣고, 그런
+    /// 저장소가 없으면 보내지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `FolderChanged { refs: true }` 가 따로 간다
+    FolderAutoFetched {
+        session: SessionId,
+        repos: Vec<crate::folder_auto_fetch::AutoFetchedRepo>,
+    },
     /// 폴더 루트가 바뀌어(또는 수동으로) 하위 저장소를 다시 스캔했다 (MR-10)
     FolderRescanned {
         session: SessionId,
@@ -161,6 +167,7 @@ impl CoreEvent {
             | CoreEvent::OperationOutput { session, .. }
             | CoreEvent::OperationFinished { session, .. }
             | CoreEvent::FolderChanged { session, .. }
+            | CoreEvent::FolderAutoFetched { session, .. }
             | CoreEvent::FolderRescanned { session, .. }
             | CoreEvent::CommandLogged { session, .. }
             | CoreEvent::FolderCommandLogged { session, .. } => *session,

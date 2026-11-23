@@ -32,7 +32,8 @@ pub struct CoreConfig {
     pub backup_dir: Option<PathBuf>,
     /// diff 를 한 번에 보내는 줄 수 상한 (DIFF-02). 넘으면 앞부분만 보내고 `truncated` 를 켠다
     pub diff_max_lines: u32,
-    /// 자동 fetch 간격 (RM-02). `None` 이면 끔. 실패는 조용히 로그만 남긴다
+    /// 자동 fetch 간격의 처음 값 (RM-02, 저장소 탭·폴더 공용). `None` 이면 끔. 실행 중에는
+    /// `Core::set_auto_fetch_interval` 로 바꾸고 `Core::auto_fetch_interval` 로 읽는다 (이 값은 바뀌지 않는다)
     pub auto_fetch_interval: Option<Duration>,
     /// 백업 ref 보관 일수 (SF-04)
     pub backup_keep_days: u32,

@@ -79,25 +79,15 @@ pub(crate) enum OpenAs {
 /// 세션 등록과 닫기가 겹쳐 다시 시도하는 횟수 상한 (닫히던 세션을 만나면 한 번 더 본다)
 const OPEN_ATTEMPTS: usize = 4;
 
-/// 저장소 자체 설정(local·worktree)에 `core.sshCommand` 가 있는지. 전역 설정은 사용자의 것이라 제외
-async fn has_repo_ssh_command(runner: &dyn GitRunner, work_tree: &Path) -> bool {
-    let req = mgit_model::GitRequest::new(
-        work_tree,
-        ["config", "--show-scope", "--get", "core.sshCommand"],
-    );
-    let Ok(out) = runner.run(req).await else {
-        return false;
-    };
-    let text = out.stdout_lossy();
-    out.exit.success() && (text.starts_with("local") || text.starts_with("worktree"))
-}
-
 /// 코어 내부. `Core` 가 `Arc` 로 감싸 태스크·콜백과 공유한다
 pub struct CoreInner {
     runner: Arc<LoggedRunner>,
     pub(crate) watcher: Arc<dyn Watcher>,
     pub(crate) store: Arc<dyn Store>,
     pub(crate) cfg: CoreConfig,
+    /// 지금 자동 fetch 간격 (밀리초, 0 = 끔). 처음 값은 `cfg.auto_fetch_interval` 이고
+    /// `Core::set_auto_fetch_interval` 이 바꾼다 (`auto_fetch.rs`)
+    pub(crate) auto_fetch_ms: AtomicU64,
     pub(crate) sessions: RwLock<HashMap<SessionId, Arc<RepoSession>>>,
     pub(crate) next_id: AtomicU32,
     /// 폴더 세션 (MR). 저장소 세션과 id 공간을 공유한다
@@ -364,11 +354,13 @@ impl Core {
         cfg: CoreConfig,
     ) -> Self {
         let logged = Arc::new(LoggedRunner::new(runner));
+        let auto_fetch_ms = crate::auto_fetch::interval_to_millis(cfg.auto_fetch_interval);
         let inner = Arc::new(CoreInner {
             runner: Arc::clone(&logged),
             watcher,
             store,
             cfg,
+            auto_fetch_ms: AtomicU64::new(auto_fetch_ms),
             sessions: RwLock::new(HashMap::new()),
             next_id: AtomicU32::new(1),
             folders: Mutex::new(std::collections::HashMap::new()),
@@ -607,7 +599,7 @@ impl Core {
     ) -> OpenedRepo {
         self.start_watch(session);
         if how == OpenAs::Tab {
-            self.start_auto_fetch(session);
+            self.inner.arm_auto_fetch(session);
             let name = session
                 .info
                 .work_tree
@@ -664,7 +656,7 @@ impl Core {
                 (Life::Light { .. }, OpenAs::Tab) => {
                     existing.switch_sink(Arc::clone(sink));
                     *life = Life::Full;
-                    self.start_auto_fetch(existing);
+                    self.inner.arm_auto_fetch(existing);
                     self.start_graph(existing);
                     (SessionProfile::Full, true)
                 }
@@ -735,64 +727,6 @@ impl Core {
             elapsed_ms: 0,
             commit_graph_suggested: false,
         });
-    }
-
-    /// 자동 fetch (RM-02): 설정된 간격마다 `fetch --all --prune --no-prune-tags` 를 조용히 돈다. 실패는 로그만 남긴다
-    fn start_auto_fetch(&self, session: &Arc<RepoSession>) {
-        let Some(interval) = self.inner.cfg.auto_fetch_interval else {
-            return;
-        };
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let weak = Arc::downgrade(&self.inner);
-        let weak_session = Arc::downgrade(session);
-        let task = handle.spawn(async move {
-            loop {
-                tokio::time::sleep(interval).await;
-                let (Some(core), Some(session)) = (weak.upgrade(), weak_session.upgrade()) else {
-                    return;
-                };
-                if session.state().refs.remotes.is_empty() {
-                    continue;
-                }
-                let wt = session.info.work_tree.clone();
-                // 사용자가 누르지 않은 fetch 로 저장소가 지정한 명령을 실행하지 않는다
-                if has_repo_ssh_command(core.runner(), &wt).await {
-                    continue;
-                }
-                let before = mgit_git::cmd::remote_refs(core.runner(), &wt)
-                    .await
-                    .unwrap_or_default();
-                // 사용자 작업이 아니므로 undo 항목을 만들지 않는다 (태그를 받으면 ref 가 바뀐다).
-                // `fetch.pruneTags=true` 여도 아직 push 하지 않은 로컬 tag 를 백그라운드에서 지우지 않는다
-                // (TG-16, 되돌릴 수 없으므로). 수동 fetch 는 사용자 설정을 따른다
-                let spec =
-                    crate::write::WriteSpec::new(["fetch", "--all", "--prune", "--no-prune-tags"])
-                        .network()
-                        .no_undo();
-                // 원격 tag 를 받아 왔으면 원격 tag 캐시를 오래됨으로 (TG-08 ④)
-                let tags_before = core.tag_marks(&session);
-                let fetched = core.run_write(&session, spec).await;
-                core.after_fetch(&session, tags_before);
-                if let Err(e) = fetched {
-                    tracing::debug!(session = ?session.id, error = %e, "자동 fetch 실패");
-                    continue;
-                }
-                // 바뀐 원격 추적 ref 가 있으면 알린다 (UX-09)
-                let after = mgit_git::cmd::remote_refs(core.runner(), &wt)
-                    .await
-                    .unwrap_or_default();
-                let changed = mgit_git::cmd::changed_remote_refs(&before, &after);
-                if !changed.is_empty() {
-                    session.sink.emit(CoreEvent::AutoFetched {
-                        session: session.id,
-                        refs: changed,
-                    });
-                }
-            }
-        });
-        session.set_auto_fetch(task);
     }
 
     /// 파일 감시를 건다. 실패해도 세션은 유지한다 (수동 새로고침으로 대체)

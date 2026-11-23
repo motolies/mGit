@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use common::{collector, core_with, wait_finished, wait_for};
 use mgit_core::{
-    BatchOp, CommandLogRecord, CommitSpec, Core, CoreConfig, CoreError, CoreEvent, GitError,
-    GraphLayoutPrefs, GraphQuery, LIGHT_SESSIONS_PER_FOLDER, SearchFields, SessionId,
+    BatchOp, CommandLogRecord, CommitSpec, Core, CoreConfig, CoreError, CoreEvent, FolderSettings,
+    GitError, GraphLayoutPrefs, GraphQuery, LIGHT_SESSIONS_PER_FOLDER, SearchFields, SessionId,
     SessionProfile,
 };
 use mgit_git::{RunnerConfig, TokioGitRunner};
@@ -178,6 +178,15 @@ async fn light_profile_skips_graph_load_and_auto_fetch_until_promoted() {
     })
     .await;
     let fid = open_folder(&core, &root).await;
+    // 폴더 자동 fetch 도 같은 간격으로 이 저장소를 돈다. 가벼운 세션 자체가 fetch 하지 않는지 보려고 폴더 루프에서 뺀다
+    core.set_folder_settings(
+        fid,
+        &FolderSettings {
+            exclude: vec!["a".into()],
+            ..FolderSettings::default()
+        },
+    )
+    .unwrap();
 
     let (opened, mut rx) = open_light(&core, fid, &path_a).await;
     assert_eq!(opened.profile, SessionProfile::Light);

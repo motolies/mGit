@@ -3,7 +3,7 @@ import { Button, requireChecked, S } from '@mgit/ui';
 import { bool, str, useDialogs } from '../../components/use-dialogs';
 import { getFolderStore, repoNameOf, useAppStore, useFolder } from '../../store';
 import { branchNameField, normalizeBranchName } from '../branch/branch-name';
-import { batchSummary, repoResultState } from './batch-report';
+import { useBatchReport } from './batch-report';
 import styles from './FolderExtra.module.css';
 import { useSelectedRepos } from './use-selected-repos';
 
@@ -496,15 +496,16 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   };
 }
 
-/** 일괄 작업 툴바 + 진행·결과 (MR-05·06·07). 대상은 고른 저장소(트리 선택), 없으면 전부다 */
+/**
+ * 일괄 작업 툴바 + 진행 (MR-05·06·07). 대상은 고른 저장소(트리 선택), 없으면 전부다. 결과는 다른 진입점처럼 토스트로
+ * 알리고, 자세한 저장소별 결과는 Git 도구 창의 작업 기록 탭에 남는다
+ */
 export function FolderBatchBar() {
   const f = useFolder((st) => ({
     setSelected: st.setSelected,
     progress: st.batchProgress,
-    result: st.batchResult,
-    clearResult: st.clearBatchResult,
   }));
-  const flows = useFolderBatchFlows();
+  const flows = useFolderBatchFlows(useBatchReport());
   if (!f) {
     return null;
   }
@@ -544,30 +545,6 @@ export function FolderBatchBar() {
           </span>
         ) : null}
       </div>
-      {f.result ? (
-        <div className={styles.result}>
-          <div className={styles.resultHead}>
-            <span>
-              {f.result.label} · {batchSummary(f.result)}
-            </span>
-            <span className={styles.spacer} />
-            <Button onClick={f.clearResult}>{t.close}</Button>
-          </div>
-          <ul className={styles.resultList}>
-            {f.result.results.map((r) => (
-              <li
-                key={r.path}
-                className={styles.resultItem}
-                data-state={r.skipped ? 'skipped' : r.ok ? 'ok' : 'failed'}
-              >
-                <span className={styles.resultName}>{r.name}</span>
-                <span className={styles.resultState}>{repoResultState(r)}</span>
-                {r.message ? <span className={styles.resultMsg}>{r.message}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
       {flows.dialogs.element}
     </div>
   );

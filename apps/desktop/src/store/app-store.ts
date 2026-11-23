@@ -132,6 +132,8 @@ const TOAST_MS = 6000;
 const CREDENTIAL_TTL_MS = 5 * 60_000;
 /** 기억할 자격 증명 대상 수 */
 const CREDENTIAL_TARGETS = 20;
+/** 자동 fetch 간격의 기본값 (분). 코어가 저장된 값이 없을 때 쓰는 값과 같다 */
+export const DEFAULT_AUTO_FETCH_MINUTES = 5;
 let nextToastId = 1;
 
 export type { LoadState } from './session-store';
@@ -139,9 +141,13 @@ export type { LoadState } from './session-store';
 /** 아래 도구 창 슬롯에 들어가는 도구 창 (WS-02). 한 번에 하나만 보인다 */
 export type DockTool = 'git' | 'terminal';
 
-/** Git 도구 창의 탭. 배열 순서가 화면 순서이고 첫 항목이 기본 탭이다 */
-export const GIT_DOCK_TABS = ['log', 'console'] as const;
+/** Git 도구 창의 탭. 배열 순서가 화면 순서이고 첫 항목이 기본 탭이다. 작업 기록은 폴더 탭에만 있다 */
+export const GIT_DOCK_TABS = ['log', 'history', 'console'] as const;
 export type GitDockTab = (typeof GIT_DOCK_TABS)[number];
+/** 저장소 탭의 Git 탭: 작업 기록(폴더 일괄 작업)이 없다 */
+const REPO_DOCK_TABS: readonly GitDockTab[] = GIT_DOCK_TABS.filter((t) => t !== 'history');
+/** 탭이 없을 때(홈)의 Git 탭: 그릴 로그·기록이 없어 콘솔만이다 */
+const HOME_DOCK_TABS: readonly GitDockTab[] = ['console'];
 
 /** 아래 도구 창 슬롯의 상태: {숨김, Git, 터미널} × {보통, 최대화} (WS-02·03) */
 export interface DockState {
@@ -199,22 +205,32 @@ export function restoreDock(saved: { tool?: unknown; gitTab?: unknown }): DockSt
 }
 
 /**
- * 탭 종류에서 쓸 수 있는 Git 탭 (화면 순서). 폴더 탭·저장소 탭은 로그와 콘솔을 모두 갖는다 (W21 — 저장소 탭의 로그도
- * 이 자리로 들어왔다). 탭이 없으면(홈) 그릴 로그가 없어 콘솔만이다
+ * 탭 종류에서 쓸 수 있는 Git 탭 (화면 순서). 폴더 탭은 로그·작업 기록·콘솔, 저장소 탭은 로그와 콘솔이다 (W21 — 저장소
+ * 탭의 로그도 이 자리로 들어왔다). 탭이 없으면(홈) 그릴 로그가 없어 콘솔만이다
  */
 export function gitDockTabsFor(kind: TabKind | null): readonly GitDockTab[] {
-  return kind === null ? GIT_DOCK_TABS.filter((t) => t !== 'log') : GIT_DOCK_TABS;
+  switch (kind) {
+    case 'folder':
+      return GIT_DOCK_TABS;
+    case 'repo':
+      return REPO_DOCK_TABS;
+    default:
+      return HOME_DOCK_TABS;
+  }
 }
 
 /**
- * 화면에 그릴 슬롯 상태. 고른 Git 탭을 지금 탭 종류에서 쓸 수 없으면 슬롯이 숨겨진 것처럼 그린다.
- * 저장된 상태는 건드리지 않으므로, 그 탭을 쓸 수 있는 탭으로 돌아오면 다시 보인다
+ * 화면에 그릴 슬롯 상태. 고른 Git 탭을 지금 탭 종류에서 쓸 수 없으면, 탭이 있을 때(폴더·저장소)는 첫 탭(로그)으로
+ * 그리고 홈은 슬롯이 숨겨진 것처럼 그린다 — 폴더 탭에서 작업 기록을 보다 저장소 탭으로 가도 도구 창이 사라지지 않는다.
+ * 저장된 상태는 건드리지 않으므로, 그 탭을 쓸 수 있는 탭으로 돌아오면 다시 그 탭이 보인다
  */
 export function effectiveDock(dock: DockState, kind: TabKind | null): DockState {
-  if (dock.tool === 'git' && !gitDockTabsFor(kind).includes(dock.gitTab)) {
-    return dockHidden(dock);
+  const tabs = gitDockTabsFor(kind);
+  if (dock.tool !== 'git' || tabs.includes(dock.gitTab)) {
+    return dock;
   }
-  return dock;
+  const first = tabs[0];
+  return kind !== null && first !== undefined ? { ...dock, gitTab: first } : dockHidden(dock);
 }
 
 /**
@@ -410,6 +426,10 @@ export interface AppStore {
   openExternal(kind: ExternalKind, path: string): Promise<boolean>;
   externalAppsGet(): Promise<ExternalApps>;
   externalAppsSet(apps: ExternalApps): Promise<void>;
+  /** 자동 fetch 간격 (분, 0 = 끔). 읽지 못하면 기본값 5 */
+  autoFetchGet(): Promise<number>;
+  /** 자동 fetch 간격을 저장하고 곧바로 적용한다 (저장소 탭·폴더 탭 공용). 실패하면 사유를 `lastError` 에 둔다 */
+  autoFetchSet(minutes: number): Promise<void>;
 
   /** 시작 시 git 버전을 읽고 테마를 적용하고, 탭을 복원하고, 시작 인자·앱 이벤트를 처리한다 */
   bootstrap(): Promise<void>;
@@ -1484,6 +1504,22 @@ export function createAppStore(deps: AppStoreDeps) {
       async externalAppsSet(apps) {
         try {
           await deps.client.externalAppsSet(apps);
+        } catch (e) {
+          set({ lastError: describeError(e) });
+        }
+      },
+
+      async autoFetchGet() {
+        try {
+          return await deps.client.autoFetchGet();
+        } catch {
+          return DEFAULT_AUTO_FETCH_MINUTES;
+        }
+      },
+
+      async autoFetchSet(minutes) {
+        try {
+          await deps.client.autoFetchSet(minutes);
         } catch (e) {
           set({ lastError: describeError(e) });
         }

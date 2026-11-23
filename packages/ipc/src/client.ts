@@ -311,7 +311,8 @@ export interface IpcClient {
   /**
    * 폴더를 연다. `onEvent` 로 폴더 세션의 이벤트가 온다: 감시(`folderChanged`·`folderRescanned`), 통합 타임라인의 그래프
    * 이벤트, 일괄 작업 진행, 폴더 콘솔(`folderCommandLogged` — W19 ②: 폴더의 저장소에서 돈 쓰기·네트워크 명령. `repo` 는
-   * 목록의 대표 경로, 읽기 명령은 오지 않는다)
+   * 목록의 대표 경로, 읽기 명령은 오지 않는다), 자동 fetch 결과(`folderAutoFetched` — 원격 추적 ref 가 바뀌었거나 실패한
+   * 저장소만, 바뀐 저장소는 그 앞에 `folderChanged` 가 따로 온다)
    */
   openFolder(path: string, onEvent: (event: SessionEvent) => void): Promise<FolderOpened>;
   /** `repos` 를 주면 그 저장소만 읽는다 (PF-02). 없거나 비면 전부. 폴더의 저장소가 아닌 경로는 거부된다 */
@@ -369,6 +370,15 @@ export interface IpcClient {
   externalAppsGet(): Promise<ExternalApps>;
   externalAppsSet(apps: ExternalApps): Promise<void>;
   openExternal(kind: ExternalKind, path: string): Promise<void>;
+
+  // 자동 fetch 간격 (RM-02, 앱 전체 값 하나 — 저장소 탭·폴더 탭 공용)
+  /** 자동 fetch 간격 (분, 0 = 끔). 저장된 값이 없으면 5 */
+  autoFetchGet(): Promise<number>;
+  /**
+   * 자동 fetch 간격을 저장하고 곧바로 적용한다 (분, 0~1440, 0 = 끔). 열린 저장소 탭과 폴더의 자동 fetch 가 새 간격으로
+   * 다시 걸린다(타이머도 처음부터). 범위를 벗어나면 `internal` 오류다
+   */
+  autoFetchSet(minutes: number): Promise<void>;
 
   // 화면 언어 (다국어 L3)
   /** OS 의 화면 언어 (BCP 47 태그, 예: `ko-KR`). 읽지 못하면 null */
@@ -900,6 +910,8 @@ export function createTauriClient(): IpcClient {
     externalAppsGet: () => call(() => commands.externalAppsGet()),
     externalAppsSet: (apps) => voidCall(() => commands.externalAppsSet(apps)),
     openExternal: (kind, path) => voidCall(() => commands.openExternal(kind, path)),
+    autoFetchGet: () => call(() => commands.autoFetchGet()),
+    autoFetchSet: (minutes) => voidCall(() => commands.autoFetchSet(minutes)),
     systemLocale: () => call(() => commands.systemLocale()),
     setLanguage: (lang) => voidCall(() => commands.setLanguage(lang)),
     undoState: (session) => call(() => commands.undoState(session)),

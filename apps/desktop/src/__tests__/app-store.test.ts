@@ -236,7 +236,7 @@ describe('아래 도구 창 슬롯 (WS-02~04)', () => {
   };
 
   it('처음 실행하면 Git 도구 창의 로그 탭이 보인다 (WS-01)', () => {
-    expect(GIT_DOCK_TABS).toEqual(['log', 'console']);
+    expect(GIT_DOCK_TABS).toEqual(['log', 'history', 'console']);
     expect(DEFAULT_DOCK).toEqual({ tool: 'git', maximized: false, gitTab: 'log' });
     expect(launch().getState().dock).toEqual(DEFAULT_DOCK);
     // 아무것도 바꾸지 않았으면 저장도 하지 않는다
@@ -399,6 +399,12 @@ describe('아래 도구 창 슬롯 (WS-02~04)', () => {
       maximized: false,
       gitTab: 'console',
     });
+    // 작업 기록 탭도 그대로 복원한다 (저장소 탭에서는 effectiveDock 이 로그로 그린다)
+    expect(restoreDock({ tool: 'git', gitTab: 'history' })).toEqual({
+      tool: 'git',
+      maximized: false,
+      gitTab: 'history',
+    });
     localStorage.setItem(PREF, '{"tool":');
     expect(launch().getState().dock).toEqual(DEFAULT_DOCK);
     localStorage.setItem(PREF, '"git"');
@@ -414,11 +420,12 @@ describe('탭 종류별 Git 탭과 슬롯의 유효 상태 (WS-01)', () => {
 
   const LOG: DockState = { tool: 'git', maximized: false, gitTab: 'log' };
   const CONSOLE: DockState = { tool: 'git', maximized: false, gitTab: 'console' };
+  const HISTORY: DockState = { tool: 'git', maximized: false, gitTab: 'history' };
   const TERMINAL: DockState = { tool: 'terminal', maximized: true, gitTab: 'log' };
   const HIDDEN: DockState = { tool: null, maximized: false, gitTab: 'log' };
 
-  it('로그 탭은 폴더 탭·저장소 탭(W21)에서 쓰고, 탭이 없을 때(홈)는 콘솔만 쓴다', () => {
-    expect(gitDockTabsFor('folder')).toEqual(['log', 'console']);
+  it('로그 탭은 폴더 탭·저장소 탭(W21)에서 쓰고, 작업 기록은 폴더 탭에만 있으며, 탭이 없을 때(홈)는 콘솔만 쓴다', () => {
+    expect(gitDockTabsFor('folder')).toEqual(['log', 'history', 'console']);
     expect(gitDockTabsFor('repo')).toEqual(['log', 'console']);
     expect(gitDockTabsFor(null)).toEqual(['console']);
   });
@@ -431,6 +438,14 @@ describe('탭 종류별 Git 탭과 슬롯의 유효 상태 (WS-01)', () => {
     ['콘솔은 홈에서도 보인다', CONSOLE, null, CONSOLE],
     ['터미널은 고른 Git 탭과 무관하게 보인다', TERMINAL, 'repo', TERMINAL],
     ['숨김은 어디서나 숨김이다', HIDDEN, 'folder', HIDDEN],
+    ['작업 기록은 폴더 탭에서 그대로 보인다', HISTORY, 'folder', HISTORY],
+    [
+      '저장소 탭에서는 작업 기록 대신 첫 탭(로그)을 그린다',
+      HISTORY,
+      'repo',
+      { ...HISTORY, gitTab: 'log' },
+    ],
+    ['홈에서는 작업 기록을 숨김처럼 그린다', HISTORY, null, { ...HISTORY, tool: null }],
   ])('%s', (_name, dock, kind, shown) => {
     expect(effectiveDock(dock, kind)).toEqual(shown);
   });
@@ -438,6 +453,11 @@ describe('탭 종류별 Git 탭과 슬롯의 유효 상태 (WS-01)', () => {
   it('숨김처럼 그릴 때는 최대화도 풀린 것으로 그린다 (본문이 가려지지 않는다)', () => {
     expect(effectiveDock({ ...LOG, maximized: true }, null)).toEqual(HIDDEN);
     expect(effectiveDock({ ...LOG, maximized: true }, 'repo')).toEqual({ ...LOG, maximized: true });
+    // 로그로 대신 그릴 때는 최대화를 그대로 둔다 (도구 창이 사라지지 않는다)
+    expect(effectiveDock({ ...HISTORY, maximized: true }, 'repo')).toEqual({
+      ...LOG,
+      maximized: true,
+    });
   });
 
   it('유효 상태는 저장된 상태를 건드리지 않는다: 홈에서 가려진 로그가 탭을 열면 보이고, 폴더 탭·저장소 탭이 같은 슬롯을 쓴다', async () => {
@@ -472,6 +492,16 @@ describe('탭 종류별 Git 탭과 슬롯의 유효 상태 (WS-01)', () => {
     expect(shownDock(store.getState())).toEqual(DEFAULT_DOCK);
     store.getState().setActiveSession(repo ?? -1);
     expect(shownDock(store.getState())).toEqual(DEFAULT_DOCK);
+
+    // 폴더 탭에서 작업 기록을 보다 저장소 탭으로 가면 도구 창이 사라지지 않고 로그를 그린다. 고른 탭은 그대로라
+    // 폴더 탭으로 돌아오면 다시 작업 기록이다
+    store.getState().setActiveSession(90);
+    store.getState().setGitDockTab('history');
+    store.getState().setActiveSession(repo ?? -1);
+    expect(shownDock(store.getState())).toEqual(DEFAULT_DOCK);
+    expect(store.getState().dock.gitTab).toBe('history');
+    store.getState().setActiveSession(90);
+    expect(shownDock(store.getState()).gitTab).toBe('history');
   });
 });
 

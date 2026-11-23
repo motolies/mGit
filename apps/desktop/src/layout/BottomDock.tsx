@@ -12,6 +12,7 @@ import {
 import { DOCK_ATTR } from '../actions';
 import { hasModifier, rovingIndex } from '../components/roving';
 import { FolderTimeline } from '../features/folder/FolderTimeline';
+import { TaskHistoryPanel } from '../features/folder/TaskHistoryPanel';
 import { CommandLogPanel } from '../features/log/CommandLogPanel';
 import { TerminalPanel, TerminalTabs } from '../features/terminal/TerminalPanel';
 import { RepoGitLog } from '../features/workspace/RepoGitLog';
@@ -99,10 +100,11 @@ function ConsoleFailureBadge({ unseen }: { unseen: number }) {
 
 /**
  * Git 도구 창의 탭 줄 (W19 ③): 지금 탭 종류에서 쓸 수 있는 탭만 보인다. 탭 막대 하나가 Tab 정지 하나다 — 고른 탭만
- * Tab 으로 닿고, ←→·Home·End 로 옆 탭을 고른다(고르면 바로 보인다)
+ * Tab 으로 닿고, ←→·Home·End 로 옆 탭을 고른다(고르면 바로 보인다). 고른 탭을 지금 쓸 수 없으면(저장소 탭의 작업 기록)
+ * 대신 그리는 탭(`shownDock`)이 골라진 것으로 보인다
  */
 function GitTabs() {
-  const active = useAppStore((s) => s.dock.gitTab);
+  const active = useAppStore((s) => shownDock(s).gitTab);
   const select = useAppStore((s) => s.setGitDockTab);
   const kind = useAppStore(activeTabKind);
   const unseen = useFolder((f) => f.commandLogUnseenFailures) ?? 0;
@@ -149,12 +151,12 @@ function GitTabs() {
 }
 
 /**
- * Git 도구 창의 내용: 고른 탭 하나 (탭 패널). 로그 탭은 탭 종류에 맞는 로그다 — 폴더 탭은 통합 타임라인, 저장소
- * 탭은 옛 사이드바·그래프·상세 (W21). 로그 탭은 보일 때만 마운트하므로 통합 타임라인은 로그 탭이 처음 보일 때
- * 열린다 (PF-04)
+ * Git 도구 창의 내용: 그리는 탭 하나 (탭 패널, `shownDock`). 로그 탭은 탭 종류에 맞는 로그다 — 폴더 탭은 통합 타임라인,
+ * 저장소 탭은 옛 사이드바·그래프·상세 (W21). 작업 기록 탭은 폴더 탭에만 있다. 로그 탭은 보일 때만 마운트하므로 통합
+ * 타임라인은 로그 탭이 처음 보일 때 열린다 (PF-04)
  */
 function GitToolWindow() {
-  const tab = useAppStore((s) => s.dock.gitTab);
+  const tab = useAppStore((s) => shownDock(s).gitTab);
   const kind = useAppStore(activeTabKind);
   return (
     <div
@@ -165,6 +167,8 @@ function GitToolWindow() {
     >
       {tab === 'console' ? (
         <CommandLogPanel />
+      ) : tab === 'history' ? (
+        <TaskHistoryPanel />
       ) : kind === 'folder' ? (
         <FolderTimeline />
       ) : kind === 'repo' ? (
@@ -216,7 +220,8 @@ function DockWindow() {
  * 접기만 한다 — 숨김은 아래 패널, 최대화는 위 패널을 접는다. 분할 모양은 스토어의 슬롯 상태에서 계산해
  * 한 번에 적용하고, 사용자가 분할선을 끌어 접은 경우만 거꾸로 스토어에 반영한다.
  * 저장하는 것은 보통 상태의 높이뿐이라 숨김·최대화는 저장된 배치를 덮어쓰지 않는다.
- * 그리는 것은 화면에 그릴 상태(`shownDock`)다 — 고른 Git 탭을 지금 탭 종류에서 쓸 수 없으면 숨김으로 그린다
+ * 그리는 것은 화면에 그릴 상태(`shownDock`)다 — 고른 Git 탭을 지금 탭 종류에서 쓸 수 없으면 저장소 탭은 로그로, 홈은
+ * 숨김으로 그린다
  */
 export function BottomDock({ children }: { children: ReactNode }) {
   const tool = useAppStore((s) => shownDock(s).tool);

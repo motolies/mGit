@@ -198,6 +198,30 @@ export function toggleChecked(
   return [...checked.filter((other) => !exclusive.includes(other)), id];
 }
 
+/**
+ * "전체 선택": 보이는 항목(검색으로 걸러진 목록, `shownIds`)을 모두 체크한다. 보이지 않는 체크는 그대로 둔다.
+ * `exclusive` 의 항목(branch 의 HEAD)은 다른 항목과 함께 고를 수 없으므로 더하지 않고, 이미 체크돼 있었으면 뺀다
+ * (`toggleChecked` 의 배타 규칙과 같다). 더할 항목이 하나도 없으면 그대로다 — 보이는 것이 HEAD 뿐일 때 HEAD 만 풀리지 않게
+ */
+export function checkShown(
+  checked: readonly string[],
+  shownIds: readonly string[],
+  exclusive: readonly string[] = [],
+): string[] {
+  const have = new Set(checked);
+  const add = shownIds.filter((id) => !exclusive.includes(id) && !have.has(id));
+  if (add.length === 0) {
+    return [...checked];
+  }
+  return [...checked.filter((id) => !exclusive.includes(id)), ...new Set(add)];
+}
+
+/** "전체 해제": 보이는 항목(검색으로 걸러진 목록, `shownIds`)의 체크만 뺀다. 보이지 않는 체크는 그대로 둔다 */
+export function uncheckShown(checked: readonly string[], shownIds: readonly string[]): string[] {
+  const shown = new Set(shownIds);
+  return checked.filter((id) => !shown.has(id));
+}
+
 /** 두 체크 목록이 같은 집합인지 (순서 무관) */
 export function sameChecked(a: readonly string[], b: readonly string[]): boolean {
   const set = new Set(a);

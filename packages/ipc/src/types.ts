@@ -6,6 +6,7 @@ export type {
   AppEvent,
   AuthorCandidateDto as AuthorCandidate,
   AuthorListDto as AuthorList,
+  AutoFetchedRepoDto as AutoFetchedRepo,
   AutoResolutionDto as AutoResolution,
   AutoSuggestionDto as AutoSuggestion,
   BackupRecord,

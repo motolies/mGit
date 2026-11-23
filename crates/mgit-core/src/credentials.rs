@@ -1,5 +1,6 @@
 //! 자격 증명 (AU-01·03). askpass 서버가 받은 프롬프트를 OS 키체인에서 먼저 찾고, 없으면 앱 대화상자
-//! (`CredentialPrompt`)에 묻는다. "기억" 이면 키체인에만 저장한다 (평문 파일 금지)
+//! (`CredentialPrompt`)에 묻는다. 묻지 않는 요청(`AskRequest::silent`, 자동 fetch)은 키체인에 없으면 묻지 않고 취소한다.
+//! "기억" 이면 키체인에만 저장한다 (평문 파일 금지)
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -247,6 +248,10 @@ impl AskpassService {
                     return AskReply {
                         secret: Some(secret),
                     };
+                }
+                // 묻지 않는 명령(자동 fetch 등 백그라운드)은 대화상자를 띄우지 않는다. git·ssh 는 취소로 보고 실패한다
+                if req.silent {
+                    return AskReply { secret: None };
                 }
                 // 2. 대화상자
                 let reply = prompt

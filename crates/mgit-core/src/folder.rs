@@ -16,7 +16,7 @@ use mgit_model::{
 };
 use serde::Serialize;
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::core::{Core, CoreInner};
 use crate::error::CoreError;
@@ -137,9 +137,37 @@ pub struct FolderSession {
     pub(crate) timeline: TimelineState,
     /// 이 폴더의 가벼운 세션 열기를 줄 세운다 (상한 검사와 잡기가 엇갈리지 않게, `light.rs`)
     pub(crate) light_open: tokio::sync::Mutex<()>,
+    /// 폴더 자동 fetch 태스크 (`folder_auto_fetch.rs`, 폴더를 닫을 때 중단)
+    auto_fetch: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl FolderSession {
+    /// 자동 fetch 태스크를 다시 건다: 돌던 태스크를 끊고 `start` 가 만든 태스크를 보관한다(`None` 이면 멈춘 채로 둔다).
+    /// 간격 읽기와 보관이 한 잠금 구간이라 폴더 열기와 간격 변경이 겹쳐도 옛 간격의 태스크가 남지 않는다
+    /// (`RepoSession::rearm_auto_fetch` 와 같다). `start` 안에서 다른 잠금을 잡지 않는다
+    pub(crate) fn rearm_auto_fetch(&self, start: impl FnOnce() -> Option<JoinHandle<()>>) {
+        let mut slot = self
+            .auto_fetch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(old) = slot.take() {
+            old.abort();
+        }
+        *slot = start();
+    }
+
+    /// 자동 fetch 를 멈춘다
+    pub(crate) fn stop_auto_fetch(&self) {
+        let handle = self
+            .auto_fetch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle {
+            handle.abort();
+        }
+    }
+
     /// 현재 하위 저장소 목록
     pub fn repos(&self) -> Vec<FoundRepo> {
         self.roster().into_iter().map(|r| r.found).collect()
@@ -319,7 +347,8 @@ async fn summarize(inner: &CoreInner, repo: FolderRepo) -> RepoSummary {
 }
 
 impl Core {
-    /// 폴더를 연다 (MR-01): 하위 저장소를 스캔하고 각 `.git` 을 감시한다. 최근 목록에 폴더로 기록한다
+    /// 폴더를 연다 (MR-01): 하위 저장소를 스캔하고 각 `.git` 을 감시하고 자동 fetch 를 건다. 최근 목록에 폴더로
+    /// 기록한다. 이미 열린 폴더면 그 세션을 돌려준다 (감시·자동 fetch 는 그대로)
     pub async fn open_folder(
         &self,
         path: &Path,
@@ -361,10 +390,12 @@ impl Core {
             root_watch: Mutex::new(None),
             timeline: TimelineState::default(),
             light_open: tokio::sync::Mutex::new(()),
+            auto_fetch: Mutex::new(None),
         });
         inner.folders_insert(Arc::clone(&session));
         self.watch_folder(&session, &repos, discovered);
         self.watch_root(&session);
+        inner.arm_folder_auto_fetch(&session);
         let _ = self
             .store()
             .recent_touch(&path, RecentKind::Folder, &repo_name(&path));
@@ -531,6 +562,8 @@ impl Core {
     /// LRU 규칙이고 이것은 누수를 막는 마지막 정리다
     pub fn close_folder(&self, session: SessionId) -> Result<(), CoreError> {
         let folder = self.inner_arc().folders_remove(session)?;
+        // 목록에서 뺀 뒤에 멈춘다: 겹쳐 건 루프는 거는 쪽이 등록을 다시 확인해 스스로 멈춘다 (`arm_folder_auto_fetch`)
+        folder.stop_auto_fetch();
         folder.stop_watches();
         folder.timeline.abort();
         self.release_folder_holds(session);
@@ -651,6 +684,7 @@ mod tests {
             root_watch: Mutex::new(None),
             timeline: TimelineState::default(),
             light_open: tokio::sync::Mutex::new(()),
+            auto_fetch: Mutex::new(None),
         };
         let primary = |cwd: &str| folder.primary_of(Path::new(cwd));
         assert_eq!(primary("/f/a"), Some(PathBuf::from("/f/a")));

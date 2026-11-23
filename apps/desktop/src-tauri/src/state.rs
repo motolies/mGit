@@ -212,9 +212,11 @@ async fn build_core(
     let runner = Arc::new(TokioGitRunner::new(runner_cfg).await?);
     let git_path = runner.git_path().display().to_string();
     let store = open_store(data_dir.as_ref());
+    // 자동 fetch 간격은 설정(⌘,)에 저장된 값이다 (없으면 5분). 실행 중 변경은 `auto_fetch_set` 이 코어에 바로 건다
+    let auto_fetch_minutes = crate::commands_app::saved_auto_fetch_minutes(store.as_ref());
     let cfg = CoreConfig {
         backup_dir: data_dir.map(|d| d.join("backups")),
-        auto_fetch_interval: Some(std::time::Duration::from_secs(5 * 60)),
+        auto_fetch_interval: crate::commands_app::auto_fetch_interval(auto_fetch_minutes),
         command_path: login_path,
         ..CoreConfig::default()
     };

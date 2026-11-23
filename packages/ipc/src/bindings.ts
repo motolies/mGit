@@ -288,6 +288,13 @@ export const commands = {
 	externalAppsGet: () => __TAURI_INVOKE<ExternalApps>("external_apps_get"),
 	/**  외부 앱 설정 저장 */
 	externalAppsSet: (apps: ExternalApps) => __TAURI_INVOKE<null>("external_apps_set", { apps }),
+	/**  자동 fetch 간격 읽기 (분, 0 이면 끔). 저장된 값이 없으면 5분이다 */
+	autoFetchGet: () => __TAURI_INVOKE<number>("auto_fetch_get"),
+	/**
+	 *  자동 fetch 간격 저장 (분, 0~1440, 0 이면 끔). 저장한 뒤 곧바로 적용한다 — 열린 저장소 탭과 폴더의 자동 fetch 를
+	 *  새 간격으로 다시 건다
+	 */
+	autoFetchSet: (minutes: number) => __TAURI_INVOKE<null>("auto_fetch_set", { minutes }),
 	/**
 	 *  외부 앱으로 열기 (UX-07). Reveal 은 opener 플러그인, 나머지는 프리셋 명령을 셸 없이 띄우고
 	 *  실패하면 다음 후보로 넘어간다
@@ -643,6 +650,34 @@ export type AuthorListDto = {
 	truncated: boolean,
 	/**  시간 상한(저장소마다 10초)에 걸린 저장소가 있어 일부만 찼다 (오류가 아니다) */
 	timedOut: boolean,
+};
+
+/**
+ *  폴더 자동 fetch 의 저장소 하나 (`folderAutoFetched`). `path` 는 폴더 목록의 대표 경로(요약의 `path` 와 같은 꼴),
+ *  `refs` 는 바뀐 원격 추적 ref(`origin/main` 꼴, 실패면 빈 목록), `error` 는 실패 메시지(URL 토큰을 가림)
+ */
+export type AutoFetchedRepoDto = AutoFetchedRepoDto_Serialize | AutoFetchedRepoDto_Deserialize;
+
+/**
+ *  폴더 자동 fetch 의 저장소 하나 (`folderAutoFetched`). `path` 는 폴더 목록의 대표 경로(요약의 `path` 와 같은 꼴),
+ *  `refs` 는 바뀐 원격 추적 ref(`origin/main` 꼴, 실패면 빈 목록), `error` 는 실패 메시지(URL 토큰을 가림)
+ */
+export type AutoFetchedRepoDto_Deserialize = {
+	path: string,
+	name: string,
+	refs: string[],
+	error?: string | null,
+};
+
+/**
+ *  폴더 자동 fetch 의 저장소 하나 (`folderAutoFetched`). `path` 는 폴더 목록의 대표 경로(요약의 `path` 와 같은 꼴),
+ *  `refs` 는 바뀐 원격 추적 ref(`origin/main` 꼴, 실패면 빈 목록), `error` 는 실패 메시지(URL 토큰을 가림)
+ */
+export type AutoFetchedRepoDto_Serialize = {
+	path: string,
+	name: string,
+	refs: string[],
+	error: string | null,
 };
 
 /**  자동 결합 제안의 해결 */
@@ -2632,7 +2667,12 @@ export type SessionEvent_Deserialize = { type: "graphLoadStarted"; session: numb
 /**  질의의 ref 가 사라져 코어가 질의를 좁혔다. `query` 가 이제 세션의 질의다 */
 { type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Deserialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Deserialize; op?: InProgressOp_Deserialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Deserialize } | 
 /**  자동 fetch 로 바뀐 원격 추적 ref (UX-09) */
-{ type: "autoFetched"; session: number; refs: string[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent?: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Deserialize } | 
+{ type: "autoFetched"; session: number; refs: string[] } | 
+/**
+ *  폴더 자동 fetch 한 바퀴의 결과 (RM-02). 폴더 세션 채널로만 온다. ref 가 바뀌었거나 실패한 저장소만 싣고, 그런
+ *  저장소가 없으면 오지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `folderChanged`(`refs: true`)가 따로 온다
+ */
+{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Deserialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent?: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Deserialize } | 
 /**
  *  폴더 세션의 하위 저장소가 바뀌었다 (MR-03). `refs` 면 타임라인도 다시 읽는다.
  *  `repo` 는 바뀐 저장소의 경로다 (PF-02). 없으면 어느 저장소인지 모르는 것이라 전부 다시 읽는다
@@ -2655,7 +2695,12 @@ export type SessionEvent_Serialize = { type: "graphLoadStarted"; session: number
 /**  질의의 ref 가 사라져 코어가 질의를 좁혔다. `query` 가 이제 세션의 질의다 */
 { type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Serialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Serialize; op: InProgressOp_Serialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Serialize } | 
 /**  자동 fetch 로 바뀐 원격 추적 ref (UX-09) */
-{ type: "autoFetched"; session: number; refs: string[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Serialize } | 
+{ type: "autoFetched"; session: number; refs: string[] } | 
+/**
+ *  폴더 자동 fetch 한 바퀴의 결과 (RM-02). 폴더 세션 채널로만 온다. ref 가 바뀌었거나 실패한 저장소만 싣고, 그런
+ *  저장소가 없으면 오지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `folderChanged`(`refs: true`)가 따로 온다
+ */
+{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Serialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Serialize } | 
 /**
  *  폴더 세션의 하위 저장소가 바뀌었다 (MR-03). `refs` 면 타임라인도 다시 읽는다.
  *  `repo` 는 바뀐 저장소의 경로다 (PF-02). 없으면 어느 저장소인지 모르는 것이라 전부 다시 읽는다

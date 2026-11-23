@@ -286,6 +286,14 @@ describe('Git 도구 창 탭 (tablist)', () => {
       fireEvent.keyDown(log, { key: 'ArrowRight' });
     });
     await tick();
+    // 폴더 탭의 탭 순서: 로그 → 작업 기록 → 콘솔
+    expect(useAppStore.getState().dock.gitTab).toBe('history');
+    const historyTab = dock.getByRole('tab', { name: S.dock.tabs.history });
+    expect(document.activeElement).toBe(historyTab);
+    act(() => {
+      fireEvent.keyDown(historyTab, { key: 'ArrowRight' });
+    });
+    await tick();
     expect(useAppStore.getState().dock.gitTab).toBe('console');
     const consoleTab = dock.getByRole('tab', { name: S.dock.tabs.console });
     expect(document.activeElement).toBe(consoleTab);

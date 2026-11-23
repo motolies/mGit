@@ -1,6 +1,7 @@
 import type { GraphScrollAnchor } from '@mgit/graph-view';
 import {
   type AuthorList,
+  type AutoFetchedRepo,
   type BatchOp,
   type BatchResult,
   type CommitDetail,
@@ -27,12 +28,14 @@ import {
   type TimelineInfo,
   toIpcError,
 } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { createStore, type StoreApi } from 'zustand';
 import { commandFailed, type FolderLogEntry, prependCapped } from './command-log';
 import { type ContainingEntry, createContainingLoader } from './containing-loader';
 import { describeError } from './errors';
 import { createFileTree, type FileTreeStore, type SelectionSet } from './file-tree';
 import { relativeTo } from './fs-path';
+import { notifyHub } from './notify';
 
 export type FolderFilter = 'all' | 'changed' | 'behind' | 'inProgress';
 export type FolderSort = 'name' | 'changed' | 'behind';
@@ -116,6 +119,76 @@ export function selectionInScope(
 function samePaths(a: readonly string[], b: readonly string[]): boolean {
   const set = new Set(a);
   return set.size === new Set(b).size && b.every((p) => set.has(p));
+}
+
+/** 작업 기록의 상한 (폴더 탭마다, 메모리에만 둔다) */
+export const TASK_HISTORY_CAPACITY = 100;
+
+/** 작업 기록 한 줄의 종류: 일괄 작업 / 일괄 commit / 자동 fetch */
+export type TaskKind = 'batch' | 'commit' | 'autoFetch';
+
+/**
+ * 작업 기록 한 줄 (Git 도구 창의 작업 기록 탭). 일괄 작업·commit 은 결과(`result`)나 실행하지 못한 사유(`error`)를,
+ * 자동 fetch 는 바뀌었거나 실패한 저장소(`autoFetch`)를 담는다. `repeat` 은 같은 실패만 이어진 자동 fetch 를 한 줄로
+ * 합친 횟수다 (없으면 1번)
+ */
+export interface TaskEntry {
+  id: number;
+  kind: TaskKind;
+  label: string;
+  /** 시작·끝 시각 (epoch ms). 합친 자동 fetch 줄은 끝 시각만 마지막 것으로 바뀐다 */
+  startedAt: number;
+  finishedAt: number;
+  result: BatchResult | null;
+  error: string | null;
+  autoFetch?: AutoFetchedRepo[];
+  repeat?: number;
+}
+
+/** 자동 fetch 에서 실패한 저장소 경로들 */
+function autoFetchFailures(repos: readonly AutoFetchedRepo[]): string[] {
+  return repos.filter((r) => (r.error ?? null) !== null).map((r) => r.path);
+}
+
+/** 자동 fetch 결과에 바뀐 ref 가 하나도 없는지 (실패만 있다) */
+function autoFetchQuiet(repos: readonly AutoFetchedRepo[]): boolean {
+  return repos.every((r) => r.refs.length === 0);
+}
+
+/**
+ * 자동 fetch 줄을 작업 기록에 더한다 (순수 함수). 바뀐 ref 없이 실패만 있고, 실패한 저장소가 가장 최근 자동 fetch 줄
+ * (그 줄도 실패만)과 같으면 새 줄을 만들지 않는다 — 그 줄을 맨 위로 올리고 끝 시각·저장소 결과·반복 수만 바꾼다.
+ * 간격마다 같은 실패가 쌓이지 않게 한다. 그 밖에는 최신을 앞에 붙이고 상한을 넘는 오래된 줄을 버린다
+ */
+export function appendAutoFetch(
+  history: readonly TaskEntry[],
+  entry: TaskEntry,
+  cap: number = TASK_HISTORY_CAPACITY,
+): TaskEntry[] {
+  const repos = entry.autoFetch ?? [];
+  const index = history.findIndex((e) => e.kind === 'autoFetch');
+  const last = history[index];
+  const lastRepos = last?.autoFetch ?? [];
+  if (
+    last &&
+    autoFetchQuiet(repos) &&
+    autoFetchQuiet(lastRepos) &&
+    samePaths(autoFetchFailures(repos), autoFetchFailures(lastRepos))
+  ) {
+    const merged: TaskEntry = {
+      ...last,
+      finishedAt: entry.finishedAt,
+      autoFetch: repos,
+      repeat: (last.repeat ?? 1) + 1,
+    };
+    return [merged, ...history.slice(0, index), ...history.slice(index + 1)];
+  }
+  return prependCapped(history, entry, cap);
+}
+
+/** 실행하지 못한 일괄 작업의 라벨 (성공·부분 실패는 코어가 결과에 준 라벨을 쓴다) */
+function batchOpLabel(op: BatchOp): string {
+  return S.folder.history.ops[op.kind];
 }
 
 /** 두 ref 범위가 같은지 (종류와 이름 순서까지) */
@@ -266,7 +339,11 @@ export interface FolderState {
   settingsOpen: boolean;
   batchRunning: boolean;
   batchProgress: { label: string; phase: string; percent: number | null } | null;
-  batchResult: BatchResult | null;
+  /**
+   * 작업 기록 (Git 도구 창의 작업 기록 탭): 끝난 일괄 작업·commit 과 자동 fetch. 최신이 앞이고 상한은
+   * `TASK_HISTORY_CAPACITY`. 메모리에만 두어 폴더 탭을 닫으면 사라진다
+   */
+  taskHistory: TaskEntry[];
   changes: RepoChanges[];
   changesLoading: boolean;
   /** 변경 목록을 (전부) 읽지 못한 사유 (Commit 도구 창의 오류 상태). 다시 읽으면 비운다 */
@@ -334,10 +411,12 @@ export interface FolderState {
   setSelected(paths: readonly string[]): void;
   /**
    * 일괄 작업을 실행한다. `repos` 를 주지 않으면 고른 저장소(`selectedRepos()`)가 대상이다.
-   * 어느 쪽이든 빈 목록은 "전부"를 뜻한다. 실행하지 못했으면 null (사유는 `error`)
+   * 어느 쪽이든 빈 목록은 "전부"를 뜻한다. 실행하지 못했으면 null (사유는 `error`). 끝나면 결과나 사유를 작업 기록에
+   * 남긴다 (이미 일괄 작업 중이라 부르지 않았으면 남기지 않는다)
    */
   runBatch(op: BatchOp, repos?: readonly string[]): Promise<BatchResult | null>;
-  clearBatchResult(): void;
+  /** 작업 기록을 비운다 (작업 기록 탭의 "기록 지우기") */
+  clearTaskHistory(): void;
   loadChanges(): Promise<void>;
   /**
    * 변경 목록을 아직 읽지 않았으면 한 번 읽는다 (프로젝트 트리의 파일 상태 색, PT-06). 한 번 읽은 뒤에는 전체
@@ -353,7 +432,8 @@ export interface FolderState {
   writeIndex(repo: string, op: IndexOp, target: IndexTarget): Promise<IndexWriteOutcome>;
   /**
    * 일괄 커밋 (`folderCommit`). 실행 중에는 `batchRunning` 이다. 끝나면 대상 저장소의 요약·브랜치·변경을 다시 읽은
-   * 뒤에 결과를 돌려준다 (Commit and Push 의 push 확인창이 새 ahead 를 보도록). 부르지 못했으면 null
+   * 뒤에 결과를 돌려준다 (Commit and Push 의 push 확인창이 새 ahead 를 보도록). 부르지 못했으면 null. 결과나 사유를
+   * 작업 기록에 남긴다
    */
   commitAll(repos: string[], message: string, stageAll: boolean): Promise<BatchResult | null>;
   loadSettings(): Promise<void>;
@@ -648,6 +728,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
   let pendingReveal: TimelineSelection | null = null;
   // 콘솔을 보고 있는 화면 수 (0 이면 실패한 명령을 안 본 실패로 센다)
   let logViewers = 0;
+  // 작업 기록 줄의 id (폴더 탭마다 오른다)
+  let taskSeq = 0;
   const timelineCache = new GraphRangeCache(folderTimelineSource(client, id));
   const fileTree = createFileTree({
     list: (dir, limit) => client.fsListDir(id, dir, limit),
@@ -778,6 +860,56 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
     const patchTimeline = (patch: Partial<TimelineState>) =>
       set({ timeline: { ...get().timeline, ...patch } });
 
+    /** 끝난 일괄 작업·commit 을 작업 기록 맨 앞에 남긴다. 결과가 있으면 코어의 라벨을, 없으면 `label` 을 쓴다 */
+    const recordTask = (
+      kind: 'batch' | 'commit',
+      label: string,
+      startedAt: number,
+      outcome: { result: BatchResult } | { error: string },
+    ) => {
+      const result = 'result' in outcome ? outcome.result : null;
+      const entry: TaskEntry = {
+        id: ++taskSeq,
+        kind,
+        label: result?.label || label,
+        startedAt,
+        finishedAt: Date.now(),
+        result,
+        error: 'error' in outcome ? outcome.error : null,
+      };
+      set({ taskHistory: prependCapped(get().taskHistory, entry, TASK_HISTORY_CAPACITY) });
+    };
+
+    /**
+     * 폴더 자동 fetch 결과 (`folderAutoFetched`): 작업 기록에 남기고(같은 실패만 이어지면 한 줄로 합친다), 바뀐 원격 ref
+     * 가 있으면 저장소 탭의 자동 fetch 와 같은 꼴로 알린다 (`저장소: ref` 를 앞 5개까지). 바뀐 저장소의 다시 읽기는 앞서 온
+     * `folderChanged` 가 맡는다
+     */
+    const recordAutoFetch = (repos: readonly AutoFetchedRepo[]) => {
+      const now = Date.now();
+      const list = repos.map((r) => ({ ...r, error: r.error ?? null }));
+      const entry: TaskEntry = {
+        id: ++taskSeq,
+        kind: 'autoFetch',
+        label: S.folder.history.autoFetch,
+        startedAt: now,
+        finishedAt: now,
+        result: null,
+        error: null,
+        autoFetch: list,
+      };
+      set({ taskHistory: appendAutoFetch(get().taskHistory, entry) });
+      const changed = list.flatMap((r) => r.refs.map((ref) => `${r.name}: ${ref}`));
+      if (changed.length > 0) {
+        notifyHub.notify({
+          kind: 'info',
+          title: S.notify.autoFetched(changed.length),
+          message: changed.slice(0, 5).join(', '),
+          os: true,
+        });
+      }
+    };
+
     // 상세 칸에 보이는 커밋의 포함 branch (CD-03). 언제 읽고 무엇을 버리는지는 공용 지연 읽기가 정한다
     const containing = createContainingLoader<TimelineSelection>({
       keyOf: (key) => `${key.repoPath}\u0000${key.oid}`,
@@ -907,7 +1039,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       settingsOpen: false,
       batchRunning: false,
       batchProgress: null,
-      batchResult: null,
+      taskHistory: [],
       changes: [],
       changesLoading: false,
       changesError: null,
@@ -993,6 +1125,10 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         }
         if (event.type === 'operationFinished') {
           set({ batchRunning: false, batchProgress: null });
+          return;
+        }
+        if (event.type === 'folderAutoFetched') {
+          recordAutoFetch(event.repos);
           return;
         }
         if (event.type === 'folderChanged') {
@@ -1136,13 +1272,17 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         if (get().batchRunning) {
           return null;
         }
-        set({ batchRunning: true, batchResult: null, error: null });
+        const startedAt = Date.now();
+        set({ batchRunning: true, error: null });
         try {
           const r = await client.folderBatch(id, op, [...(repos ?? get().selectedRepos())]);
-          set({ batchResult: r, batchRunning: false, batchProgress: null });
+          set({ batchRunning: false, batchProgress: null });
+          recordTask('batch', batchOpLabel(op), startedAt, { result: r });
           return r;
         } catch (e) {
-          set({ batchRunning: false, batchProgress: null, error: describeError(e) });
+          const error = describeError(e);
+          set({ batchRunning: false, batchProgress: null, error });
+          recordTask('batch', batchOpLabel(op), startedAt, { error });
           return null;
         } finally {
           // pull·checkout 등은 작업 트리 파일을 바꾼다. 실패해도 일부 저장소에서는 바뀌었을 수 있다
@@ -1150,8 +1290,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         }
       },
 
-      clearBatchResult() {
-        set({ batchResult: null });
+      clearTaskHistory() {
+        set({ taskHistory: [] });
       },
 
       async loadChanges() {
@@ -1205,15 +1345,19 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
 
       async commitAll(repos, message, stageAll) {
+        const startedAt = Date.now();
         set({ batchRunning: true, error: null });
         try {
           const r = await client.folderCommit(id, repos, message, stageAll);
           // 대상 저장소를 다시 읽은 뒤에 끝낸다: 커밋된 줄이 빠지고 ahead 가 오른 값이 실린 다음에 체크·버튼을 푼다
           await reloadNow(r.results.map((row) => row.path));
-          set({ batchResult: r, batchRunning: false });
+          set({ batchRunning: false });
+          recordTask('commit', S.folder.history.ops.commit, startedAt, { result: r });
           return r;
         } catch (e) {
-          set({ batchRunning: false, error: describeError(e) });
+          const error = describeError(e);
+          set({ batchRunning: false, error });
+          recordTask('commit', S.folder.history.ops.commit, startedAt, { error });
           return null;
         }
       },

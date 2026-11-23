@@ -739,7 +739,6 @@ export const enRepository: Pick<
           `${formatNumber(k)} skipped`,
           `${formatNumber(f)} failed`,
         ].join(' · '),
-      close: 'Close',
       openWorktrees: 'Open the created worktree folders?',
       ok: 'Done',
       skipped: 'Skipped',
@@ -760,6 +759,32 @@ export const enRepository: Pick<
       worktreeRoot: 'Default worktree folder',
       save: 'Save',
       saved: 'Saved',
+    },
+    // Git 도구 창의 작업 기록 탭 (폴더 탭)
+    history: {
+      title: 'Task history',
+      count: (n: number) => `${formatNumber(n)} ${plural(n, 'entry', 'entries')}`,
+      empty:
+        'Batch operations in this folder (fetch, pull, push, commit, and more) and auto-fetch results appear here with the time they finished. The history is cleared when you close the folder tab',
+      clear: 'Clear history',
+      autoFetch: 'Auto fetch',
+      autoFetchSummary: (updated: number, failed: number) =>
+        `${formatNumber(updated)} ${plural(updated, 'repository', 'repositories')} updated · ${formatNumber(failed)} failed`,
+      repeat: (n: number) => `×${formatNumber(n)}`,
+      repeatTip: (n: number) => `Same result ${formatNumber(n)} times in a row`,
+      notRun: "Couldn't run",
+      ops: {
+        fetch: 'Batch fetch',
+        pull: 'Batch pull',
+        push: 'Batch push',
+        createBranch: 'Batch create branch',
+        checkout: 'Batch checkout',
+        checkoutRemote: 'Batch checkout',
+        worktree: 'Batch worktree',
+        updateBranch: 'Batch update',
+        renameBranch: 'Batch rename',
+        commit: 'Batch commit',
+      },
     },
   },
   submodule: {

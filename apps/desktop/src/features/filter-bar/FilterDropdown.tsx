@@ -19,6 +19,7 @@ import {
 import styles from './FilterBar.module.css';
 import {
   type ButtonSummary,
+  checkShown,
   type DateRange,
   dayInputOf,
   dayOf,
@@ -30,6 +31,7 @@ import {
   sameChecked,
   splitList,
   toggleChecked,
+  uncheckShown,
 } from './filter-model';
 
 /** 닫기: `restoreFocus` 면 단추로 포커스를 돌린다 (Esc·안에서 고른 뒤). 바깥 클릭·Tab 으로 닫으면 돌리지 않는다 */
@@ -219,7 +221,8 @@ interface ChecklistDropdownProps {
 
 /**
  * 여러 개 체크 드롭다운 (저장소·branch·작성자). 열 때 지금 값을 초안으로 복사하고, 체크는 초안만 바꾸며, 닫을 때
- * 바뀐 것이 있으면 한 번 적용한다. 검색 칸에서 ↑↓ 로 항목을 옮기고 Enter 로 체크한다
+ * 바뀐 것이 있으면 한 번 적용한다. 검색 칸에서 ↑↓ 로 항목을 옮기고 Enter 로 체크한다. 검색 칸 아래의 전체 선택·해제도
+ * 초안만 바꾼다 (보이는 항목에만)
  */
 export function ChecklistDropdown({
   name,
@@ -285,6 +288,14 @@ export function ChecklistDropdown({
             options={all}
             checked={draft}
             onToggle={(id) => setChecked(toggleChecked(draftRef.current, id, exclusive))}
+            onSetShown={(ids, check) =>
+              setChecked(
+                check
+                  ? checkShown(draftRef.current, ids, exclusive)
+                  : uncheckShown(draftRef.current, ids),
+              )
+            }
+            exclusive={exclusive}
             inputRef={searchRef}
             status={status}
             note={note}
@@ -316,19 +327,58 @@ interface ChecklistProps {
   options: readonly CheckOption[];
   checked: readonly string[];
   onToggle: (id: string) => void;
+  /** 전체 선택(`check`)·전체 해제: 지금 보이는(검색으로 걸러진) 항목의 id 를 넘긴다 */
+  onSetShown: (ids: string[], check: boolean) => void;
+  /** 다른 항목과 함께 고를 수 없는 항목 (전체 선택이 바꿀 것이 있는지 볼 때 쓴다) */
+  exclusive?: readonly string[];
   inputRef: RefObject<HTMLInputElement | null>;
   status?: ReactNode;
   note?: ReactNode;
 }
 
-/** 검색 칸 + 체크 목록 (listbox). 포커스는 검색 칸에 두고 지금 항목을 `aria-activedescendant` 로 알린다 */
-function Checklist({ name, options, checked, onToggle, inputRef, status, note }: ChecklistProps) {
+/**
+ * 검색 칸 + 전체 선택·해제 + 체크 목록 (listbox). 포커스는 검색 칸에 두고 지금 항목을 `aria-activedescendant` 로
+ * 알린다. 전체 선택·해제는 지금 보이는 항목에만 적용하고, 바꿀 것이 없으면 꺼진다
+ */
+function Checklist({
+  name,
+  options,
+  checked,
+  onToggle,
+  onSetShown,
+  exclusive,
+  inputRef,
+  status,
+  note,
+}: ChecklistProps) {
   const [search, setSearch] = useState('');
   const [active, setActive] = useState(0);
   const listId = useId();
   const shown = filterOptions(options, search);
   const current = Math.min(active, shown.length - 1);
   const optionId = (i: number) => `${listId}-o${i}`;
+  const shownIds = shown.map((o) => o.id);
+  const canCheck = !sameChecked(checkShown(checked, shownIds, exclusive), checked);
+  const canUncheck = uncheckShown(checked, shownIds).length !== checked.length;
+  /**
+   * 전체 선택·해제 단추. 누른 뒤 포커스를 검색 칸으로 돌린다 — 키보드로 누른 단추가 바로 꺼지면 포커스가 문서로 빠져
+   * Esc·↑↓ 가 팝오버에 닿지 않는다 (마우스는 `onMouseDown` 에서 이미 검색 칸에 남는다)
+   */
+  const bulkButton = (check: boolean) => (
+    <button
+      type="button"
+      className={styles.linkButton}
+      disabled={!(check ? canCheck : canUncheck)}
+      // 누르는 동안 포커스를 검색 칸에 둔다 (팝오버 밖으로 나간 것으로 보지 않게, 옵션 행과 같다)
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        onSetShown(shownIds, check);
+        inputRef.current?.focus();
+      }}
+    >
+      {check ? S.selection.all : S.selection.none}
+    </button>
+  );
 
   /** 지금 항목을 옮기고 보이게 한다 */
   const move = (next: number) => {
@@ -382,6 +432,10 @@ function Checklist({ name, options, checked, onToggle, inputRef, status, note }:
           }}
           onKeyDown={onKeyDown}
         />
+      </div>
+      <div className={styles.listTools}>
+        {bulkButton(true)}
+        {bulkButton(false)}
       </div>
       {status}
       <div id={listId} className={styles.list} role="listbox" aria-multiselectable="true">

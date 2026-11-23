@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { filterOptions, orderChecked } from '../features/filter-bar/FilterDropdown';
 import {
   buttonSummary,
+  checkShown,
   clearedQuery,
   conditionSummary,
   dayInputOf,
@@ -31,6 +32,7 @@ import {
   textPending,
   toggleChecked,
   toggledQuery,
+  uncheckShown,
   withAuthors,
   withDates,
   withRevs,
@@ -150,6 +152,28 @@ describe('필터 상태 → 질의 (작성자·날짜·branch·모두 지우기)
     expect(toggleChecked([HEAD_OPTION_ID], 'a', ex)).toEqual(['a']);
     expect(sameChecked(['a', 'b'], ['b', 'a'])).toBe(true);
     expect(sameChecked(['a'], ['a', 'b'])).toBe(false);
+  });
+
+  it('전체 선택은 보이는 항목만 더하고 보이지 않는 체크는 남긴다. HEAD 는 더하지 않고 체크돼 있었으면 뺀다', () => {
+    const ex = [HEAD_OPTION_ID];
+    // 검색으로 b·c 만 보일 때: a(안 보임)는 남고 b·c 가 더해진다 (중복 없이)
+    expect(checkShown(['a', 'b'], ['b', 'c'], ex)).toEqual(['a', 'b', 'c']);
+    // 보이는 목록에 HEAD 가 있어도 더하지 않는다
+    expect(checkShown([], [HEAD_OPTION_ID, 'main', 'dev'], ex)).toEqual(['main', 'dev']);
+    // HEAD 가 체크돼 있었으면 다른 항목과 함께 둘 수 없으므로 뺀다 (toggleChecked 의 배타 규칙)
+    expect(checkShown([HEAD_OPTION_ID], [HEAD_OPTION_ID, 'main'], ex)).toEqual(['main']);
+    // 더할 것이 없으면(보이는 것이 HEAD 뿐이거나 이미 모두 체크) 그대로다 — HEAD 만 풀리지 않는다
+    expect(checkShown([HEAD_OPTION_ID], [HEAD_OPTION_ID], ex)).toEqual([HEAD_OPTION_ID]);
+    expect(checkShown(['b', 'c'], ['b', 'c'], ex)).toEqual(['b', 'c']);
+    // 배타 항목이 없는 목록(저장소·작성자)은 보이는 것 전부
+    expect(checkShown(['x'], ['y', 'z'])).toEqual(['x', 'y', 'z']);
+  });
+
+  it('전체 해제는 보이는 항목의 체크만 뺀다 (보이지 않는 체크·HEAD 는 보일 때만 빠진다)', () => {
+    expect(uncheckShown(['a', 'b', 'c'], ['b', 'c', 'd'])).toEqual(['a']);
+    expect(uncheckShown([HEAD_OPTION_ID], ['main'])).toEqual([HEAD_OPTION_ID]);
+    expect(uncheckShown([HEAD_OPTION_ID], [HEAD_OPTION_ID, 'main'])).toEqual([]);
+    expect(uncheckShown([], ['a'])).toEqual([]);
   });
 
   it('적용 순서는 목록 순서이고, 목록에 없는 값(지금 후보에 없는 이메일)은 앞에 둔다', () => {

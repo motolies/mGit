@@ -437,6 +437,27 @@
   text-decoration: underline;
 }
 
+/* 바꿀 것이 없는 링크 단추 (체크 목록의 전체 선택·해제) */
+.linkButton:disabled {
+  color: var(--fg-muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.linkButton:disabled:hover {
+  text-decoration: none;
+}
+
+/* 검색 칸 아래의 전체 선택·해제 줄: 지금 보이는(검색으로 걸러진) 항목에만 적용한다 */
+.listTools {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-4);
+  margin-top: calc(-1 * var(--space-2));
+  padding: 0 var(--space-4) var(--space-2);
+  font-size: 11px;
+}
+
 /* --- 팝오버 안: 날짜 --- */
 .dates {
   display: flex;

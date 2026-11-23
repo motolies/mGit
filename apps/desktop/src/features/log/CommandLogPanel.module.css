@@ -1,0 +1,163 @@
+/* 도구 창 슬롯의 내용 자리를 채운다 (높이는 슬롯이 정한다) */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--fg-muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 70px 36px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 폴더 탭 (W19 ②): 시각 뒤에 저장소 칸. 줄마다 따로 격자라 저장소 칸은 고정 폭이어야 열이 맞는다 */
+.row[data-repo="true"] {
+  grid-template-columns: 70px 128px 36px minmax(0, 1fr) auto auto;
+}
+
+/* 저장소 칸: 누르면 그 저장소로 좁힌다 (좁히는 중이면 눌린 모양) */
+.repo {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.repo:hover {
+  background: var(--bg-hover);
+}
+
+.repo:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.repo[aria-pressed="true"] {
+  background: var(--bg-selected-inactive);
+}
+
+.repoName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--repo-color);
+}
+
+/* 좁혀 보는 중 표시줄: 목록 위 한 줄 */
+.narrowBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  padding: var(--space-1) 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-selected-inactive);
+}
+
+.narrowText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 좁힘 줄(--bg-selected-inactive) 위의 링크: 강조 글자색은 다크에서 3.52:1 이라 본문색 + 밑줄로 링크임을 보인다 (W19 ③) */
+.showAll {
+  all: unset;
+  cursor: pointer;
+  color: var(--fg);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.showAll:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.time,
+.meta,
+.kind {
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.command {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.row[data-failed="true"] .command {
+  color: var(--danger);
+}
+
+.copy {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent-text);
+  padding: 0 4px;
+}
+
+/* 키보드 포커스 (W19 ③): 줄은 안쪽 테두리, 줄 안의 단추는 all: unset 이 지운 링을 다시 그린다 */
+.row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.command:focus-visible,
+.copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.stderr {
+  grid-column: 1 / -1;
+  margin: 2px 0 4px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+}

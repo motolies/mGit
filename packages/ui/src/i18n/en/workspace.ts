@@ -1,0 +1,573 @@
+import { formatBytes, formatNumber, plural } from '../../format';
+import type { Strings } from '../../strings';
+
+// 영어 사전: 앱·상태·작업 공간·브랜치·필터·프로젝트·커밋·변경·diff 구역 (ko.ts 의 같은 구역과 키가 같다)
+export const enWorkspace: Pick<
+  Strings,
+  | 'app'
+  | 'date'
+  | 'toolbar'
+  | 'status'
+  | 'operation'
+  | 'log'
+  | 'dock'
+  | 'workspace'
+  | 'branches'
+  | 'filterBar'
+  | 'project'
+  | 'fileView'
+  | 'repoSession'
+  | 'opBand'
+  | 'conflictLeave'
+  | 'folderClose'
+  | 'commitTool'
+  | 'changes'
+  | 'commit'
+  | 'diff'
+> = {
+  app: {
+    title: 'mGit',
+  },
+  date: {
+    justNow: 'Just now',
+    minutesAgo: (minutes: number) => `${minutes} min ago`,
+    today: (time: string) => `Today ${time}`,
+    yesterday: (time: string) => `Yesterday ${time}`,
+  },
+  toolbar: {
+    openRepo: 'Open repository',
+    opening: 'Opening…',
+    closeRepo: 'Close repository',
+    tabsLabel: 'Open tabs',
+    refresh: 'Refresh',
+    log: 'Git console',
+    cancel: 'Cancel',
+    theme: {
+      label: 'Theme',
+      light: 'Light',
+      dark: 'Dark',
+      system: 'System',
+    },
+  },
+  status: {
+    noRepo: 'No repository open',
+    opening: 'Opening repository…',
+    loading: (n: number) => `${formatNumber(n)} ${plural(n, 'commit', 'commits')} (loading…)`,
+    loaded: (n: number) => `${formatNumber(n)} ${plural(n, 'commit', 'commits')}`,
+    reloading: 'Refreshing graph…',
+    gitVersion: (v: string) => `git ${v}`,
+    gitUnavailable: 'git not found',
+    detached: 'HEAD (detached)',
+    unborn: (branch: string) => `${branch} (no commits)`,
+    activeRepo: (path: string) => `Active repo: ${path}`,
+    noActiveRepo: 'No active repo',
+    noChanges: 'No changes',
+    staged: (n: number) => `${formatNumber(n)} staged`,
+    unstaged: (n: number) => `${formatNumber(n)} changed`,
+    untracked: (n: number) => `${formatNumber(n)} untracked`,
+    conflicted: (n: number) => `${formatNumber(n)} ${plural(n, 'conflict', 'conflicts')}`,
+    ahead: (n: number) => `↑${n}`,
+    behind: (n: number) => `↓${n}`,
+    stashes: (n: number) => `${formatNumber(n)} ${plural(n, 'stash', 'stashes')}`,
+    op: {
+      merge: 'MERGING',
+      rebase: (step: number, total: number) => `REBASING ${step}/${total}`,
+      cherryPick: 'CHERRY-PICKING',
+      revert: 'REVERTING',
+      bisect: 'BISECTING',
+      am: 'APPLYING',
+    },
+  },
+  operation: {
+    running: (label: string) => `Running ${label}…`,
+    percent: (p: number) => `${p}%`,
+    finished: (label: string) => `${label} completed`,
+    failed: (label: string) => `${label} failed`,
+    cancelled: (label: string) => `${label} canceled`,
+    lockLeft: 'index.lock is still present. Delete it from a terminal or try again in a moment',
+  },
+  log: {
+    title: 'Command log',
+    empty: 'No git commands run yet',
+    copy: 'Copy',
+    copied: 'Copied',
+    write: 'Write',
+    read: 'Read',
+    cancelled: 'Canceled',
+    exit: (code: number | null) => (code === null ? 'No exit code' : `Exit ${code}`),
+    elapsed: (ms: number) => `${ms}ms`,
+    folderEmpty:
+      "Write and network commands (fetch, pull, push, commit, stage, etc.) run in this folder's repositories appear here. Commands that only read status are not shown",
+    repoEmpty: (repo: string) => `No commands logged for ${repo}`,
+    narrowed: (repo: string) => `Showing ${repo} only`,
+    showAll: 'Show all',
+    narrowTip: (repo: string) => `Show ${repo} only`,
+    widenTip: (repo: string) => `Showing ${repo} only — click to show all`,
+    cwdTip: (cwd: string) => `Working directory: ${cwd}`,
+    unseenFailures: (n: number) =>
+      `${formatNumber(n)} ${plural(n, 'command', 'commands')} failed since you last viewed the console`,
+  },
+  dock: {
+    label: 'Bottom tool window',
+    git: 'Git',
+    tabs: {
+      log: 'Log',
+      console: 'Console',
+    },
+    maximize: 'Maximize tool window',
+    restore: 'Restore tool window size',
+    hide: 'Hide tool window',
+    resize: 'Resize tool window',
+  },
+  workspace: {
+    stripe: 'Tool windows',
+    resizeLeft: 'Resize left tool window',
+    editorTabs: 'Editor tabs',
+    overview: 'Overview',
+    closeTab: (title: string) => `Close ${title}`,
+    pinHint: 'Double-click to pin the tab',
+    commitDiffTitle: (name: string, hash: string) => `${name} @${hash}`,
+    commitDiffTip: (repo: string, path: string, hash: string) => `${repo}: ${path} @${hash}`,
+    worktreeDiffTip: (repo: string, path: string, area: string) => `${repo}: ${path} (${area})`,
+    conflictTitle: (name: string, draft: boolean) => (draft ? `${name} *` : name),
+    conflictTip: (repo: string, path: string, draft: boolean) =>
+      `${repo}: ${path} — conflict resolution${draft ? ' (unsaved edits)' : ''}`,
+    conflictOpening: 'Opening conflict…',
+    conflictOpeningTip: (repo: string) => `${repo}: Reading conflicted file`,
+    repoLog: {
+      sideTooNarrow: 'Branch and tag list collapsed because the tool window is too narrow',
+      resizeSide: 'Resize branch and tag list',
+      resizeDetail: 'Resize details',
+      pickCommit: 'Select a commit in the log to see its details',
+      changes: 'Working tree changes',
+      openCommitTool: 'Open Commit tool window',
+    },
+    diffArea: 'Diff source',
+    empty: {
+      title: 'No documents open',
+      openOverview: 'Open overview',
+    },
+  },
+  branches: {
+    tree: 'Branch tree',
+    search: 'Search branches',
+    head: 'HEAD (current branch)',
+    local: 'Local',
+    remote: 'Remote',
+    empty: 'No branches',
+    noMatch: 'No matching branches',
+    current: 'Current branch',
+    currentPartial: 'Current branch in some repositories only',
+    currentWorktree: "This tab's worktree",
+    currentIn: (repos: string) => `Current branch in ${repos}`,
+    incoming: (n: number) => `⇣${n}`,
+    outgoing: (n: number) => `⇡${n}`,
+    trackOf: (repo: string, track: string) => `${repo}: ${track}`,
+    headOf: (repo: string, head: string) => `${repo}: ${head}`,
+    detachedAt: (hash: string) => `Detached HEAD (${hash})`,
+    favorite: 'Favorite',
+    addFavorite: 'Add to favorites',
+    removeFavorite: 'Remove from favorites',
+    toolbar: {
+      label: 'Branch tools',
+      togglePanel: 'Show/hide branch list',
+      newBranch: 'New branch…',
+      fetch: 'Fetch',
+      favorite: 'Add or remove selected branch from favorites',
+      expandAll: 'Expand all',
+      collapseAll: 'Collapse all',
+    },
+    menu: {
+      checkout: 'Checkout…',
+      newBranchHere: 'New branch from here…',
+      showOnly: 'Show only this branch',
+    },
+  },
+  filterBar: {
+    label: 'Log filter',
+    textLabel: 'Filter by commit message or hash',
+    textPlaceholder: 'Text or hash (Enter)',
+    regex: 'Regex',
+    regexTitle:
+      'Regular expression (POSIX extended, ERE: . * + ? ( ) [ ] { } | ^ $ are special; shorthands like \\d are not supported). When off, matches the text literally',
+    matchCase: 'Match case',
+    clearText: 'Clear search',
+    pending: 'Not applied',
+    pendingTitle: (applied: string) =>
+      applied === '' ? 'Press Enter to apply' : `Press Enter to apply (current search: ${applied})`,
+    hashTitle: (hex: string) =>
+      `Also finds commits whose hash starts with ${hex}, in addition to message matches`,
+    repo: 'Repo',
+    branch: 'Branch',
+    author: 'Author',
+    date: 'Date',
+    summary: (name: string, value: string) => `${name}: ${value}`,
+    more: (first: string, more: number) => `${first} +${more}`,
+    clearCondition: (label: string) => `Clear filter: ${label}`,
+    clearAll: 'Clear all',
+    search: (name: string) => `Search ${name.toLowerCase()}`,
+    noOptions: 'No items',
+    noMatch: 'No matching items',
+    repoNone: 'With none selected, all repositories are shown',
+    repoFailed: (why: string) => `Couldn't read summary: ${why}`,
+    local: 'Local',
+    remote: 'Remote',
+    current: 'Current',
+    authorsLoading: 'Loading authors…',
+    authorsFailed: (msg: string) => `Couldn't load authors: ${msg}`,
+    authorsTimedOut: 'Some repositories timed out, so only some authors are shown',
+    authorsTruncated: (shown: number, total: number) =>
+      `Showing the ${formatNumber(shown)} authors with the most commits (${formatNumber(total)} total)`,
+    authorMissing: 'Not among authors in the current range',
+    commits: (n: number) => `${formatNumber(n)} ${plural(n, 'commit', 'commits')}`,
+    retry: 'Retry',
+    dates: {
+      today: 'Today',
+      last7: 'Last 7 days',
+      last30: 'Last 30 days',
+      custom: 'Custom range',
+      from: 'From',
+      to: 'To',
+      apply: 'Apply',
+      since: (d: string) => `Since ${d}`,
+      until: (d: string) => `Until ${d}`,
+      // 영어 범위 표기는 `~` 대신 en dash
+      range: (a: string, b: string) => `${a} – ${b}`,
+      day: (month: number, day: number) => `${month}/${day}`,
+      dayWithYear: (year: number, month: number, day: number) => `${month}/${day}/${year}`,
+      note: 'By commit date, both ends inclusive',
+    },
+    textCondition: (pattern: string, regex: boolean) =>
+      regex ? `Regex "${pattern}"` : `Text "${pattern}"`,
+    viewOptions: 'View options',
+    refresh: 'Reload',
+    listMode: 'List',
+    listModeTitle:
+      'A text or author filter or merge exclusion is active, so only matching commits are listed by time, without graph lines',
+    path: 'Path',
+    pathNote:
+      'Paths are relative to the repository root. Separate multiple paths with commas and press Enter to apply',
+    pathModule: (path: string) => `${path} (module scope)`,
+    otherRefs: 'Other refs',
+    customRefs: 'Enter ref name…',
+    headTitle: (now: string) => `Follows checkout · Now: ${now}`,
+    find: 'Find',
+    findTitle: (key: string | null) => (key ? `Find (${key})` : 'Find'),
+    locked: 'Can be changed after the operation finishes',
+    viewOptionsChanged: (parts: string) => `View options — ${parts}`,
+    loadedSoFar: (n: number) => `${formatNumber(n)} loaded so far`,
+    resetAll: 'Reset filters and options',
+  },
+  project: {
+    title: 'Project',
+    tree: 'Project tree',
+    openAsTab: 'Open as repository tab',
+    ahead: (n: number) => `${n}↑`,
+    behind: (n: number) => `${n}↓`,
+    changed: (n: number) => `${formatNumber(n)} changed`,
+    rebasing: 'REBASING',
+    summaryFailed: (message: string) => `Couldn't read summary: ${message}`,
+    locate: 'Locate open file in tree',
+    loading: 'Loading…',
+    empty: 'Empty',
+    missing: 'Folder not found (deleted or moved)',
+    denied: "Couldn't read: permission denied",
+    failed: (message: string) => `Couldn't read: ${message}`,
+    retry: 'Retry',
+    more: (n: number) => `… Show ${formatNumber(n)} more`,
+    moreLoading: 'Loading more…',
+    moreCapped: (max: number, total: number) =>
+      `Only up to ${formatNumber(max)} items per folder can be shown (${formatNumber(total)} total)`,
+    nonUtf8Names: (n: number) =>
+      `${formatNumber(n)} ${plural(n, 'item', 'items')} with unreadable names (not UTF-8)`,
+    symlink: "Symbolic link: its target isn't followed, so it can't be expanded or opened",
+    special: "Special file (FIFO, socket, device): can't be opened",
+    unopenable: 'Name too long to open',
+    settings: 'Folder settings…',
+    structure: {
+      menu: 'Modules, submodules, nested repositories',
+      counts: (parts: readonly string[]) => parts.join(' · '),
+      modules: (n: number) => `${formatNumber(n)} ${plural(n, 'module', 'modules')}`,
+      submodules: (n: number) => `${formatNumber(n)} ${plural(n, 'submodule', 'submodules')}`,
+      nested: (n: number) => `${formatNumber(n)} nested ${plural(n, 'repository', 'repositories')}`,
+      moduleOption: (name: string, changes: number) =>
+        changes > 0 ? `${name} · ${formatNumber(changes)} changed` : name,
+      submoduleOption: (path: string, status: string) => (status ? `${path} · ${status}` : path),
+      moduleIcon: 'Module',
+      nestedIcon: 'Nested repository',
+      moduleLine: (name: string, kind: string) => `Module ${name} · ${kind}`,
+      scope: (name: string) => `Scope: ${name}`,
+      scopeTitle: (path: string) => `Log graph narrowed to this path: ${path}`,
+    },
+    fileStatus: {
+      modified: 'Modified',
+      added: 'Added (new file, staged)',
+      copied: 'Copied (staged)',
+      renamed: 'Renamed',
+      renamedFrom: (from: string) => `Renamed (from ${from})`,
+      typeChanged: 'Type changed',
+      untracked: 'Untracked (not tracked by git)',
+      conflict: 'Conflict: needs to be resolved',
+      inside: 'Contains changed files',
+      deleted: 'Deleted',
+    },
+    menu: {
+      repos: (n: number) => `${formatNumber(n)} ${plural(n, 'repository', 'repositories')}`,
+      fetchAll: (n: number) => `Fetch all (${formatNumber(n)})`,
+      push: 'Push…',
+      open: 'Open',
+      openPinned: 'Open in new tab',
+      copyPath: 'Copy path',
+      copyRelative: 'Copy relative path',
+      many: (label: string, n: number) => `${label} (${formatNumber(n)})`,
+    },
+  },
+  fileView: {
+    content: 'File contents',
+    loading: 'Loading…',
+    emptyFile: 'Empty file',
+    binary: (size: string) => `Binary file not shown (${size})`,
+    notUtf8: (size: string) => `Non-UTF-8 text not shown (${size})`,
+    tooLarge: (size: string, limit: string) => `File too large to show: ${size} (limit ${limit})`,
+    unsupported: {
+      symlink: "Symbolic links aren't opened (their targets aren't followed)",
+      other: "Special files such as FIFOs, sockets, and devices can't be opened",
+      dir: "Folders can't be opened in the file view",
+      file: "This file can't be opened",
+    },
+    missing: 'File not found (deleted or moved)',
+    denied: "Couldn't read file: permission denied",
+    failed: (message: string) => `Couldn't read file: ${message}`,
+    retry: 'Retry',
+    bom: 'UTF-8 BOM',
+    noHighlight: 'Syntax highlighting is off for large files',
+    history: 'History',
+    blame: 'Blame',
+    historyTip: (repo: string, path: string) => `${repo}: commit history of ${path}`,
+    blameTip: (repo: string, path: string) =>
+      `${repo}: last commit for each line of ${path} (working tree)`,
+  },
+  repoSession: {
+    opening: (repo: string) => `Opening session for ${repo}…`,
+    openFailed: (repo: string) => `${repo}: Couldn't open repository session`,
+    limitBusy: (limit: number) =>
+      `All repository sessions (limit ${limit}) are in use, so no more can be opened. Finish open dialogs or running operations, then try again`,
+    busyElsewhere: (repo: string) =>
+      `Finish the dialog or operation in ${repo} before using features of another repository`,
+    diffError: (repo: string, message: string) => `${repo}: ${message}`,
+    hintTitle: (repo: string, title: string) => `${repo}: ${title}`,
+    hookFailedInfo:
+      'Check the hook output. To skip hooks and retry, open this repository in a repository tab and try again there.',
+  },
+  opBand: {
+    label: 'Operations in progress',
+    more: (n: number) =>
+      `${formatNumber(n)} ${plural(n, 'repository', 'repositories')} in progress — scroll to see all`,
+    resolve: 'Resolve conflicts',
+    resolveOne: 'Open the conflicted file in a merge editor tab',
+    resolveMany: (n: number) =>
+      `Show ${formatNumber(n)} conflicted ${plural(n, 'file', 'files')} in the Commit tool window`,
+    conflicts: (n: number) => `${formatNumber(n)} ${plural(n, 'conflict', 'conflicts')}`,
+    continueBlocked: (n: number) =>
+      `Resolve ${formatNumber(n)} conflicted ${plural(n, 'file', 'files')} before you can Continue`,
+    running: 'Running…',
+    opening: 'Opening session…',
+    reconflict: (n: number) =>
+      `Conflicts again — ${formatNumber(n)} conflicted ${plural(n, 'file', 'files')}`,
+    failed: (message: string) => `Couldn't run: ${message}`,
+    limit: (n: number) =>
+      `All repository sessions (limit ${n}) are in use, so this can't run now. Finish open dialogs, running operations, or unsaved conflict edits`,
+    summaryFailed: (message: string) => `Couldn't read status: ${message}`,
+    isolatedLabel: 'Isolated',
+    kind: {
+      merge: 'merge',
+      rebase: 'rebase',
+      cherryPick: 'cherry-pick',
+      revert: 'revert',
+      bisect: 'bisect',
+      am: 'am',
+    },
+    finished: (repo: string, kind: string) => `${repo}: ${kind} completed`,
+    aborted: (repo: string, kind: string) => `${repo}: ${kind} aborted`,
+    abortTitle: (repo: string, kind: string) => `Abort ${kind} in ${repo}?`,
+    abortMessage:
+      'Conflicts resolved so far and changes made by this operation will be discarded, and the repository will return to its state before the operation started.',
+  },
+  conflictLeave: {
+    title: (path: string) => `${path} has unsaved edits`,
+    closeMessage: (repo: string, repoTab = false) =>
+      `Closing the conflict tab of ${repo} keeps your edits as a draft; reopen the same file to continue editing. The draft is lost when you close the ${repoTab ? 'repository tab' : 'folder tab'}.`,
+    switchMessage: (repo: string, next: string) =>
+      `${next} will open in the conflict tab of ${repo}. Edits to the current file are kept as a draft; reopen it to continue editing.`,
+    close: 'Close',
+    switchTo: 'Open other file',
+    discardClose: 'Discard draft and close',
+    discardSwitch: 'Discard draft and open',
+  },
+  folderClose: {
+    title: (name: string) => `Close the ${name} folder tab?`,
+    message: 'Closing it also discards the following.',
+    childTab: (name: string) => `Child repository tab: ${name}`,
+    childTabDrafts: (name: string, n: number) =>
+      `Child repository tab: ${name} (${formatNumber(n)} unsaved conflict ${plural(n, 'edit', 'edits')})`,
+    draft: (repo: string, paths: string) => `${repo}: Unsaved conflict edits — ${paths}`,
+    running: (repo: string) =>
+      `${repo}: Operation in progress (if you close before it finishes, you won't see the result)`,
+    confirm: 'Close',
+  },
+  commitTool: {
+    title: 'Commit',
+    tree: 'Changed files (check = stage)',
+    refresh: 'Refresh',
+    expandAll: 'Expand all',
+    collapseAll: 'Collapse all',
+    empty: 'No changes',
+    loading: 'Loading…',
+    failed: (message: string) => `Couldn't load changes: ${message}`,
+    files: (n: number) => `${formatNumber(n)} ${plural(n, 'file', 'files')}`,
+    conflicts: (n: number) => `${formatNumber(n)} ${plural(n, 'conflict', 'conflicts')}`,
+    check: {
+      checked: 'Staged — click to unstage',
+      unchecked: 'Not staged — click to stage',
+      mixed: 'Partially staged — click to stage all',
+    },
+    conflictFile: "Conflicted files can't be checked. Resolve the conflict first",
+    conflictOnly: 'Only conflicted files here, so nothing can be checked',
+    resolveConflict: 'Resolve conflict',
+    processing: 'Processing…',
+    repoBusy: 'Waiting for stage/unstage in this repository to finish',
+    committingLock: 'You can check files after the batch operation (commit, etc.) finishes',
+    summaryFailed: (message: string) => `Couldn't read status: ${message}`,
+    writeFailed: (repo: string) => `${repo}: Couldn't stage/unstage`,
+    skipped: (repo: string, n: number) =>
+      `${repo}: Skipped ${formatNumber(n)} conflicted ${plural(n, 'file', 'files')}`,
+    message: 'Commit message',
+    messageHint: (shortcut: string) => `Commit message (${shortcut} to commit)`,
+    commit: 'Commit',
+    commitAndPush: 'Commit and push…',
+    committing: 'Committing…',
+    skippedLabel: "Repositories that won't be committed",
+    targets: (repos: number, files: number) =>
+      `${formatNumber(repos)} ${plural(repos, 'repo', 'repos')} · ${formatNumber(files)} ${plural(files, 'file', 'files')}`,
+    noTargets: 'No staged changes',
+    noMessage: 'Enter a commit message',
+    running: 'You can commit after the running batch operation finishes',
+    pending: 'You can commit after stage/unstage finishes',
+    skip: {
+      inProgress: "Operation in progress, so it won't be committed",
+      conflict: "Has conflicts, so it won't be committed",
+      summaryFailed: "Couldn't read status, so it won't be committed",
+      unknown: "Status not known yet, so it won't be committed",
+    },
+    skipLine: (repo: string, why: string) => `${repo}: ${why}`,
+    skippedSummary: (n: number) =>
+      `${formatNumber(n)} ${plural(n, 'repository', 'repositories')} won't be committed`,
+    resize: 'Resize change list and commit area',
+    tabs: {
+      changes: 'Changes',
+      stash: 'Stash',
+    },
+  },
+  changes: {
+    title: 'Changes',
+    conflicts: (n: number) => `Conflicts ${n}`,
+    staged: (n: number) => `Staged ${n}`,
+    unstaged: (n: number) => `Changes ${n}`,
+    empty: 'No changes',
+    tree: 'Tree',
+    byModule: 'Modules',
+    flat: 'List',
+    stageSelected: 'Stage',
+    unstageSelected: 'Unstage',
+    stageAll: 'Stage all',
+    unstageAll: 'Unstage all',
+    discardSelected: 'Discard',
+    discardTitle: 'Discard changes?',
+    discardMessage: (n: number) =>
+      `Working tree changes in ${formatNumber(n)} ${plural(n, 'file', 'files')} will be discarded. They were never committed, so reflog can't recover them, but the content before discarding is kept in the app's backup area.`,
+    discardConfirm: 'Discard',
+    renamedFrom: (p: string) => `← ${p}`,
+    wip: 'Changes (WIP)',
+    wipOf: (name: string) => `WIP · ${name}`,
+  },
+  commit: {
+    sign: 'Sign (-S)',
+    signDefault: (on: boolean) => (on ? 'Setting: on' : 'Setting: off'),
+    secretsTitle: (n: number) =>
+      `Possible secrets in staged changes: ${formatNumber(n)} ${plural(n, 'line', 'lines')}`,
+    secretsHint: 'Committed tokens and keys stay in history. Review them before continuing.',
+    secretsIgnoreRule: 'Ignore this rule',
+    secretsCommitAnyway: 'Commit anyway',
+    secretsClose: 'Cancel',
+    summary: 'Summary',
+    body: 'Body (optional)',
+    amend: 'Amend',
+    noVerify: 'Skip hooks (--no-verify)',
+    button: 'Commit',
+    committing: 'Committing…',
+    nothingStaged: 'No staged changes',
+    summaryGuide: (n: number) => `${n}/50`,
+    bodyLineTooLong: 'Some body lines exceed 72 characters',
+    hookOutput: 'Hook output',
+    done: (hash: string) => `Committed ${hash}`,
+  },
+  diff: {
+    loading: 'Loading…',
+    noChanges: 'No changes',
+    unified: 'Unified',
+    split: 'Split',
+    stage: 'Stage',
+    unstage: 'Unstage',
+    // `verb` 는 위의 stage·unstage 문구
+    applyHunk: (verb: string) => `${verb} hunk`,
+    applySelected: (verb: string, n: number) =>
+      `${verb} ${formatNumber(n)} ${plural(n, 'line', 'lines')}`,
+    discardHunk: 'Discard hunk',
+    discardSelected: (n: number) => `Discard ${formatNumber(n)} ${plural(n, 'line', 'lines')}`,
+    discardTitle: (path: string) => `Discard changes in ${path}?`,
+    discardTitleIn: (repo: string, path: string) => `${repo}: Discard changes in ${path}?`,
+    discardHunkMessage:
+      'The changes below will be discarded. The file before discarding can be restored from discard backups.',
+    discardLinesMessage: (n: number) =>
+      `The ${formatNumber(n)} selected ${plural(n, 'line', 'lines')} will be discarded. The file before discarding can be restored from discard backups.`,
+    discardConfirm: 'Discard',
+    nonUtf8: 'Line and hunk actions are unavailable because some lines are not UTF-8',
+    selectHunk: 'Select hunk',
+    clearSelection: 'Clear selection',
+    selectLine: 'Select line',
+    truncated: (n: number) =>
+      `Large file: showing only the beginning of ${formatNumber(n)} ${plural(n, 'line', 'lines')}`,
+    loadFull: 'Show all',
+    binary: (oldSize: number | null, newSize: number | null) =>
+      `Binary file (${formatBytes(oldSize)} → ${formatBytes(newSize)})`,
+    noNewline: 'No ⏎',
+    change: (c: { kind: string; similarity?: number }) => {
+      switch (c.kind) {
+        case 'added':
+          return 'Added';
+        case 'deleted':
+          return 'Deleted';
+        case 'renamed':
+          return `Renamed (${c.similarity ?? 0}%)`;
+        case 'copied':
+          return `Copied (${c.similarity ?? 0}%)`;
+        case 'typeChanged':
+          return 'Type changed';
+        default:
+          return 'Modified';
+      }
+    },
+    back: 'Back to graph',
+    stagedLabel: 'Staged',
+    unstagedLabel: 'Working tree',
+    rangeLabel: (older: string, newer: string) => `${older}..${newer}`,
+    compareLabel: (a: string, b: string, threeDot: boolean) => `${a}${threeDot ? '...' : '..'}${b}`,
+    ignoreWhitespace: 'Ignore whitespace',
+    context: 'Context',
+    wrap: 'Wrap',
+    tabWidth: 'Tab',
+    commitLabel: (hash: string) => `Commit ${hash}`,
+    mergeFirstParent: 'Merge commit: showing changes against the first parent',
+    retry: 'Retry',
+  },
+};

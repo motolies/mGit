@@ -1,0 +1,121 @@
+/* Pull Requests 도구 창의 목록 (W24): 좁고 긴 왼쪽 도구 창(최소 200px)에 맞춘 두 줄 행. 첫 줄은 번호 + 제목(말줄임),
+   둘째 줄은 배지 + 작성자(넘치면 줄바꿈). 행·선택·커서의 규칙은 Stash 목록과 같다 */
+
+/* 목록의 우클릭 메뉴 영역 = 남는 높이 전부 */
+.listArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+  outline: none;
+}
+
+.list:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: default;
+  user-select: none;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+/* 고른 행: 목록에 포커스가 없으면 회색, 있으면 파랑 (브랜치 트리·Stash 목록과 같은 규칙). hover 보다 뒤에 둔다 */
+.row[aria-selected="true"] {
+  background: var(--bg-selected-inactive);
+}
+
+.list:focus .row[aria-selected="true"] {
+  background: var(--bg-selected);
+}
+
+/* 키보드 커서 (아직 아무것도 안 골랐을 때 첫 행): 테두리로 그린다 */
+.list:focus .row[data-cursor="true"] {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 첫 줄: #번호 제목 */
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.number {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 둘째 줄: 배지들 + 작성자. 폭이 모자라면 다음 줄로 넘긴다 (200px 에서 배지 셋 + 작성자) */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  font-size: 11px;
+}
+
+/* 배지: 옛 PR 섹션의 알약 모양 그대로 (흐린 글자 + 경계선, 성공·위험은 그 색) */
+.badge {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+}
+
+.badge[data-tone="success"] {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.badge[data-tone="danger"] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.author {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+/* 선택 배경 위에서는 흐린 글자·색 글자의 대비가 모자라므로 기본 글자색으로 쓴다 (경계선 색은 그대로) */
+.row[aria-selected="true"] :is(.number, .author, .badge) {
+  color: var(--fg);
+}

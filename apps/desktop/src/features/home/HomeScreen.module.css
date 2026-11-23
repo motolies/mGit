@@ -1,0 +1,149 @@
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.clone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.phase {
+  color: var(--fg-muted);
+  flex: 1 1 auto;
+}
+
+.recentHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.recentTitle {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.search {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  width: 240px;
+}
+
+.empty,
+.hint {
+  color: var(--fg-muted);
+}
+
+.hint {
+  margin-top: auto;
+  text-align: center;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius);
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+.entry {
+  all: unset;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kind {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.path {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.time {
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.itemActions {
+  display: inline-flex;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.small {
+  all: unset;
+  width: 20px;
+  height: 20px;
+  text-align: center;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.small:hover {
+  background: var(--bg-selected);
+  color: var(--fg);
+}

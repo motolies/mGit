@@ -1,0 +1,35 @@
+.wrapper {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  /* 선택 행의 배경 (LG-05): 그래프 안에 포커스가 없으면 회색 */
+  --row-selected-bg: var(--bg-selected-inactive);
+}
+
+.wrapper:focus-within {
+  --row-selected-bg: var(--bg-selected);
+}
+
+/* 레인 캔버스. 가로 위치(left)는 GraphView 가 준다: 저장소 띠 열이 있으면 그 폭만큼 밀린다 */
+.overlay {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.scroller {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+.inner {
+  position: relative;
+  width: 100%;
+}

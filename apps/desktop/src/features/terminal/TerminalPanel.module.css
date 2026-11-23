@@ -1,0 +1,89 @@
+/* 도구 창 머리에 놓이는 탭 줄 */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border-radius: var(--radius);
+  padding: 0 var(--space-1) 0 var(--space-3);
+}
+
+.tab[data-active="true"] {
+  background: var(--bg-hover);
+}
+
+.tabName,
+.tabButton {
+  all: unset;
+  cursor: pointer;
+}
+
+.tabName {
+  max-width: 220px;
+  padding: var(--space-1) var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab[data-exited="true"] .tabName {
+  color: var(--fg-muted);
+}
+
+.tabButton {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: var(--space-1);
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  /* 탭 줄에 맞게 아이콘을 한 단계 작게 */
+  --icon-size: 14px;
+}
+
+.tabButton:hover {
+  color: var(--fg);
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.tabName:focus-visible,
+.tabButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 터미널 뷰 자리. xterm 화면은 테마와 무관하게 어두운 바탕이라(색은 @mgit/terminal 이 정한다)
+   둘레도 고정색으로 맞춘다 */
+.panel {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #1e1e1e;
+}
+
+.slot {
+  position: absolute;
+  inset: 0;
+  padding: var(--space-1) var(--space-2);
+}
+
+/* 탭이 하나도 없을 때의 안내. 도구 창 바탕 위에 그린다 */
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+}

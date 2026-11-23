@@ -1,0 +1,18 @@
+[package]
+name = "mgit-merge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "충돌 블록 모델: zdiff3 마커 파싱·해결·렌더 (git 비의존, 순수)"
+
+[dependencies]
+mgit-l10n.workspace = true
+imara-diff = "0.2"
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

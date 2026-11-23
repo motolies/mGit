@@ -1,0 +1,21 @@
+[package]
+name = "mgit-watch"
+description = "notify 기반 .git·작업 트리 감시, 이벤트 분류·디바운스, 폴링 대체 경로"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+mgit-l10n.workspace = true
+notify.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

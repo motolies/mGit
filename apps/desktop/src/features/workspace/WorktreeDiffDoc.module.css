@@ -1,0 +1,63 @@
+/* 작업 트리 diff 탭: (선택) 위 줄 + diff 화면 */
+.doc {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--panel-seam);
+  font-size: 12px;
+}
+
+/* staged / 작업 트리 전환 (일부만 stage 된 파일) */
+.switch {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.option {
+  all: unset;
+  padding: 0 var(--space-4);
+  line-height: 20px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.option[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--fg);
+}
+
+.option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.error {
+  all: unset;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+  cursor: pointer;
+}

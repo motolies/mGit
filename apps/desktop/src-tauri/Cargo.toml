@@ -1,0 +1,49 @@
+[package]
+name = "mgit-desktop"
+description = "mGit Tauri 셸: 커맨드·채널 어댑터, 의존성 조립, TS 바인딩 생성"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mgit_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+# tauri-specta rc 는 specta·specta-typescript 와 정확한 버전 조합이 필요하다. 셋을 함께 고정한다.
+tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+specta-typescript = "=0.0.13"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+mgit-core.workspace = true
+mgit-helper.workspace = true
+tokio.workspace = true
+mgit-git.workspace = true
+mgit-model.workspace = true
+mgit-l10n.workspace = true
+mgit-watch.workspace = true
+mgit-store.workspace = true
+tracing.workspace = true
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+portable-pty = "0.9"
+# OS 로캘 (화면 언어의 "시스템 언어 따름")
+sys-locale = "0.3"
+
+[dev-dependencies]
+tokio.workspace = true
+mgit-testkit.workspace = true
+
+[lints]
+workspace = true

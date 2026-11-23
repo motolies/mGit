@@ -1,0 +1,276 @@
+import { S } from '@mgit/ui';
+import { useEffect, useMemo, useState } from 'react';
+import type { MenuItem } from '../../components/ContextMenu';
+import { ToolButton } from '../../layout/ToolButton';
+import { ToolWindowFrame, ToolWindowNote } from '../../layout/ToolWindowFrame';
+import { entryInArea, getWorkspaceStore, useAppStore, useFolder, useWorkspace } from '../../store';
+import { useBatchReport } from '../folder/batch-report';
+import { useFolderBatchFlows } from '../folder/FolderBatchBar';
+import { useRepoSessionActions } from '../workspace/repo-session-actions';
+import { CommitMessageBox } from './CommitMessageBox';
+import { CommitToolSplit } from './CommitToolSplit';
+import { clearsMessage, commitBlocker, commitPlan, committedRepos } from './commit-plan';
+import {
+  buildCommitRepos,
+  type CommitFileRow,
+  type CommitRow,
+  commitTreeRows,
+  expandableRowIds,
+  opensStaged,
+  repoRowId,
+  rowToggle,
+} from './commit-tree-model';
+import { FolderCommitTree } from './FolderCommitTree';
+
+/**
+ * Commit 도구 창의 폴더 모드 (W14, 개요 탭의 "통합 변경" 보기를 옮겼다): 폴더 스토어의 변경 목록을 트리로 보이고, 줄의
+ * 체크로 그 저장소·폴더·파일을 stage·unstage 하며(`writeIndex` — 체크는 git index 를 그대로 비춘다), 메시지를 써서
+ * stage 된 것을 일괄 커밋한다(`folderCommit(폴더, 커밋될 저장소의 명시 목록, 메시지, false)`).
+ * - 체크는 낙관적으로 바꾸지 않는다: 호출이 도는 동안 누른 줄을 "처리 중"으로 보이고 그 저장소의 체크를 막으며, 폴더
+ *   스토어가 다시 읽은 값으로 확정한다. 실패는 사유를 알리고 표시는 그대로(이전 값) 둔다. 건너뛴 충돌 경로는 알린다.
+ * - 파일을 누르면 그 저장소 세션으로 작업 트리 diff 탭을 연다 (`openDiff`). 충돌 파일은 머지 편집기 탭을 연다
+ *   (`openConflict`, W15).
+ * - 커밋 대상(저장소·파일 수)과 커밋되지 않을 저장소의 사유를 누르기 전에 보인다. 결과는 일괄 결과 토스트로 알리고,
+ *   대상이 모두 커밋됐을 때만 메시지를 비운다. "Commit and Push…" 는 커밋된 저장소로 push 체크 목록을 연다.
+ * 메시지·접힌 줄·스크롤은 워크스페이스 스토어에 두어 Project 도구 창과 번갈아 띄워도 남는다
+ */
+export function FolderCommitTool() {
+  const f = useFolder((st) => ({
+    id: st.id,
+    changes: st.changes,
+    summaries: st.summaries,
+    changesLoading: st.changesLoading,
+    changesError: st.changesError,
+    loading: st.loading,
+    batchRunning: st.batchRunning,
+    indexWrites: st.indexWrites,
+    writeIndex: st.writeIndex,
+    commitAll: st.commitAll,
+    refresh: st.refresh,
+    ensureChanges: st.ensureChanges,
+  }));
+  const ws = useWorkspace((w) => ({
+    message: w.commitMessage,
+    setMessage: w.setCommitMessage,
+    collapsed: w.commitCollapsed,
+    setCollapsed: w.setCommitCollapsed,
+    rememberScroll: w.rememberCommitScroll,
+    scrollTop: w.commitScrollTop,
+    reveal: w.commitReveal,
+    ackReveal: w.ackCommitReveal,
+  }));
+  const notice = useAppStore((s) => s.notice);
+  const openRepositoryAt = useAppStore((s) => s.openRepositoryAt);
+  const repoActions = useRepoSessionActions();
+  const report = useBatchReport();
+  const flows = useFolderBatchFlows(report);
+  // 저장소 → 누른 줄 id ("처리 중" 표시). 호출이 도는 것 자체는 폴더 스토어의 `indexWrites` 가 기억한다
+  const [clicked, setClicked] = useState<Readonly<Record<string, string>>>({});
+  const [committing, setCommitting] = useState(false);
+
+  // 변경 목록을 아직 안 읽었으면 한 번 읽는다 (그 뒤로는 폴더 스토어의 갱신이 함께 다시 읽는다)
+  const ensureChanges = f?.ensureChanges;
+  useEffect(() => ensureChanges?.(), [ensureChanges]);
+
+  const changes = f?.changes;
+  const summaries = f?.summaries;
+  const repos = useMemo(
+    () => buildCommitRepos(changes ?? [], summaries ?? []),
+    [changes, summaries],
+  );
+  const collapsedIds = ws?.collapsed;
+  const collapsed = useMemo(() => new Set(collapsedIds ?? []), [collapsedIds]);
+  const rows = useMemo(() => commitTreeRows(repos, collapsed), [repos, collapsed]);
+  const plan = useMemo(() => commitPlan(changes ?? [], summaries ?? []), [changes, summaries]);
+  const indexWrites = f?.indexWrites;
+  const busyRepos = useMemo(() => new Set(Object.keys(indexWrites ?? {})), [indexWrites]);
+  // 처리 중인 줄: 누른 줄, 모르면(도구 창을 다시 띄웠다) 그 저장소 줄
+  const processing = useMemo(
+    () => new Set([...busyRepos].map((repo) => clicked[repo] ?? repoRowId(repo))),
+    [busyRepos, clicked],
+  );
+
+  if (!f || !ws) {
+    return null;
+  }
+
+  const locked = f.batchRunning || committing;
+  const repoName = (path: string) => repos.find((r) => r.path === path)?.name ?? path;
+
+  /** 줄의 체크를 누른다: stage·unstage 를 부르고 결과(실패·건너뛴 충돌)를 알린다 */
+  const toggleCheck = async (row: CommitRow) => {
+    const toggle = rowToggle(row);
+    if (toggle === null || locked || busyRepos.has(toggle.repoPath)) {
+      return;
+    }
+    setClicked((prev) => ({ ...prev, [toggle.repoPath]: row.id }));
+    const outcome = await f.writeIndex(toggle.repoPath, toggle.op, toggle.target);
+    setClicked(({ [toggle.repoPath]: _done, ...rest }) => rest);
+    const name = repoName(toggle.repoPath);
+    if (outcome.kind === 'failed') {
+      notice({ kind: 'error', title: S.commitTool.writeFailed(name), message: outcome.error });
+    } else if (outcome.kind === 'done' && outcome.result.skipped.length > 0) {
+      notice({
+        kind: 'info',
+        title: S.commitTool.skipped(name, outcome.result.skipped.length),
+        message: outcome.result.skipped.map((s) => s.path).join('\n'),
+      });
+    }
+  };
+
+  /** 파일을 연다: 그 저장소 세션의 작업 트리 diff 탭, 충돌 파일이면 머지 편집기 탭 (W15) */
+  const open = (row: CommitFileRow) => {
+    if (row.check === 'conflict') {
+      repoActions?.openConflict(row.repoPath, row.entry.path);
+      return;
+    }
+    repoActions?.openDiff(row.repoPath, row.entry.path, opensStaged(row.entry));
+  };
+
+  /** 줄을 펼치거나 접는다 (접힌 줄은 워크스페이스 스토어에 남는다) */
+  const toggleExpand = (row: CommitRow) => {
+    const next = new Set(collapsed);
+    if (next.has(row.id)) {
+      next.delete(row.id);
+    } else {
+      next.add(row.id);
+    }
+    ws.setCollapsed([...next]);
+  };
+
+  /**
+   * 줄의 우클릭 메뉴: 파일 열기(충돌 파일은 "충돌 해결" — 머지 편집기 탭), 저장소 탭으로 열기. 진행 중 작업이 있는
+   * 저장소의 stage 된 파일은 저장소 탭의 변경 목록처럼 "충돌 상태로 되돌리기" 두 가지를 더한다 (W15, 그 저장소 세션에 대고)
+   */
+  const menu = (row: CommitRow): MenuItem[] => {
+    const openTab: MenuItem = {
+      label: S.project.openAsTab,
+      onSelect: () => void openRepositoryAt(row.repoPath, f.id),
+    };
+    if (row.kind === 'file' && row.check === 'conflict') {
+      return [{ label: S.commitTool.resolveConflict, onSelect: () => open(row) }, openTab];
+    }
+    if (row.kind === 'file') {
+      const inOp = (repos.find((r) => r.path === row.repoPath)?.op ?? null) !== null;
+      const path = row.entry.path;
+      const unresolve: MenuItem[] =
+        inOp && repoActions && entryInArea(row.entry, true)
+          ? [
+              {
+                label: S.conflict.unresolveRemake,
+                separator: true,
+                onSelect: () => repoActions.unresolve(row.repoPath, path, 'remake'),
+              },
+              {
+                label: S.conflict.unresolveKeep,
+                onSelect: () => repoActions.unresolve(row.repoPath, path, 'keepWorktree'),
+              },
+            ]
+          : [];
+      return [{ label: S.project.menu.open, onSelect: () => open(row) }, openTab, ...unresolve];
+    }
+    return row.kind === 'dir' ? [] : [openTab];
+  };
+
+  const blocker = commitBlocker(plan, ws.message, {
+    running: locked,
+    pending: busyRepos.size > 0,
+  });
+
+  /** 커밋한다 (명시 목록, stage 된 것만). 대상이 모두 커밋되면 메시지를 비운다. `thenPush` 면 커밋된 저장소로 push 확인 */
+  const commit = async (thenPush: boolean) => {
+    if (blocker !== null || plan.repos.length === 0) {
+      return;
+    }
+    setCommitting(true);
+    const result = await f.commitAll(
+      plan.repos.map((r) => r.path),
+      ws.message,
+      false,
+    );
+    setCommitting(false);
+    report(result);
+    if (result && clearsMessage(result)) {
+      getWorkspaceStore(f.id)?.getState().setCommitMessage('');
+    }
+    const pushed = result ? committedRepos(result) : [];
+    if (thenPush && pushed.length > 0) {
+      await flows.push(pushed);
+    }
+  };
+
+  const t = S.commitTool;
+  const tools = (
+    <>
+      <ToolButton
+        icon="expandAll"
+        label={t.expandAll}
+        disabled={repos.length === 0}
+        onClick={() => ws.setCollapsed([])}
+      />
+      <ToolButton
+        icon="collapseAll"
+        label={t.collapseAll}
+        disabled={repos.length === 0}
+        onClick={() => ws.setCollapsed(expandableRowIds(repos))}
+      />
+      <ToolButton
+        icon="refresh"
+        label={t.refresh}
+        disabled={f.loading}
+        onClick={() => void f.refresh()}
+      />
+    </>
+  );
+
+  // 작업 띠의 "충돌 해결"이 보이라고 한 저장소 줄 (W19). 줄이 아직 없으면(변경 목록을 읽는 중) 생길 때까지 기다린다
+  const pending = ws.reveal;
+  const revealIndex =
+    pending === null ? -1 : rows.findIndex((r) => r.id === repoRowId(pending.repoPath));
+  const reveal =
+    pending !== null && revealIndex >= 0 ? { index: revealIndex, seq: pending.seq } : null;
+
+  return (
+    <ToolWindowFrame title={S.commitTool.title} tools={tools}>
+      <CommitToolSplit
+        changes={
+          f.changesError !== null && repos.length === 0 ? (
+            <ToolWindowNote text={t.failed(f.changesError)} error />
+          ) : repos.length === 0 ? (
+            <ToolWindowNote text={f.changesLoading || f.loading ? t.loading : t.empty} />
+          ) : (
+            <FolderCommitTree
+              // 폴더 탭마다 새로 마운트해 다른 폴더의 선택·스크롤이 섞이지 않게 한다
+              key={f.id}
+              rows={rows}
+              busyRepos={busyRepos}
+              processing={processing}
+              locked={locked}
+              onToggleCheck={(row) => void toggleCheck(row)}
+              onToggleExpand={toggleExpand}
+              onOpen={open}
+              menu={menu}
+              initialScrollTop={ws.scrollTop()}
+              onScrollTopChange={ws.rememberScroll}
+              reveal={reveal}
+              onRevealed={ws.ackReveal}
+            />
+          )
+        }
+        commit={
+          <CommitMessageBox
+            message={ws.message}
+            onMessageChange={ws.setMessage}
+            targets={plan.repos.length > 0 ? t.targets(plan.repos.length, plan.files) : null}
+            skipped={plan.skipped.map((s) => t.skipLine(s.name, t.skip[s.reason]))}
+            blocked={blocker === null ? null : t[blocker]}
+            committing={committing}
+            onCommit={() => void commit(false)}
+            onCommitAndPush={() => void commit(true)}
+          />
+        }
+      />
+      {flows.dialogs.element}
+    </ToolWindowFrame>
+  );
+}

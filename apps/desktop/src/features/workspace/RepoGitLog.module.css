@@ -1,0 +1,56 @@
+/* 왼쪽 칸(git-branches)은 브랜치 트리 하나가 칸 높이를 다 쓴다 (W25 — 옛 사이드바의 남은 덩이를 Project 도구 창으로 옮겼다.
+   폴더 탭의 로그 탭과 같은 배치) */
+
+/* 오른쪽 칸 (git-detail): 안의 상세가 높이를 채우고 스스로 스크롤한다.
+   min-height: 0 이 없으면 분할이 줄어들지 못한다 */
+.detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-panel);
+  outline: none;
+}
+
+.detail:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* 고른 commit 이 없을 때 (CD-09): 안내 + 작업 트리 변경 요약 + Commit 도구 창 진입 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  overflow: auto;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.summaryTitle {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.counts li[data-zero="true"] {
+  color: var(--fg-muted);
+}
+
+.counts li[data-tone="conflict"] {
+  color: var(--status-conflict);
+}

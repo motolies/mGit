@@ -1,0 +1,43 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 강조 단추: 흰 글자와 4.5:1 인 채움 (W19 ③ — 다크의 --accent 는 흰 글자와 4.28) */
+.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-fg);
+}
+
+/* hover 는 어둡게 한다 — 밝게 하면 흰 글자의 대비가 4.5:1 아래로 내려간다 (W19 ③, 전에는 brightness(1.08)) */
+.primary:hover:not(:disabled) {
+  filter: brightness(0.92);
+  background: var(--accent-fill);
+}
+
+/* 채운 단추의 포커스 링은 채움과 같은 색이라 안쪽에 그리면 보이지 않는다 — 바깥에 띄운다 (W19 ③) */
+.primary:focus-visible {
+  outline-offset: 2px;
+}

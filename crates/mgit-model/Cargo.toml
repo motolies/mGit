@@ -1,0 +1,22 @@
+[package]
+name = "mgit-model"
+description = "mGit 도메인 타입과 포트 트레이트 (외부 의존성 최소)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-l10n.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# CancelToken 구현체. 런타임 의존 없이 취소 신호만 쓴다
+tokio-util.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

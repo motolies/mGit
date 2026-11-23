@@ -1,0 +1,115 @@
+/* 로그 탭의 칸 배치(분할·칸 높이 규칙)는 `layout/GitLogSplit.module.css` 에 있다 (W21 — 저장소 탭과 공용) */
+
+/* 필터 바 아래 한 줄 알림: 다시 읽기 실패(이전 결과 위), 일부 저장소 실패 (LG-11) */
+.notice {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-3);
+  min-height: var(--tree-row-h);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 12px;
+  --icon-size: 14px;
+}
+
+.notice[data-tone="error"] > :first-child {
+  color: var(--danger);
+}
+
+.notice[data-tone="warn"] > :first-child {
+  color: var(--vcs-branch);
+}
+
+.noticeText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noticeAction {
+  all: unset;
+  flex: 0 0 auto;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.noticeAction:hover {
+  text-decoration: underline;
+}
+
+.noticeAction:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 로그 자리의 상태: 커밋 없음 / 필터 결과 없음(조건 요약 + 필터 지우기) / 읽기 실패(다시 시도) */
+.state {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.conditions {
+  max-width: 100%;
+  color: var(--fg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* 첫 로드 자리 표시: 로그 행 모양 (띠·제목·작성자 자리) */
+.skeleton {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.skeletonRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--row-h);
+  padding: 0 var(--space-4);
+}
+
+.skeletonRow > span {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+}
+
+.skeletonRow > span:nth-child(1) {
+  flex: 0 0 72px;
+}
+
+.skeletonRow > span:nth-child(2) {
+  flex: 1 1 auto;
+  max-width: 55%;
+}
+
+.skeletonRow > span:nth-child(3) {
+  flex: 0 0 64px;
+  margin-left: auto;
+}
+
+.skeletonRow:nth-child(even) > span:nth-child(2) {
+  max-width: 40%;
+}
+
+.menuArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

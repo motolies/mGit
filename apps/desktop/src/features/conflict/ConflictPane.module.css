@@ -1,0 +1,83 @@
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.path {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.kind {
+  margin-left: auto;
+  color: var(--danger);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.sidePick {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  font-size: 12px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.note {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.choices {
+  display: flex;
+  gap: 8px;
+}
+
+.preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+
+.pre {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 60vh;
+}

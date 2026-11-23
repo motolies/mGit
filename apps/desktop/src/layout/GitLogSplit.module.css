@@ -1,0 +1,68 @@
+/* 로그 탭 전체. 이 폭으로 왼쪽 칸의 자동 접힘을 판정한다 (WS-06).
+   min-height: 0 이 없으면 그래프가 줄어들지 못해 높이가 틀어진다 */
+.timeline {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 세로 툴바 오른쪽의 분할 (왼쪽 칸 | 로그 | 상세). 툴바는 접히는 칸 밖에 있다 */
+.split {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 왼쪽 칸 (git-branches): 안의 내용이 높이를 채우고 스스로 스크롤한다 */
+.branches {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-panel);
+  font-size: 12px;
+  outline: none;
+}
+
+/* 분할선: 패널 사이 이음매 한 줄. 끄는 범위는 라이브러리가 좌우로 넓혀 잡는다 */
+.separator {
+  width: 1px;
+  background: var(--panel-seam);
+  outline: none;
+}
+
+.separator[data-separator="hover"],
+.separator[data-separator="active"],
+.separator:focus-visible {
+  background: var(--accent);
+}
+
+/* 키보드 포커스는 1px 선이 아니라 3px 띠로 보인다 (W19 ③) */
+.separator:focus-visible {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* 접힌 동안에는 끌 수 없으므로 선도 그리지 않는다 */
+.separator[data-separator="disabled"] {
+  display: none;
+}
+
+/* 가운데 칸 (git-log): 필터·알림 줄 아래의 로그가 남는 높이를 받는다 */
+.graph {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  outline: none;
+}
+
+/* 영역 포커스 표시 (⌘9). 안의 그래프가 포커스를 받으면 그래프가 스스로 표시한다 */
+.branches:focus-visible,
+.graph:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}

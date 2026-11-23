@@ -1,0 +1,11 @@
+[package]
+name = "mgit-l10n"
+description = "화면 문구 언어 선택: 프로세스 전역 언어(한국어·영어)와 언어별 포맷 매크로 tr! (의존성 없음)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

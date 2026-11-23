@@ -1,0 +1,161 @@
+/* 행의 열 배치(grid-template-columns·column-gap·padding-right)는 GraphRow.tsx 의 rowStyle 이 준다:
+   캔버스 위치와 같은 값을 써야 해서 폭을 한 곳(TS)에서만 정한다 */
+.row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: grid;
+  align-items: center;
+  font-size: var(--font-size);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  /* 글자색: 제목·ref 라벨은 --row-fg, 작성자·날짜·해시는 --row-meta. 상태(흐림·선택)가 이 둘만 바꾼다 */
+  --row-fg: var(--fg);
+  --row-meta: var(--fg-muted);
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+/* 현재 브랜치 밖 커밋 (HEAD 에서 닿지 않음): 글자를 흐리게 */
+.row[data-dim="true"] {
+  --row-fg: var(--fg-muted);
+}
+
+.wip {
+  --row-fg: var(--fg-muted);
+}
+
+/* 선택 행 (LG-05): 배경은 그래프에 포커스가 있을 때와 없을 때가 다르고(뷰가 --row-selected-bg 로 준다),
+   글자는 흐린 행이든 보조 글자든 --fg 로 올린다 — 색 글자는 선택 배경 위에서 대비가 모자란다 */
+.row.selected,
+.row.selected:hover,
+.row.inRange,
+.row.inRange:hover {
+  background: var(--row-selected-bg, var(--bg-selected));
+  --row-fg: var(--fg);
+  --row-meta: var(--fg);
+}
+
+.row.inRange,
+.row.inRange:hover {
+  opacity: 0.85;
+}
+
+.graph {
+  height: 100%;
+}
+
+.message {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 제목이 남는 폭을 다 쓰고, 길면 줄어든다. ref 라벨은 그 오른쪽 끝에 남는다 (LG-03) */
+.subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--row-fg);
+}
+
+/* 보조 칸은 제목보다 한 단계 작게 쓴다 (좁은 창에서도 제목 칸을 지키려고 폭을 아낀다) */
+.author,
+.date,
+.hash {
+  color: var(--row-meta);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.date {
+  font-variant-numeric: tabular-nums;
+}
+
+.hash {
+  font-family: var(--font-mono);
+}
+
+.skeleton,
+.skeletonShort {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--bg-hover);
+  opacity: 0.7;
+}
+
+.skeleton {
+  width: 60%;
+}
+
+.skeletonShort {
+  width: 70%;
+}
+
+.wip .subject {
+  font-style: italic;
+}
+
+.wip .author {
+  overflow: visible;
+}
+
+.highlighted {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.highlighted .subject {
+  font-weight: 600;
+}
+
+.avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  flex: 0 0 auto;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 저장소 띠 (통합 타임라인, LG-02): 행 높이를 꽉 채워 같은 저장소의 행이 틈 없이 한 덩어리로 이어진다 */
+.repo {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 5px;
+  font-size: 12px;
+}
+
+/* 띠 색: 저장소 색 번호의 레인 토큰을 배경에 옅게 섞은 불투명한 면 (전용 토큰 없음, LF-09).
+   hover·선택 배경에 물들지 않아 이름 글자(--fg)의 대비가 일정하다 — 섞는 비율을 바꾸면
+   __tests__/repo-strip-contrast.test.ts 가 레인 10색 × 두 테마의 대비(4.5:1)를 다시 계산한다 */
+.repoTinted {
+  background: color-mix(in srgb, var(--repo-color) 30%, var(--bg));
+}
+
+.repoName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}

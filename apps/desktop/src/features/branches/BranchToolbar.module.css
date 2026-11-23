@@ -1,0 +1,15 @@
+/* 세로 툴바: 버튼 한 줄 폭 (버튼 24px + 좌우 2px = 28px). 아래 도구 창의 최소 높이에서도 버튼이 모두
+   들어가도록 간격 없이 쌓는다 */
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: calc(var(--icon-size) + var(--space-4) + 2 * var(--space-1));
+  min-height: 0;
+  padding: var(--space-1) 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--panel-seam);
+}

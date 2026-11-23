@@ -1,0 +1,262 @@
+/* 디자인 토큰. 라이트가 기본이고 [data-theme="dark"] 에서 교체한다 (UX-05).
+   다크 값은 IntelliJ IDEA 다크 테마에 맞춘 것이다(스크린샷 추정값).
+   색 토큰은 두 테마에 같은 이름으로 정의하고, 크기·간격 토큰은 :root 에만 둔다.
+   본문 글자 조합의 대비(4.5:1)는 __tests__/tokens.test.ts 가 계산해 지킨다 (LF-06).
+   Canvas 그래프 렌더러는 --graph-lane-* 를 getComputedStyle 로 읽는다. */
+
+:root {
+  color-scheme: light;
+
+  /* --bg 는 에디터 영역, --bg-panel 은 도구 창·툴바·상태 바 */
+  --bg: #ffffff;
+  --bg-panel: #f5f6f8;
+  --bg-hover: #eceef2;
+  /* 선택 행: 포커스가 있을 때 / 없을 때 */
+  --bg-selected: #dbe7ff;
+  --bg-selected-inactive: #dfe1e6;
+  --fg: #1c1f26;
+  /* hover 배경(--bg-hover) 위에서도 4.5:1 (W19 ③: #69707e → #646b79, 4.28 → 4.61) */
+  --fg-muted: #646b79;
+  /* --border 는 입력창·버튼 테두리와 구분선, --panel-seam 은 도구 창 사이의 이음매 */
+  --border: #d9dce3;
+  --panel-seam: #d9dce3;
+  /* --accent 는 채움·포커스 링, --accent-text 는 링크·현재 항목 같은 강조 글자 */
+  --accent: #2f6feb;
+  --accent-fg: #ffffff;
+  /* 글자를 올리는 강조 채움 (강조 단추). --accent-fg 와 4.5:1 — 다크의 --accent 는 흰 글자와 4.28 이라 따로 둔다 (W19 ③) */
+  --accent-fill: #2f6feb;
+  --accent-text: #1d5bc9;
+  --danger: #d1242f;
+  /* --danger 채움 위의 글자 (오류 알약·위험 단추). 다크는 --danger 가 밝아 어두운 글자를 쓴다 (W19 ③) */
+  --danger-fg: #ffffff;
+  /* 성공 표시 (토스트 테두리·완료 글자). 이름만 쓰고 정의가 없던 토큰 (W19 ③) */
+  --success: #1f7733;
+
+  /* 트리의 브랜치명, 받아올 커밋 수(⇣N), 올릴 커밋 수(⇡N) */
+  --vcs-branch: #8c5a00;
+  --vcs-incoming: #1d5bc9;
+  --vcs-outgoing: #1f7733;
+
+  /* 파일 상태 글자색 */
+  --status-added: #1f7733;
+  --status-modified: #1d5bc9;
+  --status-untracked: #ad4420;
+  --status-conflict: #c9202b;
+  /* 삭제된 파일은 눈에 덜 띄게 흐린 글자로 (상태 문자 D 와 함께 전한다). --fg-muted 와 같은 회색 */
+  --status-deleted: #646b79;
+
+  /* ref 라벨 아이콘 */
+  --ref-head: #7d6200;
+  --ref-local: #1f7733;
+  --ref-remote: #5f3dc4;
+  --ref-tag: #646b79;
+
+  --row-h: 24px;
+  --tree-row-h: 22px;
+  --tree-indent: 16px;
+  --icon-size: 16px;
+  --toolbar-h: 40px;
+  --toolwindow-header-h: 30px;
+  --stripe-w: 36px;
+  --statusbar-h: 24px;
+  --radius: 6px;
+
+  /* 간격 단계. 새로 쓰는 코드만 사용한다 (LF-03) */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", "Malgun Gothic",
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "D2Coding", monospace;
+  --font-size: 13px;
+
+  --graph-lane-0: #2f6feb;
+  --graph-lane-1: #d9480f;
+  --graph-lane-2: #2b8a3e;
+  --graph-lane-3: #ae3ec9;
+  --graph-lane-4: #e67700;
+  --graph-lane-5: #0c8599;
+  --graph-lane-6: #c92a2a;
+  --graph-lane-7: #5c7cfa;
+  --graph-lane-8: #868e96;
+  --graph-lane-9: #a61e4d;
+
+  --badge-head-bg: #2f6feb;
+  --badge-head-fg: #ffffff;
+  --badge-local-bg: #d3f9d8;
+  --badge-local-fg: #2b8a3e;
+  --badge-remote-bg: #fff3bf;
+  --badge-remote-fg: #8a6d00;
+  --badge-tag-bg: #e5dbff;
+  --badge-tag-fg: #5f3dc4;
+
+  --diff-add-bg: #e6ffec;
+  --diff-del-bg: #ffebe9;
+  --diff-word-bg: rgba(255, 196, 0, 0.45);
+
+  --tok-keyword: #a626a4;
+  --tok-string: #50a14f;
+  --tok-comment: #9a9a9a;
+  --tok-number: #986801;
+  --tok-type: #c18401;
+  --tok-name: #383a42;
+  --tok-function: #4078f2;
+  --tok-operator: #0184bc;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #1e1f22;
+  --bg-panel: #2b2d30;
+  --bg-hover: #303236;
+  --bg-selected: #2e436e;
+  --bg-selected-inactive: #43454a;
+  --fg: #dfe1e5;
+  --fg-muted: #969aa2;
+  /* --border 는 --bg 위에서도 보여야 한다. IntelliJ 식 어두운 패널 이음매에는
+     --panel-seam 을 쓴다(다크에서는 에디터 배경 --bg 와 같은 색) */
+  --border: #393b40;
+  --panel-seam: #1e1f22;
+  /* 다크의 --accent 는 글자색으로 쓰면 대비가 모자란다. 글자에는 --accent-text 를 쓴다 */
+  --accent: #3574f0;
+  --accent-fg: #ffffff;
+  --accent-fill: #2f6ae0;
+  --accent-text: #6b9bfa;
+  --danger: #ff6b6b;
+  --danger-fg: #1e1f22;
+  --success: #5fad65;
+
+  --vcs-branch: #e0a653;
+  --vcs-incoming: #6b9bfa;
+  --vcs-outgoing: #5fad65;
+
+  --status-added: #5fad65;
+  --status-modified: #70aeff;
+  /* hover 배경(--bg-hover) 위에서도 4.5:1 (W19 ③: #e0756a → #e67e73 4.23 → 4.65, #f06c6c → #f37676 4.32 → 4.69) */
+  --status-untracked: #e67e73;
+  --status-conflict: #f37676;
+  --status-deleted: #969aa2;
+
+  --ref-head: #f2c55c;
+  --ref-local: #5fad65;
+  --ref-remote: #b48ef0;
+  --ref-tag: #969aa2;
+
+  --graph-lane-0: #6ea8fe;
+  --graph-lane-1: #ff922b;
+  --graph-lane-2: #69db7c;
+  --graph-lane-3: #da77f2;
+  --graph-lane-4: #ffd43b;
+  --graph-lane-5: #3bc9db;
+  --graph-lane-6: #ff8787;
+  --graph-lane-7: #91a7ff;
+  --graph-lane-8: #adb5bd;
+  --graph-lane-9: #f783ac;
+
+  --badge-head-bg: #6ea8fe;
+  --badge-head-fg: #0d1117;
+  --badge-local-bg: #1f3a24;
+  --badge-local-fg: #8ce99a;
+  --badge-remote-bg: #3d3414;
+  --badge-remote-fg: #ffe066;
+  --badge-tag-bg: #2e2650;
+  --badge-tag-fg: #d0bfff;
+
+  --diff-add-bg: #16321f;
+  --diff-del-bg: #3a1f22;
+  --diff-word-bg: rgba(255, 196, 0, 0.35);
+
+  --tok-keyword: #c678dd;
+  --tok-string: #98c379;
+  --tok-comment: #7f848e;
+  --tok-number: #d19a66;
+  --tok-type: #e5c07b;
+  --tok-name: #e6e8ee;
+  --tok-function: #61afef;
+  --tok-operator: #56b6c2;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* @lezer/highlight classHighlighter 의 tok-* 클래스 (diff 뷰·편집기 공용) */
+.tok-keyword,
+.tok-modifier,
+.tok-controlKeyword,
+.tok-definitionKeyword {
+  color: var(--tok-keyword);
+}
+
+.tok-string,
+.tok-string2,
+.tok-regexp {
+  color: var(--tok-string);
+}
+
+.tok-comment,
+.tok-lineComment,
+.tok-blockComment,
+.tok-docComment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal {
+  color: var(--tok-number);
+}
+
+.tok-typeName,
+.tok-className,
+.tok-namespace {
+  color: var(--tok-type);
+}
+
+.tok-function,
+.tok-definition,
+.tok-propertyName {
+  color: var(--tok-function);
+}
+
+.tok-operator,
+.tok-punctuation,
+.tok-bracket {
+  color: var(--tok-operator);
+}
+
+.tok-variableName,
+.tok-name {
+  color: var(--tok-name);
+}
+
+/* 키보드 포커스 링 (UX-10) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

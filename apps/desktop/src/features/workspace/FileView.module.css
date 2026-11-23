@@ -1,0 +1,150 @@
+.pane {
+  /* 줄 번호 칸의 좌우 여백과 본문 끝 여백의 합 (가로 스크롤 폭 계산에 쓴다) */
+  --file-gutter-pad: 40px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 머리줄: 경로 부스러기 (api › src › Foo.java) 와 크기 */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--panel-seam);
+  background: var(--bg-panel);
+  font-size: 12px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.crumb,
+.crumbLast {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crumb {
+  color: var(--fg-muted);
+}
+
+/* 구성요소 사이의 › */
+.crumb::after {
+  content: "›";
+  margin: 0 var(--space-2);
+  color: var(--fg-muted);
+}
+
+.crumbLast {
+  flex: 0 0 auto;
+  max-width: 100%;
+  color: var(--fg);
+}
+
+.tag,
+.size {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+/* 저장소 안 파일의 히스토리·Blame 진입 (W13) */
+.tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 읽는 중·읽을 수 없는 상태의 안내 */
+.message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  padding: var(--space-6);
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.message[data-tone="error"] {
+  color: var(--danger);
+}
+
+/* 텍스트 본문: 가로·세로 스크롤, 줄은 안쪽 상자에 절대 위치로 놓인다 (가상 스크롤) */
+.scroller {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.scroller:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.inner {
+  position: relative;
+  min-width: 100%;
+}
+
+.line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  line-height: 20px;
+  white-space: pre;
+}
+
+/* 줄 번호: 가로로 스크롤해도 왼쪽에 붙어 있다 */
+.no {
+  position: sticky;
+  left: 0;
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  padding: 0 var(--space-4) 0 var(--space-3);
+  border-right: 1px solid var(--panel-seam);
+  background: var(--bg);
+  color: var(--fg-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.code {
+  flex: 0 0 auto;
+  padding: 0 var(--space-5) 0 var(--space-4);
+}

@@ -1,0 +1,32 @@
+export {
+  applyCustom,
+  applyPick,
+  blocksOf,
+  createMergeExtensions,
+  createMergeState,
+  createSideExtensions,
+  gotoConflict,
+  languageFor,
+  type MergeConfig,
+  type MergePickLabels,
+  pickEffect,
+  pickSpec,
+  remainingCount,
+} from './editor';
+export { MergeEditor, type MergeEditorProps, type MergeSaveOptions } from './MergeEditor';
+export {
+  type BlockRange,
+  buildResultDoc,
+  type ConflictOnly,
+  conflictBlocks,
+  isConflict,
+  linesFor,
+  type MergeDraft,
+  markerLineNumbers,
+  markerLines,
+  type ResolutionKind,
+  type ResultDoc,
+  sideDoc,
+  stripCr,
+  toFileText,
+} from './model';

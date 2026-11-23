@@ -1,0 +1,100 @@
+.pane {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 안내 글자: 홀로 그릴 때(세션 없음)는 칸을 채우고, 필터 바 아래에 그릴 때는 남은 높이만 (W26) */
+.empty,
+.error {
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.menuArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 필터 결과 없음 (LG-11, W26): 폴더 로그의 같은 상태와 같은 모양 — 문구, 건 조건 요약, "필터 지우기" */
+.state {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.conditions {
+  max-width: 100%;
+  color: var(--fg);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* 필터 결과 없음인데 작업 트리 변경(WIP 행)이 있어 로그가 그 행만 보일 때: 로그 위 한 줄 안내 (폴더 로그의 안내 줄과 같은
+   모양) */
+.notice {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-3);
+  min-height: var(--tree-row-h);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 12px;
+  --icon-size: 14px;
+}
+
+.noticeText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noticeAction {
+  all: unset;
+  flex: 0 0 auto;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.noticeAction:hover {
+  text-decoration: underline;
+}
+
+.noticeAction:disabled {
+  opacity: 0.5;
+  cursor: default;
+  text-decoration: none;
+}
+
+.noticeAction:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

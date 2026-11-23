@@ -1,0 +1,44 @@
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: var(--statusbar-h);
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.branch {
+  color: var(--fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.op {
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: var(--danger-fg);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.item {
+  white-space: nowrap;
+}
+
+.item[data-changes="dirty"] {
+  color: var(--fg);
+}
+
+.item[data-load-state="error"] {
+  color: var(--danger);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}

@@ -1,0 +1,79 @@
+/* 로그 행의 ref 라벨 (LG-03): 제목 칸의 오른쪽 끝에 아이콘 + 글자로 놓는다.
+   글자색은 행이 정한 --row-fg 를 따른다 (흐린 행은 흐리게, 선택 행은 --fg) */
+.refs {
+  display: flex;
+  align-items: center;
+  /* 줄어들지 않는다: 제목이 길면 제목이 줄고 라벨은 남는다. 대신 영역의 상한을 제목 칸의 절반으로 둔다 */
+  flex: 0 0 auto;
+  max-width: 50%;
+  min-width: 0;
+  margin-left: var(--space-4);
+  gap: var(--space-4);
+  font-size: 12px;
+  color: var(--row-fg, var(--fg));
+}
+
+/* 줄바꿈 배치 (커밋 상세의 ref 줄): 상한 없이 여러 줄로 늘어놓는다 */
+.refs[data-wrap="true"] {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  max-width: none;
+  margin-left: 0;
+  row-gap: var(--space-2);
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* 접는 어림값이 빗나가 자리가 모자라면 글자를 말줄임한다 */
+  flex: 0 1 auto;
+  min-width: 0;
+  --icon-size: 14px;
+}
+
+.label[draggable="true"] {
+  cursor: grab;
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label[data-tone="head"] .icon {
+  color: var(--ref-head);
+}
+
+.label[data-tone="local"] .icon {
+  color: var(--ref-local);
+}
+
+.label[data-tone="remote"] .icon {
+  color: var(--ref-remote);
+}
+
+.label[data-tone="tag"] .icon {
+  color: var(--ref-tag);
+}
+
+/* HEAD 를 겸하는 현재 브랜치는 굵게 */
+.label[data-tone="head"] .text {
+  font-weight: 600;
+}
+
+.more {
+  flex: none;
+  color: var(--row-meta, var(--fg-muted));
+}
+
+/* 화면에는 없고 보조 기술에만 읽히는 글자 */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

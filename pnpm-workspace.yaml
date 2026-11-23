@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
+# React 인스턴스를 하나로 유지하기 위해 모든 패키지가 같은 버전을 참조한다
+catalog:
+  react: ^19.3.1
+  react-dom: ^19.3.1
+  "@types/react": ^19.3.0
+  "@types/react-dom": ^19.3.0
+
+minimumReleaseAgeExclude:
+  - "@tauri-apps/plugin-dialog@2.8.4"

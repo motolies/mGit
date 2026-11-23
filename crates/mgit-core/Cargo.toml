@@ -1,0 +1,47 @@
+[package]
+name = "mgit-core"
+description = "응용 계층: 저장소 세션, 그래프 로드, 범위 조회 (tauri 비의존)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+mgit-graph.workspace = true
+# 명령 조립·파서만 쓴다. 러너 구현체(TokioGitRunner)는 주입받으므로 여기서 만들지 않는다
+mgit-git.workspace = true
+mgit-merge.workspace = true
+mgit-helper.workspace = true
+mgit-hosting.workspace = true
+mgit-l10n.workspace = true
+mgit-syntax = { workspace = true, optional = true }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+keyring = { version = "4", features = ["apple-native-keyring-store", "windows-native-keyring-store"] }
+regex = "1"
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+# 파일 보기(FS-06)가 여는 플래그 상수만 쓴다 (O_NOFOLLOW·O_NONBLOCK·O_NOCTTY, ELOOP)
+libc.workspace = true
+
+[features]
+default = ["syntax-check"]
+# tree-sitter 문법 컴파일을 빼고 싶을 때 끈다 (CF-25 구문 검사는 항상 None)
+syntax-check = ["dep:mgit-syntax"]
+
+[dev-dependencies]
+httpmock = "0.9"
+mgit-testkit.workspace = true
+mgit-watch.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

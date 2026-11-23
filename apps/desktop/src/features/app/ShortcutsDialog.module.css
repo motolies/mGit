@@ -1,0 +1,90 @@
+.dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0;
+  width: 640px;
+  max-width: 92vw;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  font-size: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 제목은 한 줄로 둔다 (자리가 모자라면 안내 글자가 줄을 바꾼다) */
+.title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.hint {
+  color: var(--fg-muted);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 140px 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.group {
+  color: var(--fg-muted);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.key {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.item[data-conflict="true"] .key {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.resetSlot {
+  display: inline-block;
+}

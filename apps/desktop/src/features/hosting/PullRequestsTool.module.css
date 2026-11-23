@@ -1,0 +1,15 @@
+/* Pull Requests 도구 창 (W24): 머리 제목 옆 개수, 계정 없음 안내. 틀(머리·내용 칸)은 Commit 도구 창과 같은 것을 쓴다 */
+
+/* 제목 옆 개수: 제목(굵게) 뒤에 흐린 보통 글자 */
+.count {
+  margin-left: var(--space-3);
+  color: var(--fg-muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 계정 없음 안내 + "계정 연결…" 링크 (다른 상태 안내 `ToolWindowNote` 와 같은 자리·글자) */
+.note {
+  padding: var(--space-4) var(--space-5);
+  color: var(--fg-muted);
+}

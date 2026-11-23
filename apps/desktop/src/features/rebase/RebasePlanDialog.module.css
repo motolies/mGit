@@ -1,0 +1,167 @@
+.dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0;
+  width: 760px;
+  max-width: 94vw;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  font-size: 12px;
+}
+
+.title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.hint {
+  color: var(--fg-muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 55vh;
+  overflow: auto;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 16px 180px 64px minmax(0, 1fr) 90px auto;
+  grid-template-areas:
+    "handle select hash subject author move"
+    ". message message message message message";
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  cursor: grab;
+}
+
+.row[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+.row[data-kind="squash"],
+.row[data-kind="fixup"] {
+  margin-left: 16px;
+}
+
+.handle {
+  grid-area: handle;
+  color: var(--fg-muted);
+  cursor: grab;
+}
+
+.select {
+  grid-area: select;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.hash {
+  grid-area: hash;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+
+.subject {
+  grid-area: subject;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.author {
+  grid-area: author;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move {
+  grid-area: move;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.small {
+  all: unset;
+  width: 20px;
+  height: 20px;
+  text-align: center;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.small:hover {
+  background: var(--bg-selected);
+  color: var(--fg);
+}
+
+.small:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.message {
+  grid-area: message;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  resize: vertical;
+}
+
+.options {
+  display: flex;
+  gap: 16px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.row[data-kind="drop"] .subject {
+  text-decoration: line-through;
+  color: var(--fg-muted);
+}

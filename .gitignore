@@ -1,0 +1,25 @@
+.DS_Store
+
+# Rust
+/target
+**/target/
+*.snap.new
+proptest-regressions/*.txt.new
+
+# Node
+**/node_modules/
+/apps/desktop/dist/
+*.tsbuildinfo
+
+# Tauri
+/apps/desktop/src-tauri/gen/schemas/
+
+# 벤치용 대형 저장소
+/bench/repos/
+
+# IDE·로컬
+.idea/
+.vscode/
+.claude/settings.local.json
+# 브라우저 자동화(Playwright MCP) 산출물
+.playwright-mcp/

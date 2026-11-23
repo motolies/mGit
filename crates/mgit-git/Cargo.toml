@@ -1,0 +1,29 @@
+[package]
+name = "mgit-git"
+description = "시스템 git 실행, 환경 변수 정책, 출력 파서"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+mgit-l10n.workspace = true
+tokio.workspace = true
+process-wrap.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# process-wrap 의 CreationFlags 가 받는 PROCESS_CREATION_FLAGS 타입. process-wrap 이 쓰는 버전과 같아야 한다
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+mgit-testkit.workspace = true
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

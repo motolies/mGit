@@ -1,0 +1,132 @@
+.area {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+/* 탭 막대. 높이는 도구 창 머리와 같다 */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  box-sizing: border-box;
+  height: var(--toolwindow-header-h);
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow-x: auto;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--panel-seam);
+  font-size: 12px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-5);
+  color: var(--fg-muted);
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.tab[data-active="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tabTitle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* 제목 뒤의 흐린 보조 글자 (커밋 diff 탭의 저장소 이름) */
+.tabDetail {
+  margin-left: var(--space-3);
+  color: var(--fg-muted);
+  font-style: normal;
+}
+
+/* 미리보기 탭 (ED-02): 다음 미리보기가 열리면 교체된다 */
+.tab[data-preview="true"] .tabTitle {
+  font-style: italic;
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.tabTitle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 활성 문서 자리. 문서가 스스로 스크롤하므로 여기서는 넘치지 않게만 한다 */
+.doc {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-6);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.emptyTitle {
+  font-size: 13px;
+}
+
+.hints {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.hint {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-7);
+}
+
+.hint dt,
+.hint dd {
+  margin: 0;
+}
+
+.hint dd {
+  color: var(--fg);
+}
+
+.link {
+  all: unset;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

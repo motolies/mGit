@@ -1,0 +1,8 @@
+---
+source: crates/mgit-graph/tests/scenarios.rs
+expression: summary(&layout)
+---
+rows(lane,color)=[(0, 0), (1, 1), (0, 0), (1, 1)]
+segments(lane,start,end,color)=[(0, 0, 2, 0), (1, 1, 3, 1)]
+edges(top_row,top_lane,bottom_lane,color)=[(0, 0, 1, 1), (2, 0, 1, 0)]
+lane_count=2

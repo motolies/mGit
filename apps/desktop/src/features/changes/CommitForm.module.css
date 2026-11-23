@@ -1,0 +1,149 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.summary,
+.body {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  resize: vertical;
+}
+
+.summary[data-too-long="true"] {
+  border-color: #e67700;
+}
+
+.guide {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+.guide[data-too-long="true"] {
+  color: #e67700;
+}
+
+.options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.commitButton {
+  margin-left: auto;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.error {
+  font-size: 12px;
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.hookOutput {
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.template {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  align-self: flex-start;
+}
+
+.secrets {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.secretsTitle {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.secretsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.secretsItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.secretsPath {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secretsRule,
+.secretsSnippet {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.secretsActions {
+  display: flex;
+  gap: 6px;
+}
+
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}

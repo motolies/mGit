@@ -1,0 +1,184 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--toolbar-h);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex: 0 0 auto;
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-right: 4px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tab,
+.tabActive {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tabActive {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+}
+
+.tabLabel {
+  all: unset;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tabClose {
+  all: unset;
+  padding: 0 6px;
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tabClose:hover {
+  color: var(--danger);
+}
+
+/* 오류 알약을 감싼 알림 칸 (툴바 줄의 한 칸으로 줄어든다) */
+.errorSlot {
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* all: unset 이 지운 포커스 링을 채움 바깥에 다시 그린다 (W19 ③) */
+.error:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.error {
+  all: unset;
+  max-width: 360px;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: var(--danger-fg);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.theme {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.themeLabel {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.select {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.operations {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.operation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  background: var(--bg-selected);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.theme {
+  margin-left: 0;
+}
+
+.sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.split {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.split > select {
+  max-width: 24px;
+  padding: 0 2px;
+  margin-left: -1px;
+}
+
+/* Push 옆 원격 선택 메뉴 트리거 — select 와 같은 모양 */
+.split > .caret {
+  height: 26px;
+  max-width: 24px;
+  padding: 0 4px;
+  margin-left: -1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.split > .caret:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.badge {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.progress {
+  width: 80px;
+  height: 8px;
+  vertical-align: middle;
+  margin-left: 6px;
+}

@@ -1,0 +1,271 @@
+.window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* 맨 위 검색 줄: 돋보기 + 테두리 없는 입력 */
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  height: var(--toolwindow-header-h);
+  flex: 0 0 auto;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--panel-seam);
+  color: var(--fg-muted);
+}
+
+.search:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.searchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.searchInput::placeholder {
+  color: var(--fg-muted);
+}
+
+.empty {
+  flex: 0 0 auto;
+  padding: var(--space-4) var(--space-5);
+  color: var(--fg-muted);
+}
+
+.menuArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+  outline: none;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  height: var(--tree-row-h);
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-3) 0 calc(var(--space-1) + var(--depth) * var(--tree-indent));
+  border-radius: var(--radius);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: default;
+}
+
+/* 맨 위의 잎(HEAD 행)은 펼침 화살표 자리만큼 밀어 그룹 이름과 글자 줄을 맞춘다 */
+.row[data-leaf="true"][aria-level="1"] {
+  padding-left: calc(var(--space-1) + var(--icon-size) + var(--space-2));
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+/* 선택 행: 트리에 포커스가 없으면 회색, 있으면 파랑. hover 보다 뒤에 두어 선택 색이 이긴다 */
+.row[aria-selected="true"] {
+  background: var(--bg-selected-inactive);
+}
+
+.tree:focus .row[aria-selected="true"] {
+  background: var(--bg-selected);
+}
+
+/* 키보드 커서: 선택과 따로 움직이므로 테두리로 그린다 */
+.tree:focus .row[data-cursor="true"] {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.twisty {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+.icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+.icon[data-tone="head"],
+.icon[data-tone="partial"],
+.icon[data-tone="favorite"] {
+  color: var(--ref-head);
+}
+
+/* 일부 저장소에서만 현재 브랜치: 같은 모양을 흐리게 */
+.icon[data-tone="partial"] {
+  opacity: 0.55;
+}
+
+.icon[data-tone="local"] {
+  color: var(--ref-local);
+}
+
+.icon[data-tone="remote"] {
+  color: var(--ref-remote);
+}
+
+.icon[data-tone="tag"] {
+  color: var(--ref-tag);
+}
+
+/* 이름은 자리가 모자랄 때만 줄어든다: 뒤의 회색 글자(기준 폭 0)가 남는 자리만 쓴다 */
+.label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 현재 브랜치는 색 말고 굵기로도 알린다 */
+.row[aria-current="true"] .label {
+  font-weight: 600;
+}
+
+.count,
+.track {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+/* 업스트림 차이 (BT-08): 받을 것·보낼 것을 띄어 쓰고 방향마다 색을 준다 */
+.track {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.track [data-dir="incoming"] {
+  color: var(--vcs-incoming);
+}
+
+.track [data-dir="outgoing"] {
+  color: var(--vcs-outgoing);
+}
+
+/* 선택 행 위에서는 색 글자의 대비가 모자란다. 본문색으로 두고 화살표 모양으로 구분한다 */
+.row[aria-selected="true"] .track [data-dir] {
+  color: var(--fg);
+}
+
+.suffix {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  color: var(--fg-muted);
+  --icon-size: 14px;
+}
+
+.badge[data-icon="radarOk"] {
+  color: var(--status-added);
+}
+
+.badge[data-icon="radarConflict"] {
+  color: var(--status-conflict);
+}
+
+/* 행 끝의 단추 (저장소 탭 Worktrees 그룹의 정리·만들기): 늘 보이고 오른쪽 끝에 붙는다 */
+.rowAction {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: calc(var(--tree-row-h) - var(--space-1));
+  height: calc(var(--tree-row-h) - var(--space-1));
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+/* 첫 단추만 오른쪽으로 민다 (단추끼리는 붙어 있다) */
+.rowAction:not(.rowAction + .rowAction) {
+  margin-left: auto;
+}
+
+.rowAction:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.rowAction:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 즐겨찾기 버튼: hover 한 행의 오른쪽 끝에 겹쳐 그린다. 아래 글자가 비치지 않게 행의 배경을 물려받는다 */
+.star {
+  all: unset;
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: calc(var(--tree-row-h) + var(--space-1));
+  height: 100%;
+  background: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.row:hover .star {
+  display: inline-flex;
+}
+
+.star:hover {
+  color: var(--fg);
+}
+
+.star[aria-pressed="true"] {
+  color: var(--ref-head);
+}
+
+/* 선택 배경 위에서는 색 글자의 대비가 모자라므로 기본 글자색으로 쓴다 (뜻은 아이콘 모양·굵기가 전한다) */
+.row[aria-selected="true"] .twisty,
+.row[aria-selected="true"] .count,
+.row[aria-selected="true"] .track,
+.row[aria-selected="true"] .suffix,
+.row[aria-selected="true"] .badge,
+.row[aria-selected="true"] .rowAction,
+.row[aria-selected="true"] .star {
+  color: var(--fg);
+}

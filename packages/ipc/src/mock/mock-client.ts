@@ -1,0 +1,1532 @@
+import type { IpcClient } from '../client';
+import { IpcClientError } from '../client';
+import { EMPTY_COMMIT_FILTER, isEmptyCommitFilter } from '../commit-filter';
+import type {
+  ContainingRefs,
+  GraphQuery,
+  HeadState,
+  IndexTarget,
+  IndexWriteResult,
+  InProgressOp,
+  ModuleOverrides,
+  OpOutcome,
+  RepoOpened,
+  RepoSessionRelease,
+  RepoState,
+  SessionEvent,
+  SessionId,
+  SessionProfile,
+  StatusEntry,
+} from '../types';
+import {
+  createMockRecorder,
+  type MockCommand,
+  mockBatchLabel,
+  mockCommitCommands,
+  mockFolderBatch,
+  mockIndexCommand,
+  mockOpCommand,
+  mockResolveCommands,
+  mockUnresolveCommand,
+} from './mock-console';
+import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
+import { MockGraphSource, windowOfGraph } from './mock-graph-source';
+import { pick } from './mock-l10n';
+import {
+  abandonMockOp,
+  applyMockIndexWrite,
+  buildMockTimeline,
+  commitMockStaged,
+  createMockScene,
+  hasMockConflictMarkers,
+  type MockFolderData,
+  type MockHostingMode,
+  type MockRepoData,
+  type MockScale,
+  type MockSceneName,
+  type MockTimeline,
+  mockBlame,
+  mockCommitDetail,
+  mockCommitFileDiff,
+  mockContainingRefs,
+  mockFileHistory,
+  mockFolderCommit,
+  mockFolderCommitDetail,
+  mockFolderCommitFileDiff,
+  mockFolderContainingRefs,
+  mockFolderEntries,
+  mockIndexPathError,
+  mockModules,
+  mockPullRequests,
+  mockRemoteProject,
+  mockStatusWith,
+  mockWorkTreeDiff,
+  parseMockHosting,
+  resolveMockConflict,
+  setMockFolderEntries,
+  setMockFolderOp,
+  unresolveMockConflict,
+} from './mock-workspace';
+import { createNullClient } from './null-client';
+
+/** 목 모드에서는 스테이징·커밋·브랜치 작업을 지원하지 않는다 (빈 구현) */
+function stubChanges() {
+  const {
+    gitVersion: _gv,
+    openRepo: _or,
+    graphWindow: _gw,
+    findRow: _fr,
+    repoState: _rs,
+    refreshRepo: _rr,
+    reloadGraph: _rg,
+    cancelOperation: _co,
+    commandLogRecent: _cl,
+    closeRepo: _cr,
+    searchCommits: _sc,
+    searchAdvanced: _sa,
+    graphQuery: _gq,
+    setGraphQuery: _sq,
+    graphAuthors: _ga,
+    setGraphLayoutPrefs: _sp,
+    ...rest
+  } = createNullClient();
+  return rest;
+}
+
+export interface MockClientOptions {
+  rows: number;
+  seed?: number;
+  /** 스트리밍 흉내: 이 간격(ms)마다 Progress 를 보낸다. 0 이면 즉시 완료 */
+  progressIntervalMs?: number;
+  /** Progress 한 번에 늘어나는 행 수 */
+  progressStep?: number;
+  /** 장면 (`VITE_MGIT_MOCK_SCENE`). 없으면 단일 저장소의 합성 그래프만 준다 */
+  scene?: MockSceneName | null;
+  /**
+   * 통합 타임라인의 첫 로드에 걸리는 시간 (ms). 0 이면 열자마자 끝난 정보를 준다. 0 보다 크면 코어처럼
+   * 끝나지 않은 정보를 먼저 주고 그 시간 뒤에 `graphLoadFinished` 를 보낸다. 주지 않으면
+   * `localStorage['mgit.mock.timelineDelayMs']` 를 본다 (브라우저에서 "브랜치 트리가 로그보다 먼저
+   * 뜬다"를 눈으로 확인할 때 쓴다)
+   */
+  timelineDelayMs?: number;
+  /**
+   * 포함 브랜치(`commitContainingRefs`·`folderCommitContainingRefs`) 응답 지연 (ms). 주지 않으면 부를
+   * 때마다 `localStorage['mgit.mock.containingDelayMs']` 를 본다 (브라우저에서 "읽는 중" 을 볼 때 쓴다)
+   */
+  containingDelayMs?: number;
+  /**
+   * 참이면 포함 브랜치가 코어의 시간 초과처럼 `timedOut: true` 로 온다 (지연 뒤). 주지 않으면 부를 때마다
+   * `localStorage['mgit.mock.containingTimeout'] === '1'` 을 본다 — 켠 채 "다시 시도" 를 누르면 다시 시간
+   * 초과이고, 끈 뒤 누르면 읽힌다
+   */
+  containingTimeout?: boolean;
+  /**
+   * 폴더 장면에서 진행 중인 작업이 있는 저장소를 몇 개 더할지 (W15 작업 띠를 여러 줄로 볼 때). 주지 않으면
+   * `localStorage['mgit.mock.folderOps']` 를 본다 (기본 0 — rebase 중인 catalog-service 하나)
+   */
+  folderOps?: number;
+  /**
+   * 화면 측정용 크기 조절값 (W18 ②, 폴더 장면). 주지 않으면 `localStorage['mgit.mock.<이름>']` 을 본다 — 이름은
+   * `MockScale` 의 키(`repos`·`remoteBranches`·`commitFiles`·`dirEntries`·`authors`·`worktreeChanges`·`bigFileKiB`). 장면은
+   * 클라이언트를 만들 때 한 번 만들므로 바꾼 뒤에는 페이지를 다시 읽는다. 기본은 모두 꺼짐
+   */
+  scale?: MockScale;
+  /**
+   * 호스팅 응답 (W24 Pull Requests 도구 창: 원격 프로젝트·PR 목록). 주지 않으면 부를 때마다
+   * `localStorage['mgit.mock.hosting']` 을 본다 — `github`(기본)·`none`·`noAccount`·`empty`·`error`·`gitlab`
+   * (`MockHostingMode`). 원격 프로젝트는 세션을 열 때 한 번 읽으므로 바꾼 뒤에는 페이지를 다시 읽는다
+   */
+  hosting?: MockHostingMode;
+  /**
+   * 참이면 저장소 장면의 storefront-web 이 서브모듈로 열린다 — `openRepo().superproject` 에 장면의 상위 저장소 경로를 싣는다
+   * (W25 Project 트리의 상위 저장소 링크). 주지 않으면 세션을 열 때 `localStorage['mgit.mock.superproject'] === '1'` 을 본다
+   * (바꾼 뒤에는 페이지를 다시 읽는다). 기본은 꺼짐
+   */
+  superproject?: boolean;
+}
+
+/** 목 전용 조절값을 두는 저장 키 */
+const TIMELINE_DELAY_KEY = 'mgit.mock.timelineDelayMs';
+const CONTAINING_DELAY_KEY = 'mgit.mock.containingDelayMs';
+const CONTAINING_TIMEOUT_KEY = 'mgit.mock.containingTimeout';
+const FOLDER_OPS_KEY = 'mgit.mock.folderOps';
+const HOSTING_KEY = 'mgit.mock.hosting';
+const SUPERPROJECT_KEY = 'mgit.mock.superproject';
+/** 상태 바에 보일 git 버전 글자 (매뉴얼 그림용). 없으면 `DEFAULT_GIT_VERSION` */
+const GIT_VERSION_KEY = 'mgit.mock.gitVersion';
+const DEFAULT_GIT_VERSION = '2.54.0 (mock)';
+/** 크기 조절값의 이름들 (저장 키는 `mgit.mock.<이름>`) */
+const SCALE_NAMES = [
+  'repos',
+  'remoteBranches',
+  'commitFiles',
+  'dirEntries',
+  'authors',
+  'worktreeChanges',
+  'bigFileKiB',
+] as const satisfies readonly (keyof MockScale)[];
+
+/** 저장해 둔 조절값 문자열. 없거나 읽을 수 없으면 null */
+function storedValue(key: string): string | null {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 저장해 둔 양수 (지연 ms·개수). 없거나 숫자가 아니거나 0 이하면 0 */
+function storedNumber(key: string): number {
+  const n = Number(storedValue(key) ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** 저장해 둔 크기 조절값 (켠 것만) */
+function storedScale(): MockScale {
+  return Object.fromEntries(
+    SCALE_NAMES.flatMap((name) => {
+      const n = storedNumber(`mgit.mock.${name}`);
+      return n > 0 ? [[name, n]] : [];
+    }),
+  );
+}
+
+/**
+ * 목 메서드 호출 수 (브라우저 확인용: 개발 도구에서 `globalThis.__mgitMockCalls` 로 읽는다). 지금은 포함
+ * 브랜치 두 메서드(로그를 빠르게 훑는 동안 요청이 쌓이지 않는지)와 파일 API 두 메서드(펼칠 때 그 디렉터리만
+ * 읽는지, 다시 읽기가 펼친 디렉터리 수만큼만 나가는지), 폴더 일괄 작업(툴바·트리 메뉴가 어느 저장소로 부르는지),
+ * 가벼운 세션(W13: 열기·놓기, 파일 히스토리·blame·외부 도구, light 세션의 그래프 API 거부 `graphUnavailable`),
+ * 폴더 stage·unstage·일괄 commit(W14: `folderStage`·`folderUnstage`·`folderCommit`), 세션의 줄 단위 stage·되돌리기
+ * (W14 작업 트리 diff 탭: `stageLines`·`discardLines`), 호스팅(W24: `pullRequests`·`createPullRequest`·`checkoutPullRequest`·
+ * `openUrl`), 모듈·서브모듈 쓰기(W25: `moduleScopeSet`·`moduleOverridesSet`·`submodule*`)를 센다. 나열한 디렉터리는
+ * 차례로 `globalThis.__mgitMockFsDirs` 에, 일괄 작업의 인자는 `globalThis.__mgitMockBatches` 에 남는다 — 일괄 작업은
+ * `{op, repos}`, W14 메서드는 `{method, repo, target}`·`{method, repos, message, stageAll}` 꼴이다
+ */
+function countMockCall(method: string): void {
+  const g = globalThis as { __mgitMockCalls?: Record<string, number> };
+  g.__mgitMockCalls ??= {};
+  g.__mgitMockCalls[method] = (g.__mgitMockCalls[method] ?? 0) + 1;
+}
+
+/** 쓰기 메서드의 인자를 `globalThis.__mgitMockBatches` 에 남긴다 */
+function recordMockWrite(args: Record<string, unknown>): void {
+  const g = globalThis as { __mgitMockBatches?: unknown[] };
+  g.__mgitMockBatches ??= [];
+  g.__mgitMockBatches.push(args);
+}
+
+/** 요청한 저장소의 줄만 남긴다. 요청이 없거나 비면 전부 (코어의 부분집합 조회 흉내) */
+function onlyRepos<T extends { path: string }>(rows: readonly T[], repos?: readonly string[]): T[] {
+  return repos && repos.length > 0 ? rows.filter((row) => repos.includes(row.path)) : [...rows];
+}
+
+interface MockSession {
+  path: string;
+  source: MockGraphSource;
+  /** 지금 그래프 질의. 커밋 필터만 실제로 적용한다 (나머지 옵션은 받아 두기만 한다) */
+  query: GraphQuery;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** 장면 데이터. 장면이 없으면 null */
+  data: MockRepoData | null;
+  /** 코어 `SessionProfile` 흉내: 탭 = full, 폴더가 연 세션 = light (그래프 메서드 거부, 그래프 이벤트 없음) */
+  profile: SessionProfile;
+  /** light 세션을 잡은 폴더 세션들. full 이면 비어 있다 */
+  holders: SessionId[];
+  /** 세션 이벤트를 보낼 곳. 승격하면 탭이 넘긴 것으로 바뀐다 */
+  emit: (event: SessionEvent) => void;
+  /**
+   * 모듈 범위·수동 보정 (W25): 코어는 작업 트리별로 저장하지만 목은 세션에 둔다 (`moduleScopeSet`·`moduleOverridesSet` 이
+   * 바꾸고, `moduleScope`·`modules` 가 읽는다)
+   */
+  moduleScope: string | null;
+  moduleOverrides: ModuleOverrides;
+}
+
+/** 폴더 하나가 잡을 수 있는 가벼운 세션 수 (코어 `LIGHT_SESSIONS_PER_FOLDER`) */
+const LIGHT_SESSIONS_PER_FOLDER = 3;
+
+/** 장면의 폴더 세션 */
+interface MockFolderSession {
+  data: MockFolderData;
+  emit: (event: SessionEvent) => void;
+  query: GraphQuery;
+  /** 타임라인 저장소 범위 (원 저장소 경로). 비면 전부 */
+  scope: string[];
+  generation: number;
+  /** 현재 질의로 만든 타임라인. 처음 쓸 때 만든다 */
+  timeline: MockTimeline | null;
+  /**
+   * 질의로 거르지 않은 전체 타임라인 (검색·커밋 상세·포함 브랜치·작성자의 재료). 처음 쓸 때 한 번 만든다 — 재료(저장소
+   * 표·행 수)가 바뀌지 않으므로 늘 같은 값이고, 행이 수십만 개일 때 상세를 열 때마다 다시 만드는 목 비용이 화면 측정에
+   * 섞이지 않게 한다
+   */
+  allHistory: MockTimeline | null;
+  /** 지연 로드 중인 첫 타임라인의 타이머 */
+  timelineTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** 통합 타임라인의 기본 질의: 날짜순 전체 (코어 기본값과 같다) */
+const TIMELINE_QUERY: GraphQuery = {
+  revs: { kind: 'all' },
+  hideRemotes: false,
+  pathScope: [],
+  sort: 'date',
+  firstParent: false,
+  noMerges: false,
+  filter: EMPTY_COMMIT_FILTER,
+};
+
+/** 저장소 탭의 기본 질의: 토폴로지 순 전체 (코어 기본값과 같다) */
+const GRAPH_QUERY: GraphQuery = { ...TIMELINE_QUERY, sort: 'topo' };
+
+/** 변경 없는 깨끗한 저장소 상태 (목·테스트용) */
+export function emptyRepoState(head: HeadState): RepoState {
+  const branch = head.state === 'detached' ? null : head.branch;
+  return {
+    refs: { head, labels: [], stashes: [], worktrees: [], remotes: [] },
+    status: {
+      branch: {
+        oid: head.state === 'unborn' ? null : head.oid,
+        head: branch,
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+      },
+      stashCount: 0,
+      entries: [],
+      summary: {
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+        conflicted: 0,
+        ahead: 0,
+        behind: 0,
+        stashCount: 0,
+        upstream: null,
+      },
+    },
+    op: null,
+  };
+}
+
+/**
+ * 코어 없이 동작하는 목 클라이언트. `VITE_MGIT_MOCK=<행 수>` 로 켠다.
+ * 브라우저(Safari)에서 PoC-2 렌더링 측정을 할 때 쓴다. `scene` 을 주면 폴더·저장소·충돌 화면까지
+ * 채운 장면 데이터(`mock-workspace.ts`)로 열린다
+ */
+export function createMockClient(opts: MockClientOptions): IpcClient {
+  const sessions = new Map<SessionId, MockSession>();
+  const folders = new Map<SessionId, MockFolderSession>();
+  const scene = opts.scene
+    ? createMockScene(opts.scene, opts.seed, {
+        folderOps: opts.folderOps ?? storedNumber(FOLDER_OPS_KEY),
+        scale: opts.scale ?? storedScale(),
+      })
+    : null;
+  /** 저장소 경로 → 해결한 충돌의 원래 항목 (W15 `unresolve` 가 되돌린다) */
+  const resolvedConflicts = new Map<string, Map<string, StatusEntry>>();
+  /** 저장소 경로 → 충돌 마커를 남긴 채 저장한 경로 (계속할 때 코어처럼 거부한다) */
+  const markerPaths = new Map<string, Set<string>>();
+  /** 쓰기 명령 기록을 만든다 (W19 ② 폴더 콘솔 — 번호는 장면의 탭 기록과 겹치지 않는다) */
+  const recordCommand = createMockRecorder();
+  let nextId = 1;
+  let nextPty = 1;
+  /** 일괄 작업의 진행 이벤트 번호 */
+  let nextOpId = 1;
+  let startupTaken = false;
+  const interval = opts.progressIntervalMs ?? 40;
+  const timelineDelay = opts.timelineDelayMs ?? storedNumber(TIMELINE_DELAY_KEY);
+  /** 지금 호스팅 조절값 (주지 않았으면 부를 때마다 저장한 값을 본다) */
+  const hostingMode = (): MockHostingMode =>
+    opts.hosting ?? parseMockHosting(storedValue(HOSTING_KEY));
+
+  /**
+   * 포함 브랜치 응답: 호출을 세고, 지연을 둔 뒤, 시간 초과 흉내가 켜져 있으면 `timedOut` 을, 아니면
+   * `compute` 의 결과를 준다 (없는 커밋이면 `compute` 가 던진 오류로 거부)
+   */
+  const containingReply = async (
+    method: string,
+    compute: () => ContainingRefs,
+  ): Promise<ContainingRefs> => {
+    countMockCall(method);
+    const delay = opts.containingDelayMs ?? storedNumber(CONTAINING_DELAY_KEY);
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    const timedOut = opts.containingTimeout ?? storedValue(CONTAINING_TIMEOUT_KEY) === '1';
+    return timedOut ? { timedOut: true, head: false, branches: [] } : compute();
+  };
+  const step = opts.progressStep ?? Math.max(500, Math.floor(opts.rows / 20));
+
+  /** 세션을 찾는다. 없으면 sessionNotFound */
+  const entryOf = (session: SessionId): MockSession => {
+    const entry = sessions.get(session);
+    if (!entry) {
+      throw new IpcClientError({ kind: 'sessionNotFound', session });
+    }
+    return entry;
+  };
+
+  /** 세션의 저장소 상태: 장면 데이터가 있으면 그것, 없으면 변경 없는 `main` */
+  const stateOf = (entry: MockSession): RepoState =>
+    entry.data?.repoState ??
+    emptyRepoState({
+      state: 'attached',
+      branch: 'main',
+      oid: entry.source.graph.rows[0]?.oid ?? '',
+    });
+
+  /** `open_repo`·`folder_open_repo_session` 응답을 만든다 */
+  const openedOf = (
+    session: SessionId,
+    entry: MockSession,
+    alreadyOpen: boolean,
+    promoted = false,
+  ): RepoOpened => {
+    const state = stateOf(entry);
+    // 상위 저장소는 조절값이 켜졌을 때만 싣는다 (W25 — 기본은 서브모듈이 아닌 저장소)
+    const superproject =
+      (opts.superproject ?? storedValue(SUPERPROJECT_KEY) === '1')
+        ? (entry.data?.superproject ?? null)
+        : null;
+    return {
+      session,
+      alreadyOpen,
+      nestedRepos: entry.data?.nestedRepos ?? [],
+      superproject,
+      info: {
+        workTree: entry.path,
+        gitDir: `${entry.path}/.git`,
+        commonDir: `${entry.path}/.git`,
+        objectFormat: 'sha1',
+        head: state.refs.head,
+        commitGraph: { present: true },
+        shallow: false,
+      },
+      state,
+      profile: entry.profile,
+      promoted,
+    };
+  };
+
+  /**
+   * light 세션이면 코어처럼 graphUnavailable 로 거부한다 (그 밖의 세션 검사는 하지 않는다). 거부한 수를
+   * `__mgitMockCalls.graphUnavailable` 로 센다 (가벼운 세션이 그래프 API 를 부르지 않는지 브라우저에서 확인)
+   */
+  const rejectLight = (session: SessionId) => {
+    if (sessions.get(session)?.profile === 'light') {
+      countMockCall('graphUnavailable');
+      throw new IpcClientError({ kind: 'graphUnavailable', session });
+    }
+  };
+
+  /** 그래프 메서드용 세션 조회. 없으면 sessionNotFound, light 세션이면 graphUnavailable */
+  const graphEntryOf = (session: SessionId): MockSession => {
+    const entry = entryOf(session);
+    rejectLight(session);
+    return entry;
+  };
+
+  /** 폴더가 잡은 light 세션들 (id 순). `except` 는 세지 않는다 */
+  const lightHolds = (folder: SessionId, except?: SessionId): SessionId[] =>
+    [...sessions]
+      .filter(([id, e]) => id !== except && e.profile === 'light' && e.holders.includes(folder))
+      .map(([id]) => id)
+      .sort((a, b) => a - b);
+
+  /** 한 개 더 잡아도 되는지. 상한이면 코어처럼 lightSessionLimit (지금 잡은 세션 목록과 함께) */
+  const checkLightLimit = (folder: SessionId, except?: SessionId) => {
+    const held = lightHolds(folder, except);
+    if (held.length >= LIGHT_SESSIONS_PER_FOLDER) {
+      throw new IpcClientError({
+        kind: 'lightSessionLimit',
+        limit: LIGHT_SESSIONS_PER_FOLDER,
+        sessions: held,
+      });
+    }
+  };
+
+  /** 세션을 지운다 (진행 중인 그래프 로드 타이머도 멈춘다) */
+  const dropSession = (session: SessionId) => {
+    const timer = sessions.get(session)?.timer;
+    if (timer) {
+      clearTimeout(timer);
+    }
+    sessions.delete(session);
+  };
+
+  /** 폴더의 잡음을 푼다. 마지막 잡음이 풀린 light 세션은 닫는다 (코어 `release_hold` 흉내) */
+  const releaseHold = (folder: SessionId, session: SessionId): RepoSessionRelease => {
+    const entry = sessions.get(session);
+    if (!entry) {
+      return { released: false, profile: null };
+    }
+    if (entry.profile === 'full') {
+      return { released: false, profile: 'full' };
+    }
+    const before = entry.holders.length;
+    entry.holders = entry.holders.filter((h) => h !== folder);
+    const released = entry.holders.length !== before;
+    if (entry.holders.length > 0) {
+      return { released, profile: 'light' };
+    }
+    dropSession(session);
+    return { released, profile: null };
+  };
+
+  /**
+   * 그래프 로드를 흉내 낸다: 첫 묶음 → (간격마다 진행) → 완료 이벤트. 새 탭과 승격이 함께 쓴다.
+   * 이벤트는 그때그때 `entry.emit` 으로 보낸다 (승격하면 새 채널)
+   */
+  const startGraphLoad = (session: SessionId, entry: MockSession) => {
+    const { source } = entry;
+    const total = source.shown.rows.length;
+    const emit = (event: SessionEvent) => entry.emit(event);
+    const first = Math.min(500, total);
+    source.setLoadedRows(first);
+    emit({ type: 'graphLoadStarted', session, generation: 1 });
+    emit({ type: 'graphFirstChunk', session, generation: 1, rows: first });
+
+    const startedAt = Date.now();
+    const finish = () => {
+      source.setLoadedRows(total);
+      emit({
+        type: 'graphLoadFinished',
+        session,
+        generation: 1,
+        rows: total,
+        laneCount: source.shown.laneCount,
+        elapsedMs: Date.now() - startedAt,
+        commitGraphSuggested: total >= 20_000,
+      });
+    };
+    if (interval <= 0 || first >= total) {
+      finish();
+      return;
+    }
+    let loaded = first;
+    const tick = () => {
+      if (!sessions.has(session)) {
+        return;
+      }
+      loaded = Math.min(total, loaded + step);
+      source.setLoadedRows(loaded);
+      if (loaded >= total) {
+        finish();
+        entry.timer = null;
+      } else {
+        emit({ type: 'graphProgress', session, generation: 1, rows: loaded });
+        entry.timer = setTimeout(tick, interval);
+      }
+    };
+    entry.timer = setTimeout(tick, interval);
+  };
+
+  /** 장면 세션의 데이터. 장면 없이 연 세션이면 sessionNotFound */
+  const dataOf = (session: SessionId): MockRepoData => {
+    const data = entryOf(session).data;
+    if (!data) {
+      throw new IpcClientError({ kind: 'sessionNotFound', session });
+    }
+    return data;
+  };
+
+  /** 폴더 세션을 찾는다. 없으면 sessionNotFound */
+  const folderOf = (session: SessionId): MockFolderSession => {
+    const folder = folders.get(session);
+    if (!folder) {
+      throw new IpcClientError({ kind: 'sessionNotFound', session });
+    }
+    return folder;
+  };
+
+  /**
+   * 파일 API 의 루트 (코어 `fs_root` 흉내): 세션 id 로만 정한다 — 폴더 세션은 폴더 경로, 저장소 세션은 연
+   * 경로(작업 트리). 둘 다 아니면 sessionNotFound
+   */
+  const fsRootOf = (session: SessionId): string => {
+    const root = folders.get(session)?.data.path ?? sessions.get(session)?.path;
+    if (root === undefined) {
+      throw new IpcClientError({ kind: 'sessionNotFound', session });
+    }
+    return root;
+  };
+
+  /** 파일 내용 (blame 재료). 장면이 없거나 텍스트가 아니면 null */
+  const textOf = (session: SessionId, path: string): string | null => {
+    if (!scene) {
+      return null;
+    }
+    const file = scene.fs.read(fsRootOf(session), path);
+    return file.kind === 'text' ? file.text : null;
+  };
+
+  /** 폴더의 타임라인을 현재 질의·저장소 범위로 다시 만들고 세대를 올린다 */
+  const rebuildTimeline = (folder: MockFolderSession): MockTimeline => {
+    folder.generation += 1;
+    folder.timeline = buildMockTimeline(
+      folder.data,
+      opts.rows,
+      folder.query,
+      folder.generation,
+      opts.seed,
+      folder.scope,
+    );
+    return folder.timeline;
+  };
+
+  /** 폴더의 현재 타임라인 (없으면 만든다) */
+  const timelineOf = (folder: MockFolderSession): MockTimeline =>
+    folder.timeline ?? rebuildTimeline(folder);
+
+  /** 질의로 거르지 않은 전체 타임라인 (검색·커밋 상세는 지금 질의와 무관하게 전체 이력에서 찾는다) */
+  const allHistoryOf = (folder: MockFolderSession): MockTimeline => {
+    folder.allHistory ??= buildMockTimeline(folder.data, opts.rows, TIMELINE_QUERY, 0, opts.seed);
+    return folder.allHistory;
+  };
+
+  /** 타임라인을 다시 만들고 코어처럼 폴더 세션 id 로 `graphReloaded` 를 보낸다 */
+  const reloadTimeline = (session: SessionId) => {
+    const folder = folderOf(session);
+    const { graph, info } = rebuildTimeline(folder);
+    folder.emit({
+      type: 'graphReloaded',
+      session,
+      generation: info.generation,
+      rows: graph.rows.length,
+      laneCount: graph.laneCount,
+    });
+  };
+
+  /**
+   * 폴더 쓰기 뒤 그 저장소를 연 세션(탭·가벼운 세션)의 상태를 폴더 변경 표에 맞추고 `statusChanged` 를 보낸다
+   * (코어에서는 그 세션의 감시가 index 변경을 보고 다시 읽는다). `committed` 면 ahead 도 오른다. `op` 를 주면 세션의
+   * 진행 중 작업도 그 값으로 바꾼다 (W15: 계속·건너뛰기·중단으로 끝나면 null)
+   */
+  const syncRepoSessions = (
+    data: MockFolderData,
+    repo: string,
+    committed: boolean,
+    op?: InProgressOp | null,
+  ) => {
+    const entries = mockFolderEntries(data, repo);
+    for (const [id, entry] of sessions) {
+      if (entry.path !== repo || !entry.data) {
+        continue;
+      }
+      const state = mockStatusWith(entry.data.repoState, entries, committed);
+      entry.data.repoState = op === undefined ? state : { ...state, op };
+      entry.emit({
+        type: 'statusChanged',
+        session: id,
+        status: entry.data.repoState.status,
+        op: entry.data.repoState.op ?? null,
+      });
+    }
+  };
+
+  /**
+   * 세션의 충돌 흐름 쓰기 (W15)가 폴더 장면 저장소의 상태를 바꾼다: 변경 표·요약(충돌 수, 끝났으면 작업 종류)을 바꾸고,
+   * 그 저장소를 연 세션들에 `statusChanged`(작업 포함), 그 저장소를 품은 폴더 세션들에 `folderChanged` 를 보낸다
+   * (`refs` 는 커밋·HEAD 이동이 있을 때). `op` 가 undefined 면 작업은 그대로다
+   */
+  const applySessionWrite = (
+    repo: string,
+    entries: StatusEntry[],
+    change: { committed?: boolean; op?: InProgressOp | null; refs?: boolean } = {},
+  ) => {
+    const data = scene?.folder;
+    if (!data) {
+      return;
+    }
+    setMockFolderEntries(data, repo, entries, change.committed ?? false);
+    if (change.op !== undefined) {
+      setMockFolderOp(data, repo, change.op?.kind ?? null);
+    }
+    syncRepoSessions(data, repo, change.committed ?? false, change.op);
+    for (const [id, folder] of folders) {
+      if (folder.data.openFolder.some((r) => r.path === repo)) {
+        folder.emit({ type: 'folderChanged', session: id, refs: change.refs ?? false, repo });
+      }
+    }
+  };
+
+  /**
+   * 목이 돌린 것으로 치는 쓰기 명령을 코어처럼 알린다 (W19 ② 폴더 콘솔): 그 작업 트리를 연 세션들에 `commandLogged`,
+   * 그 저장소를 목록에 품은 폴더 세션들에 `folderCommandLogged`. 폴더 이벤트의 `repo` 는 목록의 대표 경로다 — 워크트리에서
+   * 돈 명령이면 원 저장소(타임라인 번호가 같은 저장소), 실제 작업 디렉터리는 기록의 `cwd`
+   */
+  const logCommand = (cwd: string, command: MockCommand) => {
+    const record = recordCommand(cwd, command);
+    for (const [id, entry] of sessions) {
+      if (entry.path === cwd) {
+        entry.emit({ type: 'commandLogged', session: id, record });
+      }
+    }
+    for (const [id, folder] of folders) {
+      if (!folder.data.openFolder.some((r) => r.path === cwd)) {
+        continue;
+      }
+      const index = folder.data.folderCommitDetail.repoIndex[cwd];
+      const repo = index === undefined ? cwd : (folder.data.folderTimeline[index]?.path ?? cwd);
+      folder.emit({ type: 'folderCommandLogged', session: id, repo, record });
+    }
+  };
+
+  /**
+   * 세션이 폴더 장면의 저장소면 그 저장소 경로와 지금 항목 (W15 충돌 흐름은 폴더 장면에서만 상태를 바꾼다). 아니면 null
+   */
+  const folderRepoOf = (session: SessionId) => {
+    const path = entryOf(session).path;
+    const data = scene?.folder;
+    if (!data?.openFolder.some((r) => r.path === path)) {
+      return null;
+    }
+    return { repo: path, entries: mockFolderEntries(data, path) };
+  };
+
+  /** 세션의 지금 진행 중 작업 (없으면 null) */
+  const opOf = (session: SessionId) => sessions.get(session)?.data?.repoState.op ?? null;
+
+  /**
+   * 충돌 하나를 해결한다 (`resolveFile`·`resolveSide`·`resolveDelete` 공용): 충돌 항목이 아니면 코어처럼 거부하고, 원래
+   * 항목을 되돌리기용으로 기억한 뒤 돌린 명령(`commands`)을 기록하고 상태를 바꾼다
+   */
+  const resolveIn = (
+    session: SessionId,
+    path: string,
+    keep: boolean,
+    commands: readonly MockCommand[],
+  ) => {
+    const target = folderRepoOf(session);
+    if (!target) {
+      return;
+    }
+    const next = resolveMockConflict(target.entries, path, keep);
+    const original = target.entries.find((e) => e.path === path);
+    if (next === null || !original) {
+      throw new IpcClientError({
+        kind: 'internal',
+        message: pick(`충돌 파일이 아닙니다: ${path}`, `Not a conflicted file: ${path}`),
+      });
+    }
+    const remembered = resolvedConflicts.get(target.repo) ?? new Map<string, StatusEntry>();
+    remembered.set(path, original);
+    resolvedConflicts.set(target.repo, remembered);
+    for (const command of commands) {
+      logCommand(target.repo, command);
+    }
+    applySessionWrite(target.repo, next);
+  };
+
+  /** 작업을 건너뛰거나 중단해 끝낸다: 그 명령을 기록하고, 이 작업의 변경이 사라지고 작업이 없어진다 */
+  const abandonIn = (session: SessionId, action: 'skip' | 'abort') => {
+    const target = folderRepoOf(session);
+    if (!target) {
+      return;
+    }
+    const op = opOf(session);
+    if (op === null) {
+      throw new IpcClientError({
+        kind: 'internal',
+        message: pick('진행 중인 작업이 없습니다', 'No operation in progress'),
+      });
+    }
+    resolvedConflicts.delete(target.repo);
+    markerPaths.delete(target.repo);
+    logCommand(target.repo, mockOpCommand(op.kind, action));
+    applySessionWrite(target.repo, abandonMockOp(target.entries), { op: null, refs: true });
+  };
+
+  /**
+   * 폴더 stage·unstage (코어 `folder_stage`·`folder_unstage` 흉내). 검사 순서도 코어와 같다: 폴더 → 저장소 소속 →
+   * 경로 → 빈 대상 → 상태 읽기(요약에 실패한 저장소는 그 사유로 실패). 썼으면 변경 표·요약·세션 상태를 바꾸고
+   * 그 저장소의 `folderChanged`(`refs: false`)를 보낸다
+   */
+  const folderIndexWrite = (
+    method: 'folderStage' | 'folderUnstage',
+    session: SessionId,
+    repo: string,
+    target: IndexTarget,
+  ): IndexWriteResult => {
+    countMockCall(method);
+    recordMockWrite({ method, repo, target });
+    const folder = folderOf(session);
+    if (!folder.data.openFolder.some((r) => r.path === repo)) {
+      throw new IpcClientError({
+        kind: 'internal',
+        message: pick(
+          `이 폴더의 저장소가 아닙니다: ${repo}`,
+          `Not a repository in this folder: ${repo}`,
+        ),
+      });
+    }
+    for (const path of target.kind === 'paths' ? target.paths : []) {
+      const refused = mockIndexPathError(path);
+      if (refused) {
+        throw new IpcClientError({ kind: 'internal', message: refused });
+      }
+    }
+    if (target.kind === 'paths' && target.paths.length === 0) {
+      return { ran: false, skipped: [] };
+    }
+    const failed = folder.data.folderSummaries.find((s) => s.path === repo)?.error;
+    if (failed) {
+      throw new IpcClientError({ kind: 'internal', message: failed });
+    }
+    const op = method === 'folderStage' ? 'stage' : 'unstage';
+    const { entries, result } = applyMockIndexWrite(
+      mockFolderEntries(folder.data, repo),
+      op,
+      target,
+    );
+    const command = mockIndexCommand(op, target, result);
+    if (command) {
+      logCommand(repo, command);
+    }
+    if (result.ran) {
+      setMockFolderEntries(folder.data, repo, entries);
+      syncRepoSessions(folder.data, repo, false);
+      folder.emit({ type: 'folderChanged', session, refs: false, repo });
+    }
+    return result;
+  };
+
+  /** 장면이 채우는 메서드. 아래에서 널 스텁 위에 덮어쓴다 (장면이 없으면 비어 있다) */
+  const sceneMethods: Partial<IpcClient> = scene
+    ? {
+        // 시작 인자처럼 한 번만 돌려준다
+        async takeStartupPaths() {
+          const paths = startupTaken ? [] : scene.startupPaths;
+          startupTaken = true;
+          return paths;
+        },
+
+        // 저장소 세션
+        commitDetail: async (session, oid) =>
+          mockCommitDetail(entryOf(session).source.graph, dataOf(session).commitDetail, oid),
+        commitFileDiff: async (session, _oid, path, oldPath) =>
+          mockCommitFileDiff(dataOf(session).commitDetail, path, oldPath),
+        commitContainingRefs: (session, oid) =>
+          containingReply('commitContainingRefs', () =>
+            mockContainingRefs(entryOf(session).source.graph, dataOf(session).repoState.refs, oid),
+          ),
+        workTreeDiff: async (session, path, staged) =>
+          mockWorkTreeDiff(dataOf(session), path, staged),
+        listStashes: async (session) => dataOf(session).listStashes,
+        stashFiles: async (session) => dataOf(session).stashFiles,
+        // 충돌 레이더·백업 ref (W22 브랜치 트리의 배지·Backups). 목은 계산하지 않고 장면 값을 준다
+        conflictRadar: async (session) => dataOf(session).conflictRadar,
+        backups: async (session) => dataOf(session).backups,
+        // 호스팅 (W24 Pull Requests 도구 창): 장면 값을 조절값(`hosting`)에 맞춰 준다. 만들기·체크아웃은 상태를 바꾸지
+        // 않고 인자만 남긴다 (`__mgitMockBatches` 의 `{method, session, …}`)
+        hostingRemoteProject: async (session) => mockRemoteProject(dataOf(session), hostingMode()),
+        async pullRequests(session) {
+          countMockCall('pullRequests');
+          return mockPullRequests(dataOf(session), hostingMode());
+        },
+        prTemplates: async (session) => dataOf(session).prTemplates,
+        async createPullRequest(session, spec) {
+          countMockCall('createPullRequest');
+          recordMockWrite({ method: 'createPullRequest', session, spec });
+          const { hostingRemoteProject: project, pullRequests } = dataOf(session);
+          const number = Math.max(0, ...pullRequests.map((p) => p.number ?? 0)) + 1;
+          return {
+            number,
+            title: spec.title,
+            draft: spec.draft,
+            author: project.accountId?.split(':').pop() ?? '',
+            authorAvatar: null,
+            headRef: spec.head,
+            headSha: '',
+            baseRef: spec.base,
+            headRepo: null,
+            crossRepo: false,
+            webUrl: `https://${project.host}/${project.project}/pull/${number}`,
+            updatedAt: null,
+            review: null,
+            checks: null,
+            mergeable: null,
+            labels: [],
+          };
+        },
+        async checkoutPullRequest(session, number, worktree) {
+          countMockCall('checkoutPullRequest');
+          recordMockWrite({ method: 'checkoutPullRequest', session, number, worktree });
+          return `pr/${number}`;
+        },
+        // 웹 주소 열기 (PR 의 "브라우저에서 열기"·더블클릭 등): 목은 열지 않고 주소만 남긴다 (`{method: 'openUrl', url}`)
+        async openUrl(url) {
+          countMockCall('openUrl');
+          recordMockWrite({ method: 'openUrl', url });
+        },
+        // 모듈 (W25 Project 트리): 범위·수동 보정은 세션에 남아 화면에서 범위를 좁히고 풀고, 숨기고, 직접 추가할 수 있다
+        // (코어처럼 목록은 보정을 적용해 경로순). 그래프는 경로 범위로 걸러지지 않는다 (목은 커밋 필터만 적용한다)
+        modules: async (session) =>
+          mockModules(dataOf(session).modules, entryOf(session).moduleOverrides),
+        moduleOverrides: async (session) => entryOf(session).moduleOverrides,
+        async moduleOverridesSet(session, overrides) {
+          countMockCall('moduleOverridesSet');
+          recordMockWrite({ method: 'moduleOverridesSet', session, overrides });
+          entryOf(session).moduleOverrides = overrides;
+        },
+        moduleScope: async (session) => entryOf(session).moduleScope,
+        async moduleScopeSet(session, path) {
+          countMockCall('moduleScopeSet');
+          recordMockWrite({ method: 'moduleScopeSet', session, path });
+          entryOf(session).moduleScope = path;
+        },
+        // 서브모듈 (W25): 목록은 장면 값이고, 쓰기는 상태를 바꾸지 않고 인자만 남긴다 (`{method, session, …}`)
+        submodules: async (session) => dataOf(session).submodules,
+        async submoduleUpdate(session, recursive) {
+          countMockCall('submoduleUpdate');
+          recordMockWrite({ method: 'submoduleUpdate', session, recursive });
+        },
+        async submoduleSync(session) {
+          countMockCall('submoduleSync');
+          recordMockWrite({ method: 'submoduleSync', session });
+        },
+        async submoduleAdd(session, url, path, branch) {
+          countMockCall('submoduleAdd');
+          recordMockWrite({ method: 'submoduleAdd', session, url, path, branch });
+        },
+        async submoduleRemove(session, path) {
+          countMockCall('submoduleRemove');
+          recordMockWrite({ method: 'submoduleRemove', session, path });
+        },
+        async submoduleSetBranch(session, path, branch) {
+          countMockCall('submoduleSetBranch');
+          recordMockWrite({ method: 'submoduleSetBranch', session, path, branch });
+        },
+        async submoduleUpdateRemote(session, path, mode) {
+          countMockCall('submoduleUpdateRemote');
+          recordMockWrite({ method: 'submoduleUpdateRemote', session, path, mode });
+        },
+        async submoduleBatch(session, op, paths) {
+          countMockCall('submoduleBatch');
+          recordMockWrite({ method: 'submoduleBatch', session, op, paths });
+          return {
+            label: mockBatchLabel(op),
+            results: [],
+            succeeded: dataOf(session).submodules.length,
+            skipped: 0,
+            failed: 0,
+          };
+        },
+        conflicts: async (session) => dataOf(session).conflicts,
+        async conflictFile(session, path) {
+          const payload = dataOf(session).conflictFile[path];
+          if (!payload) {
+            throw new IpcClientError({ kind: 'internal', message: `no conflict at ${path}` });
+          }
+          return payload;
+        },
+        // 파일 히스토리·blame (W13): 세션 그래프의 커밋과 파일 트리의 내용으로 만든다 (그래프를 읽지 않는
+        // light 세션에서도 된다 — 코어도 git 으로 따로 읽는다)
+        async fileHistory(session, path, limit) {
+          countMockCall('fileHistory');
+          return mockFileHistory(entryOf(session).source.graph, path, limit);
+        },
+        async blame(session, path) {
+          countMockCall('blame');
+          return mockBlame(entryOf(session).source.graph, path, textOf(session, path));
+        },
+        // 외부 diff 도구: 목은 띄울 도구가 없다. 부른 수만 센다 (응답은 널 클라이언트 그대로)
+        openDifftool(session, target) {
+          countMockCall('openDifftool');
+          return createNullClient().openDifftool(session, target);
+        },
+        // 세션의 hunk·줄 stage·unstage·되돌리기 (W14 작업 트리 diff 탭): 목은 상태를 바꾸지 않는다. 어느 세션·어느
+        // 경로로 불렀는지만 남긴다 (`__mgitMockBatches` 의 `{method, session, path, …}`)
+        stageLines(session, path, selection, unstage, options) {
+          countMockCall('stageLines');
+          recordMockWrite({ method: 'stageLines', session, path, selection, unstage });
+          return createNullClient().stageLines(session, path, selection, unstage, options);
+        },
+        discardLines(session, path, selection, options) {
+          countMockCall('discardLines');
+          recordMockWrite({ method: 'discardLines', session, path, selection });
+          return createNullClient().discardLines(session, path, selection, options);
+        },
+
+        // 세션의 충돌 흐름 (W15): 폴더 장면 저장소의 세션이면 상태를 바꾸고 이벤트를 낸다 (그 밖의 장면은 널 스텁
+        // 그대로). 어느 세션·어느 경로로 불렀는지 `__mgitMockBatches` 의 `{method, session, …}` 로 남긴다
+        async mergeToolName(session) {
+          countMockCall('mergeToolName');
+          // 폴더 장면의 세션은 머지 도구가 설정된 것처럼 답한다 (가벼운 세션에서 이 읽기가 도는지 보인다)
+          return folderRepoOf(session) ? 'meld' : null;
+        },
+        async resolveFile(session, path, content, allowConflictMarkers) {
+          countMockCall('resolveFile');
+          recordMockWrite({ method: 'resolveFile', session, path, allowConflictMarkers });
+          const target = folderRepoOf(session);
+          if (!target) {
+            return;
+          }
+          if (hasMockConflictMarkers(content)) {
+            if (!allowConflictMarkers) {
+              throw new IpcClientError({ kind: 'conflictMarkers', files: [path] });
+            }
+            const marked = markerPaths.get(target.repo) ?? new Set<string>();
+            markerPaths.set(target.repo, marked.add(path));
+          }
+          resolveIn(session, path, true, mockResolveCommands(path, { kind: 'file' }));
+        },
+        async resolveSide(session, path, side) {
+          countMockCall('resolveSide');
+          recordMockWrite({ method: 'resolveSide', session, path, side });
+          resolveIn(session, path, true, mockResolveCommands(path, { kind: 'side', side }));
+        },
+        async resolveDelete(session, path, keep) {
+          countMockCall('resolveDelete');
+          recordMockWrite({ method: 'resolveDelete', session, path, keep });
+          resolveIn(session, path, keep, mockResolveCommands(path, { kind: 'delete', keep }));
+        },
+        async unresolve(session, path, mode) {
+          countMockCall('unresolve');
+          recordMockWrite({ method: 'unresolve', session, path, mode });
+          const target = folderRepoOf(session);
+          const original = target ? resolvedConflicts.get(target.repo)?.get(path) : undefined;
+          if (!target) {
+            return;
+          }
+          if (!original) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick(`되돌릴 충돌이 없습니다: ${path}`, `No conflict to undo: ${path}`),
+            });
+          }
+          resolvedConflicts.get(target.repo)?.delete(path);
+          markerPaths.get(target.repo)?.delete(path);
+          logCommand(target.repo, mockUnresolveCommand(path, mode));
+          applySessionWrite(target.repo, unresolveMockConflict(target.entries, original));
+        },
+        async opContinue(session, allowConflictMarkers): Promise<OpOutcome> {
+          countMockCall('opContinue');
+          recordMockWrite({ method: 'opContinue', session, allowConflictMarkers });
+          const target = folderRepoOf(session);
+          if (!target) {
+            return 'clean';
+          }
+          const op = opOf(session);
+          if (op === null) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick('진행 중인 작업이 없습니다', 'No operation in progress'),
+            });
+          }
+          // 코어 `op_continue` 의 검사 순서: 남은 충돌 → stage 된 충돌 마커 (둘 다 git 을 돌리기 전이라 기록이 없다)
+          if (target.entries.some((e) => e.conflict !== null && e.conflict !== undefined)) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick(
+                '해결하지 않은 충돌 파일이 남아 있습니다',
+                'Unresolved conflict files remain',
+              ),
+            });
+          }
+          const marked = [...(markerPaths.get(target.repo) ?? [])];
+          if (marked.length > 0 && !allowConflictMarkers) {
+            throw new IpcClientError({ kind: 'conflictMarkers', files: marked });
+          }
+          // 남은 단계 없이 끝난다 (흉내 내지 않는 것: rebase 의 다음 단계)
+          resolvedConflicts.delete(target.repo);
+          markerPaths.delete(target.repo);
+          logCommand(target.repo, mockOpCommand(op.kind, 'continue'));
+          applySessionWrite(target.repo, commitMockStaged(target.entries), {
+            committed: true,
+            op: null,
+            refs: true,
+          });
+          return 'clean';
+        },
+        async opSkip(session): Promise<OpOutcome> {
+          countMockCall('opSkip');
+          recordMockWrite({ method: 'opSkip', session });
+          const kind = opOf(session)?.kind;
+          if (
+            folderRepoOf(session) &&
+            kind !== 'rebase' &&
+            kind !== 'cherryPick' &&
+            kind !== 'revert'
+          ) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick('건너뛸 수 없는 작업입니다', 'This operation cannot be skipped'),
+            });
+          }
+          abandonIn(session, 'skip');
+          return 'clean';
+        },
+        async opAbort(session) {
+          countMockCall('opAbort');
+          recordMockWrite({ method: 'opAbort', session });
+          abandonIn(session, 'abort');
+        },
+
+        // 폴더 세션. 같은 폴더를 다시 열면 코어처럼 기존 세션을 돌려준다
+        async openFolder(path, onEvent) {
+          const data = scene.folder;
+          if (!data || path !== data.path) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick(`폴더가 아닙니다: ${path}`, `Not a folder: ${path}`),
+            });
+          }
+          for (const [session, folder] of folders) {
+            if (folder.data.path === path) {
+              return { session, path, repos: data.openFolder };
+            }
+          }
+          const session = nextId++;
+          folders.set(session, {
+            data,
+            emit: onEvent,
+            query: TIMELINE_QUERY,
+            scope: [],
+            generation: 0,
+            timeline: null,
+            allHistory: null,
+            timelineTimer: null,
+          });
+          return { session, path, repos: data.openFolder };
+        },
+        async closeFolder(session) {
+          const timer = folders.get(session)?.timelineTimer;
+          if (timer) {
+            clearTimeout(timer);
+          }
+          folders.delete(session);
+          // 코어 안전망 흉내: 이 폴더만 잡고 있던 light 세션을 함께 닫는다 (승격된 세션은 남는다)
+          for (const id of [...sessions.keys()]) {
+            releaseHold(session, id);
+          }
+        },
+        // 가벼운 세션 (W13): 폴더의 저장소 경로로 연다. 그래프 이벤트는 내지 않는다
+        async folderOpenRepoSession(session, repo, onEvent) {
+          countMockCall('folderOpenRepoSession');
+          const folder = folderOf(session);
+          if (!folder.data.openFolder.some((r) => r.path === repo)) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick(
+                `이 폴더의 저장소가 아닙니다: ${repo}`,
+                `Not a repository in this folder: ${repo}`,
+              ),
+            });
+          }
+          for (const [open, entry] of sessions) {
+            if (entry.path !== repo) {
+              continue;
+            }
+            // 탭의 세션은 잡지 않고 빌려 준다. light 면 이 폴더도 잡는다 (상한 검사)
+            if (entry.profile === 'light' && !entry.holders.includes(session)) {
+              checkLightLimit(session, open);
+              entry.holders.push(session);
+            }
+            return openedOf(open, entry, true);
+          }
+          checkLightLimit(session);
+          // 요약에 실패한 저장소는 코어처럼 상태 읽기에서 실패한다 (같은 사유)
+          const failed = folder.data.folderSummaries.find((s) => s.path === repo)?.error;
+          if (failed) {
+            throw new IpcClientError({ kind: 'internal', message: failed });
+          }
+          const id = nextId++;
+          const source = new MockGraphSource({ rows: opts.rows, seed: opts.seed });
+          const data = scene.repo(repo, source.graph);
+          const entry: MockSession = {
+            path: repo,
+            source,
+            query: GRAPH_QUERY,
+            timer: null,
+            data,
+            profile: 'light',
+            holders: [session],
+            emit: onEvent,
+            moduleScope: null,
+            moduleOverrides: data.moduleOverrides,
+          };
+          sessions.set(id, entry);
+          return openedOf(id, entry, false);
+        },
+        async folderReleaseRepoSession(session, repoSession) {
+          countMockCall('folderReleaseRepoSession');
+          return releaseHold(session, repoSession);
+        },
+        folderSummaries: async (session, repos) =>
+          onlyRepos(folderOf(session).data.folderSummaries, repos),
+        folderRescan: async (session) => folderOf(session).data.openFolder,
+        folderChanges: async (session, repos) =>
+          onlyRepos(folderOf(session).data.folderChanges, repos),
+        // 브랜치 목록은 타임라인을 만들지 않고 답한다
+        async folderBranches(session, repos) {
+          const all = folderOf(session).data.folderBranches;
+          const kept = onlyRepos(all.repos, repos);
+          const paths = new Set(kept.map((repo) => repo.path));
+          return {
+            repos: kept,
+            branches: all.branches.flatMap((branch) => {
+              const own = branch.repos.filter((repo) => paths.has(repo.path));
+              return own.length > 0 ? [{ ...branch, repos: own }] : [];
+            }),
+          };
+        },
+        // 커밋 상세·diff: 저장소 세션 없이 폴더 세션 + 저장소 경로로 답한다 (CD-05)
+        async folderCommitDetail(session, repo, oid) {
+          const folder = folderOf(session);
+          // 타임라인을 아직 만들지 않았으면 만들지 않는다 (코어처럼 그래프 필드만 빈다)
+          return mockFolderCommitDetail(
+            allHistoryOf(folder),
+            folder.timeline,
+            folder.data.folderCommitDetail,
+            repo,
+            oid,
+          );
+        },
+        folderCommitFileDiff: async (session, repo, _oid, path, oldPath) =>
+          mockFolderCommitFileDiff(folderOf(session).data.folderCommitDetail, repo, path, oldPath),
+        // 포함 브랜치: 지금 질의와 무관하게 전체 이력에서 그 저장소의 커밋을 찾는다 (CD-03)
+        folderCommitContainingRefs: (session, repo, oid) =>
+          containingReply('folderCommitContainingRefs', () => {
+            const folder = folderOf(session);
+            return mockFolderContainingRefs(allHistoryOf(folder), folder.data, repo, oid);
+          }),
+        async folderTimelineOpen(session) {
+          const folder = folderOf(session);
+          if (folder.timeline || timelineDelay <= 0) {
+            return timelineOf(folder).info;
+          }
+          // 코어처럼: 끝나지 않은 빈 정보를 먼저 주고, 로드가 끝나면 이벤트로 알린다
+          if (!folder.timelineTimer) {
+            folder.emit({ type: 'graphLoadStarted', session, generation: 1 });
+            folder.timelineTimer = setTimeout(() => {
+              folder.timelineTimer = null;
+              if (!folders.has(session)) {
+                return;
+              }
+              // 그사이 질의가 바뀌어 이미 만들어졌으면 그 타임라인으로 끝났다고 알린다
+              const { graph, info } = timelineOf(folder);
+              folder.emit({
+                type: 'graphLoadFinished',
+                session,
+                generation: info.generation,
+                rows: graph.rows.length,
+                laneCount: graph.laneCount,
+                elapsedMs: timelineDelay,
+                commitGraphSuggested: false,
+              });
+            }, timelineDelay);
+          }
+          return {
+            generation: 0,
+            rows: 0,
+            finished: false,
+            maxPerRepo: 0,
+            repos: [],
+            scoped: false,
+          };
+        },
+        folderTimelineInfo: async (session) => timelineOf(folderOf(session)).info,
+        async folderTimelineWindow(session, start, count) {
+          const { graph, info } = timelineOf(folderOf(session));
+          return windowOfGraph(graph, graph.rows.length, info.generation, start, count);
+        },
+        async folderTimelineFindRow(session, repo, oid) {
+          const rows = timelineOf(folderOf(session)).graph.rows;
+          const idx = rows.findIndex((r) => r.repo === repo && r.oid === oid);
+          return idx >= 0 ? idx : null;
+        },
+        // 잘못된 필터면 코어처럼 질의를 바꾸지 않고 invalidFilter
+        async folderTimelineQuerySet(session, query) {
+          const folder = folderOf(session);
+          compileMockFilter(query.filter);
+          folder.query = query;
+          reloadTimeline(session);
+        },
+        /**
+         * 저장소 범위 (코어 `folder_timeline_scope_set` 흉내): 빈 목록 = 전부, 워크트리 경로는 원 저장소로,
+         * 이 폴더의 저장소가 아닌 경로는 범위를 바꾸지 않고 internal 오류. 범위 밖 저장소는 번호·색을 둔 채 행만 빠진다
+         */
+        async folderTimelineScopeSet(session, repos) {
+          const folder = folderOf(session);
+          const index = folder.data.folderCommitDetail.repoIndex;
+          const scope: string[] = [];
+          for (const path of repos) {
+            const at = index[path];
+            const primary = at === undefined ? undefined : folder.data.folderTimeline[at]?.path;
+            if (primary === undefined) {
+              throw new IpcClientError({
+                kind: 'internal',
+                message: pick(
+                  `이 폴더의 저장소가 아닙니다: ${path}`,
+                  `Not a repository in this folder: ${path}`,
+                ),
+              });
+            }
+            if (!scope.includes(primary)) {
+              scope.push(primary);
+            }
+          }
+          folder.scope = scope;
+          reloadTimeline(session);
+        },
+        // 작성자 후보: 범위에 든 저장소들의 필터 없는 이력에서
+        async folderTimelineAuthors(session) {
+          const folder = folderOf(session);
+          const all = allHistoryOf(folder);
+          const inScope = new Set(
+            all.info.repos
+              .filter((r) => folder.scope.length === 0 || folder.scope.includes(r.path))
+              .map((r) => r.index),
+          );
+          return mockAuthors(all.graph.rows.filter((r) => inScope.has(r.repo ?? -1)));
+        },
+        async folderTimelineReload(session) {
+          reloadTimeline(session);
+        },
+
+        // 파일 트리·파일 보기 (W10): 폴더·저장소 세션 모두. 거부는 코어처럼 internal 오류
+        async fsListDir(session, dir, limit) {
+          countMockCall('fsListDir');
+          const g = globalThis as { __mgitMockFsDirs?: string[] };
+          g.__mgitMockFsDirs ??= [];
+          g.__mgitMockFsDirs.push(dir);
+          return scene.fs.list(fsRootOf(session), dir, limit);
+        },
+        async fsReadFile(session, path) {
+          countMockCall('fsReadFile');
+          return scene.fs.read(fsRootOf(session), path);
+        },
+
+        /**
+         * 폴더 일괄 작업 (W19 ②): 저장소 상태는 바꾸지 않고, 코어의 건너뜀 규칙대로 결과를 만들어 코어와 같은 차례로
+         * 이벤트를 낸다 — 진행 시작 → 저장소마다 (돌린 명령의 기록 → 진행) → 끝 → 저장소마다 `folderChanged`(refs).
+         * 실패 사례: push 는 갈라진 `web-console` 이 거부되고, 요약에 실패한 `infra-scripts` 는 명령 없이 실패한다.
+         * 호출 인자는 `__mgitMockBatches` 에 `{op, repos}` 로 남는다
+         */
+        async folderBatch(session, op, repos) {
+          countMockCall('folderBatch');
+          recordMockWrite({ op, repos: [...repos] });
+          const folder = folderOf(session);
+          const { result, commands } = mockFolderBatch(folder.data, op, repos);
+          const opId = nextOpId++;
+          const total = result.results.length;
+          folder.emit({
+            type: 'operationStarted',
+            session,
+            opId,
+            kind: 'batch',
+            label: result.label,
+          });
+          result.results.forEach((r, i) => {
+            for (const c of commands) {
+              if (c.cwd === r.path) {
+                logCommand(c.cwd, c.command);
+              }
+            }
+            folder.emit({
+              type: 'operationProgress',
+              session,
+              opId,
+              phase: r.name,
+              percent: Math.floor(((i + 1) * 100) / total),
+              message: r.ok ? '' : r.message,
+            });
+          });
+          folder.emit({
+            type: 'operationFinished',
+            session,
+            opId,
+            ok: result.failed === 0,
+            cancelled: false,
+            message: pick(
+              `성공 ${result.succeeded} · 건너뜀 ${result.skipped} · 실패 ${result.failed}`,
+              `${result.succeeded} succeeded · ${result.skipped} skipped · ${result.failed} failed`,
+            ),
+            lockLeft: false,
+          });
+          for (const r of result.results) {
+            folder.emit({ type: 'folderChanged', session, refs: true, repo: r.path });
+          }
+          return result;
+        },
+        // 폴더 stage·unstage·일괄 commit (W14): 목도 상태를 바꾼다 (Commit 도구 창의 체크가 움직이는 것을 브라우저에서
+        // 볼 수 있게). 새로고침하면 처음 상태로 돌아간다
+        folderStage: async (session, repo, target) =>
+          folderIndexWrite('folderStage', session, repo, target),
+        folderUnstage: async (session, repo, target) =>
+          folderIndexWrite('folderUnstage', session, repo, target),
+        async folderCommit(session, repos, message, stageAll) {
+          countMockCall('folderCommit');
+          recordMockWrite({ method: 'folderCommit', repos: [...repos], message, stageAll });
+          const folder = folderOf(session);
+          const { result, committed } = mockFolderCommit(folder.data, repos, message, stageAll);
+          for (const { cwd, command } of mockCommitCommands(result, stageAll)) {
+            logCommand(cwd, command);
+          }
+          for (const repo of committed) {
+            syncRepoSessions(folder.data, repo, true);
+          }
+          // 코어처럼 대상 저장소마다 (건너뛴 것도) `folderChanged`(refs) 를 보낸다
+          for (const r of result.results) {
+            folder.emit({ type: 'folderChanged', session, refs: true, repo: r.path });
+          }
+          return result;
+        },
+      }
+    : {};
+
+  return {
+    /** git 버전. 부를 때마다 `localStorage['mgit.mock.gitVersion']` 을 보고, 없으면 목 표시가 붙은 기본값 */
+    async gitVersion() {
+      return { version: storedValue(GIT_VERSION_KEY) || DEFAULT_GIT_VERSION, path: 'mock' };
+    },
+
+    async openRepo(path, onEvent) {
+      if (scene) {
+        // 폴더 경로는 실제 코어처럼 거부한다. 앱이 이 오류를 받아 폴더 탭으로 넘어간다
+        if (scene.folder && path === scene.folder.path) {
+          throw new IpcClientError({
+            kind: 'multiRepoFolder',
+            path,
+            repos: scene.folder.openFolder.map((r) => r.path),
+          });
+        }
+        for (const [open, entry] of sessions) {
+          if (entry.path !== path) {
+            continue;
+          }
+          if (entry.profile === 'full') {
+            return openedOf(open, entry, true);
+          }
+          // 코어처럼 같은 id 를 전체 프로필로 올린다: 잡음이 사라지고, 이벤트는 이 호출의 채널로 가며,
+          // 그래프 로드가 시작된다
+          entry.profile = 'full';
+          entry.holders = [];
+          entry.emit = onEvent;
+          startGraphLoad(open, entry);
+          return openedOf(open, entry, true, true);
+        }
+      }
+      const session = nextId++;
+      const source = new MockGraphSource({ rows: opts.rows, seed: opts.seed });
+      const data = scene ? scene.repo(path, source.graph) : null;
+      const entry: MockSession = {
+        path,
+        source,
+        query: GRAPH_QUERY,
+        timer: null,
+        data,
+        profile: 'full',
+        holders: [],
+        emit: onEvent,
+        moduleScope: null,
+        moduleOverrides: data?.moduleOverrides ?? { added: [], hidden: [] },
+      };
+      sessions.set(session, entry);
+      startGraphLoad(session, entry);
+      // 장면의 git 명령 기록을 코어처럼 이벤트로 보낸다 (콘솔 탭)
+      for (const record of entry.data?.commandLogged ?? []) {
+        entry.emit({ type: 'commandLogged', session, record });
+      }
+
+      return openedOf(session, entry, false);
+    },
+
+    graphWindow(session, start, count) {
+      return graphEntryOf(session).source.fetchWindow(start, count);
+    },
+
+    // 지금 보이는(필터로 걸러진) 행에서 찾는다. 걸러져 빠진 커밋이면 null
+    async findRow(session, oid) {
+      const rows = graphEntryOf(session).source.shown.rows;
+      const idx = rows.findIndex((r) => r.oid === oid);
+      return idx >= 0 ? idx : null;
+    },
+
+    async repoState(session) {
+      return stateOf(entryOf(session));
+    },
+
+    async refreshRepo(session) {
+      entryOf(session);
+    },
+
+    async reloadGraph(session) {
+      graphEntryOf(session);
+    },
+
+    // 그래프에 기대는 메서드: light 세션이면 코어처럼 graphUnavailable, 아니면 널 스텁 그대로
+    async searchCommits(session, query, fields, limit) {
+      rejectLight(session);
+      return createNullClient().searchCommits(session, query, fields, limit);
+    },
+    async searchAdvanced(session, query, limit) {
+      rejectLight(session);
+      return createNullClient().searchAdvanced(session, query, limit);
+    },
+    // 코어 `graph_query` 처럼 가벼운 세션도 받아 둔 질의(기본값)를 준다
+    async graphQuery(session) {
+      return entryOf(session).query;
+    },
+    /**
+     * 커밋 필터만 코어 규칙대로 적용한다 (`mock-filter.ts`): 잘못된 정규식이면 질의를 바꾸지 않고 `invalidFilter`,
+     * 아니면 걸러진 행으로 바꾸고 `graphReloaded`. 나머지 옵션(ref 범위·정렬 등)은 받아 두기만 한다
+     */
+    async setGraphQuery(session, query) {
+      const entry = graphEntryOf(session);
+      compileMockFilter(query.filter);
+      entry.query = query;
+      const { source } = entry;
+      source.setShown(
+        isEmptyCommitFilter(query.filter) ? null : filterMockGraph(source.graph, query, () => 0),
+      );
+      source.generation += 1;
+      entry.emit({
+        type: 'graphReloaded',
+        session,
+        generation: source.generation,
+        rows: source.shown.rows.length,
+        laneCount: source.shown.laneCount,
+      });
+    },
+    // 작성자 후보: 필터와 무관하게 전체 이력에서
+    async graphAuthors(session) {
+      return mockAuthors(graphEntryOf(session).source.graph.rows);
+    },
+    async setGraphLayoutPrefs(session, prefs) {
+      rejectLight(session);
+      return createNullClient().setGraphLayoutPrefs(session, prefs);
+    },
+
+    async cancelOperation() {
+      return false;
+    },
+
+    async commandLogRecent() {
+      return [];
+    },
+
+    ...stubChanges(),
+    ...sceneMethods,
+
+    // 화면 언어 (다국어 L3): OS 로캘 대신 브라우저 언어를 준다. `setLanguage` 는 Rust 가 없으니 빈 구현(위 stubChanges)
+    async systemLocale() {
+      return (typeof navigator === 'undefined' ? '' : navigator.language) || null;
+    },
+
+    // 터미널: 셸이 없으므로 탭마다 안내 한 줄만 보내고 입력은 버린다 (PTY 번호로 뷰가 다시 열렸는지 알 수 있다)
+    async ptyOpen(cwd, _cols, _rows, onEvent) {
+      const id = nextPty++;
+      onEvent({ kind: 'data', id, data: `[mock pty ${id}] ${cwd}\r\n` });
+      return id;
+    },
+
+    // 프로필 무관하게 닫는다 (잡은 폴더가 있어도). 모르는 id 면 코어처럼 sessionNotFound
+    async closeRepo(session) {
+      entryOf(session);
+      dropSession(session);
+    },
+  };
+}

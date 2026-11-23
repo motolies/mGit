@@ -1,0 +1,7 @@
+/* 세트 CSS 는 font 축약형으로 글리프 크기를 고정한다(Codicons: 특이도 0,2,0 으로 16px).
+   어떤 세트에서도 토큰(--icon-size)이 이기도록 클래스를 겹쳐 특이도를 올린다.
+   크기를 바꾸려면 사용처에서 --icon-size 를 다시 정한다. */
+.icon.icon.icon {
+  flex: none;
+  font-size: var(--icon-size);
+}

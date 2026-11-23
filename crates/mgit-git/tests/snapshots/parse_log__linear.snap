@@ -1,0 +1,37 @@
+---
+source: crates/mgit-git/tests/parse_log.rs
+expression: recs
+---
+[
+    CommitRecord {
+        oid: Oid(4a2af4045f0a864405c6aba4c2e1d9ebb9b83d3e),
+        parents: [
+            Oid(f3784877ef621d1f1a2293db3c6d49cb6b924ee3),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000180,
+        commit_time: 1700000180,
+        subject: "commit 3",
+    },
+    CommitRecord {
+        oid: Oid(f3784877ef621d1f1a2293db3c6d49cb6b924ee3),
+        parents: [
+            Oid(45d79670179ae9602e4281e00eefb043a408bb29),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000120,
+        commit_time: 1700000120,
+        subject: "commit 2",
+    },
+    CommitRecord {
+        oid: Oid(45d79670179ae9602e4281e00eefb043a408bb29),
+        parents: [],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000060,
+        commit_time: 1700000060,
+        subject: "commit 1",
+    },
+]

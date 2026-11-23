@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/*",
+    "bench/mgit-bench",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90" # tauri 2.12 MSRV
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+# 내부 crate
+mgit-model = { path = "crates/mgit-model" }
+mgit-graph = { path = "crates/mgit-graph" }
+mgit-git = { path = "crates/mgit-git" }
+mgit-core = { path = "crates/mgit-core" }
+mgit-testkit = { path = "crates/mgit-testkit" }
+mgit-watch = { path = "crates/mgit-watch" }
+mgit-store = { path = "crates/mgit-store" }
+mgit-merge = { path = "crates/mgit-merge" }
+mgit-helper = { path = "crates/mgit-helper" }
+mgit-hosting = { path = "crates/mgit-hosting" }
+mgit-syntax = { path = "crates/mgit-syntax" }
+mgit-l10n = { path = "crates/mgit-l10n" }
+
+# 직렬화·오류
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# 비동기·프로세스
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time"] }
+tokio-util = { version = "0.7", default-features = false }
+process-wrap = { version = "10", features = ["tokio1"] }
+
+# 파일 감시·로컬 저장
+notify = "8.2"
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+# 로그
+tracing = "0.1"
+
+# 플랫폼 상수 (파일 API 의 O_NOFOLLOW·O_NONBLOCK 등, unix 전용)
+libc = "0.2"
+
+# 테스트·벤치
+tempfile = "3"
+insta = "1"
+proptest = "1"
+memory-stats = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+
+[profile.release]
+debug = "line-tables-only" # 벤치 프로파일링용

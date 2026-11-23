@@ -1,0 +1,151 @@
+//! mGit 응용 계층.
+//!
+//! 저장소 세션을 열고, `git log` 스트림을 받아 레인을 배정하고,
+//! 프런트가 요청하는 범위(`graph_window`)만 돌려준다. 파일 감시로 외부 변경을 반영하고,
+//! 쓰기 명령은 `common_dir` 단위 큐로 직렬화한다.
+//! `GitRunner`·`Watcher`·`Store` 구현체를 주입받으므로 tauri 를 모른다.
+
+mod authors;
+mod branch;
+mod changes;
+mod commit_table;
+mod config;
+mod conflict;
+mod conflict_assist;
+mod core;
+mod credentials;
+mod error;
+mod events;
+mod folder;
+mod folder_batch;
+mod folder_branches;
+mod folder_index;
+mod folder_inspect;
+mod folder_timeline;
+mod fs_tree;
+mod history;
+mod hosting;
+mod hosting_pr;
+mod inspect;
+mod lfs;
+mod light;
+mod load;
+mod logged_runner;
+mod merge_ops;
+mod messages;
+mod modules;
+mod ops;
+mod preview;
+mod rebase_plan;
+mod ref_index;
+mod refresh;
+mod repo_ops;
+mod repo_settings;
+mod safety;
+mod secrets;
+mod session;
+mod signing;
+mod stash;
+mod state;
+mod submodule;
+mod sync;
+mod verify;
+mod window;
+mod worktree;
+mod write;
+
+pub use authors::AUTHORS_MAX;
+pub use branch::{CheckoutTarget, is_not_fully_merged};
+pub use changes::CommitSpec;
+pub use commit_table::CommitTable;
+pub use config::{CoreConfig, LIGHT_SESSIONS_PER_FOLDER};
+pub use conflict::{ConflictPayload, EDITOR_MARKER_SIZE};
+pub use conflict_assist::{
+    ConflictOrigins, ConflictRule, KEEP_REF_PREFIX, KeptResolution, OriginCommit, RenameConflict,
+    RerereStatus, ResolutionReview, RuleAction, RuleResult, is_three_way,
+};
+pub use core::{Core, OpenedRepo};
+pub use credentials::{
+    AskpassService, CredentialOutcome, CredentialPrompt, CredentialReply, CredentialRequest,
+    KeyringVault, MemoryVault, PromptKind, SecretVault, vault_key,
+};
+pub use error::CoreError;
+pub use events::{CoreEvent, EventSink, SessionId};
+pub use folder::{FolderOpened, FolderRepo, FolderSession, SCAN_DEPTH};
+pub use folder_batch::{
+    BatchOp, BatchPullMode, BatchResult, FolderSettings, RepoChanges, RepoResult,
+};
+pub use folder_branches::{FolderBranch, FolderBranchIn, FolderBranchRepo, FolderBranches};
+pub use folder_index::{IndexTarget, IndexWriteResult, SkipReason, SkippedPath};
+pub use folder_timeline::{TimelineInfo, TimelineRepoInfo};
+pub use fs_tree::{
+    FS_LIST_DEFAULT_LIMIT, FS_LIST_MAX_LIMIT, FS_READ_MAX_BYTES, FsEntry, FsEntryKind, FsFile,
+    FsListing,
+};
+pub use history::EMPTY_TREE;
+pub use hosting::{HostingAccount, OauthConfig, Profile, SshKeyInfo, account_id};
+pub use hosting_pr::{PrTemplate, RemoteProject, avatar_url_for, parse_remote_url};
+pub use inspect::{CommitDetail, ContainingBranch, ContainingRefs, SearchFields, SearchResult};
+pub use lfs::{LfsFile, LfsLock, LfsStatus};
+pub use light::RepoSessionRelease;
+pub use merge_ops::{MergeMode, OpOutcome, ResetMode};
+pub use mgit_hosting::{
+    CreatePr, DeviceCodes, HostKind, HostingClient, HostingError, PullRequest, RepoPage,
+    RepoSummary as HostedRepo, UserInfo,
+};
+pub use mgit_merge::{
+    AutoSuggestion, Block, BlockClass, ConflictDoc, Eol, Resolution, conflict_marker_lines,
+    has_conflict_markers, parse_markers, render,
+};
+pub use modules::{Module, ModuleKind, ModuleOverrides, detect_modules, module_config_files};
+pub use ops::OpHandle;
+pub use preview::{
+    ISOLATED_PREFIX, IsolatedMerge, MergePreview, RadarEntry, RadarKind, RebaseStepPreview,
+    STRATEGY_OPTIONS,
+};
+pub use rebase_plan::{
+    PlanCommit, RebaseAction, RebasePlan, RebasePlanInfo, RebaseStep, WorktreeWip,
+};
+pub use repo_ops::{gitignore_body, gitignore_templates};
+pub use repo_settings::PERF_SUGGEST_FILES;
+pub use safety::{BACKUP_NS, UndoStack};
+pub use secrets::glob_match;
+pub use session::{LoadState, SessionProfile};
+pub use state::{RepoRefs, RepoState};
+pub use submodule::{SubmoduleCommit, SubmodulePointerLog, SubmoduleSides, SubmoduleUnpushed};
+pub use verify::{CommandRun, SyntaxCompare};
+pub use window::{GraphRow, GraphWindow};
+pub use worktree::{WorktreeSource, default_worktree_path};
+pub use write::{WriteResult, WriteSpec};
+
+// 셸이 DTO 변환에 쓰는 타입을 재수출한다
+pub use mgit_graph::{LayoutOptions, StubDir, WindowEdge, WindowSegment, WindowStub, branch_color};
+pub use mgit_model::{
+    BackupRecord, BinaryInfo, BranchHeader, ChangedFile, CloneSpec, CommandLogRecord,
+    CommitGraphStatus, ConflictKind, DiffChange, DiffLine, FileDiff, FileState, FoundRepo,
+    GitError, GitHint, GitVersion, GitignoreTemplate, HeadState, Hunk, InProgressOp, LineKind,
+    LineSelection, MarkerHit, ObjectFormat, Oid, OpKind, PullMode, PushSpec, RecentEntry,
+    RecentKind, RefKind, RefLabel, RemoteInfo, RepoInfo, RepoKind, RepoSummary, StashInfo,
+    StatusEntry, StatusSummary, SubmoduleInfo, SubmoduleState, SubmoduleStatus, WorkTreeStatus,
+    WorktreeInfo, WorktreeRemoveCheck,
+};
+
+// 충돌 해결 (S6) 모델 재수출
+pub use mgit_model::{ConflictFile, ConflictSide, SideLabels, UnresolveMode};
+
+// 안전장치 (Phase 2 A1) 모델 재수출
+pub use mgit_model::{
+    BackupRef, CommitTemplate, HeadRef, RefSnapshot, ReflogEntry, UndoEntryInfo, UndoResult,
+};
+
+// diff·히스토리·그래프 질의 (Phase 2 A3) 모델 재수출
+pub use mgit_model::{
+    AdvancedSearch, AuthorCandidate, AuthorList, BlameLine, CommitFilter, DiffOptions,
+    DifftoolTarget, GraphLayoutPrefs, GraphQuery, GraphRevs, GraphSort, HistoryEntry, Pickaxe,
+    TextFilter,
+};
+
+// 설정·서명·비밀 스캔 (Phase 2 A4) 모델 재수출
+pub use mgit_model::{
+    HookInfo, PerfStatus, RepoSettings, SecretHit, SecretIgnore, SignatureStatus, SigningInfo,
+};

@@ -1,0 +1,166 @@
+/*
+ * 진행 중인 작업 한 줄 (저장소 탭 띠와 폴더 탭 띠 공용). 배경은 위험 색을 옅게 섞고, 글자는 모두 --fg 로 둔다 —
+ * 섞은 배경 위에서 --danger·--fg-muted 글자는 4.5:1 에 못 미친다 (계획 부록 "W1 이 남긴 후속", 다크 4.2·4.1).
+ * 작업 라벨은 위험 색 테두리로 표시한다 (배경 채움 + 흰 글자는 다크 2.78:1)
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex: 0 0 auto;
+  min-width: 0;
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-panel));
+  color: var(--fg);
+}
+
+.label {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/*
+ * 격리 병합 줄 (W21): 위험이 아니라 모드라 배경은 중립(--bg-panel)이고 칩만 강조 색 테두리다. 위험 색 줄과 섞여도 한
+ * 덩어리의 오류로 읽히지 않게 한다. 새 대비 짝은 없다 (--fg·--accent 테두리 on --bg-panel 은 대비 표에 있다)
+ */
+.row[data-tone="mode"] {
+  background: var(--bg-panel);
+}
+
+.row[data-tone="mode"] .label {
+  border-color: var(--accent);
+}
+
+/* 대상(저장소) 이름과 색 사각형 (LF-09) */
+.subject {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30%;
+}
+
+.swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--repo-color);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* 충돌 수 (누르면 충돌 해결과 같은 동작) */
+.count {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.count:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.count:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.count:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 실패·막힘: 색만으로 전하지 않도록 굵게 + 앞의 표시 (LF-05) */
+.hint[data-tone="error"] {
+  font-weight: 600;
+}
+
+.hint[data-tone="error"]::before {
+  content: "⚠ ";
+}
+
+.actions {
+  margin-left: auto;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+/*
+ * 여러 줄을 쌓는 띠: 정한 줄 수까지만 보이고 나머지는 띠 안에서 스크롤한다. 줄들은 띠의 격자 열을 나눠 쓴다 (subgrid,
+ * W19) — 칸마다 열 번호가 정해져 있어(`opSlotColumn`) 그 줄에 없는 칸(merge 의 Skip 등)은 자리만 빈다.
+ * 열: 대상 이름(띠 폭의 30% 까지) | 라벨 | 충돌 수 | 안내(남는 폭) | 충돌 해결 | Continue | Skip | Abort
+ */
+.band {
+  --op-band-row-h: 37px;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns:
+    fit-content(30%) max-content max-content minmax(0, 1fr)
+    max-content max-content max-content max-content;
+  align-content: start;
+  column-gap: 10px;
+  max-height: calc(var(--op-band-row-h) * var(--op-band-rows, 3));
+  overflow-y: auto;
+}
+
+.band > .row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+/* 단추들도 줄의 격자에 직접 놓인다 (묶음 상자를 없앤다) */
+.band .actions {
+  display: contents;
+}
+
+.band [data-slot] {
+  grid-row: 1;
+}
+
+/* 라벨 등은 열 폭으로 늘이지 않는다 (테두리 칩이 글자 폭을 지킨다). 안내는 열을 채워야 말줄임이 된다 */
+.band [data-slot]:not([data-slot="hint"]) {
+  justify-self: start;
+}
+
+/* 대상 이름 칸은 격자 열이 폭을 정한다 (한 줄 배너의 30% 상한은 열 정의가 맡는다) */
+.band .subject {
+  max-width: none;
+}
+
+/* 낮은 창(960×600 등)에서는 두 줄까지만 — 위 영역(Commit 도구 창의 변경 트리·에디터)의 자리를 남긴다 */
+@media (max-height: 700px) {
+  .band {
+    max-height: calc(var(--op-band-row-h) * 2);
+  }
+}

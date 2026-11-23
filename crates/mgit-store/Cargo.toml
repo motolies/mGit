@@ -1,0 +1,19 @@
+[package]
+name = "mgit-store"
+description = "rusqlite(SQLite, WAL) 로컬 저장: 최근 저장소, 명령 로그, 백업 색인, 설정"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

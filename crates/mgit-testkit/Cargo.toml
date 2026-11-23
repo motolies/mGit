@@ -1,0 +1,15 @@
+[package]
+name = "mgit-testkit"
+description = "테스트 전용: 결정적 git 저장소 생성"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

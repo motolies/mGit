@@ -1,0 +1,25 @@
+/* 분할(변경 목록 | 커밋 영역)의 칸 하나: 패널 높이를 채운다 (min-height: 0 이 없으면 분할이 줄어들지 못한다) */
+.split {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.separator {
+  height: 1px;
+  background: var(--panel-seam);
+  outline: none;
+}
+
+.separator[data-separator="hover"],
+.separator[data-separator="active"],
+.separator:focus-visible {
+  background: var(--accent);
+}
+
+/* 키보드 포커스는 1px 선이 아니라 3px 띠로 보인다 (W19 ③) */
+.separator:focus-visible {
+  box-shadow: 0 0 0 1px var(--accent);
+}

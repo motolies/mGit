@@ -1,0 +1,47 @@
+/* 왼쪽 도구 창의 틀: 머리(제목·도구) + 내용 */
+.window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  height: var(--toolwindow-header-h);
+  flex: 0 0 auto;
+  padding: 0 var(--space-4) 0 var(--space-5);
+  border-bottom: 1px solid var(--panel-seam);
+}
+
+.title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* 내용 칸: 남는 높이를 받는다 (안의 트리가 스크롤한다) */
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 빈 상태·읽는 중·오류 안내 */
+.note {
+  padding: var(--space-4) var(--space-5);
+  color: var(--fg-muted);
+}
+
+.note[data-tone="error"] {
+  color: var(--danger);
+}

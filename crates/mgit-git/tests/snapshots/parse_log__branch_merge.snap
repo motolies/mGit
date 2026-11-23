@@ -1,0 +1,49 @@
+---
+source: crates/mgit-git/tests/parse_log.rs
+expression: recs
+---
+[
+    CommitRecord {
+        oid: Oid(f767a9177f720692536ce39398fdcac4f8549968),
+        parents: [
+            Oid(1a3c19256c062d4b60463bd9ceb7eaee9c78963b),
+            Oid(a5d4bd841f155d9c57dc6a7c29ce91f1c121a3ae),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000300,
+        commit_time: 1700000300,
+        subject: "merge feature",
+    },
+    CommitRecord {
+        oid: Oid(a5d4bd841f155d9c57dc6a7c29ce91f1c121a3ae),
+        parents: [
+            Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000240,
+        commit_time: 1700000240,
+        subject: "c3 feature",
+    },
+    CommitRecord {
+        oid: Oid(1a3c19256c062d4b60463bd9ceb7eaee9c78963b),
+        parents: [
+            Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000180,
+        commit_time: 1700000180,
+        subject: "c2 main",
+    },
+    CommitRecord {
+        oid: Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        parents: [],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000060,
+        commit_time: 1700000060,
+        subject: "c1 base",
+    },
+]

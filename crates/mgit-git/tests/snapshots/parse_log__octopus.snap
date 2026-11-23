@@ -1,0 +1,50 @@
+---
+source: crates/mgit-git/tests/parse_log.rs
+expression: recs
+---
+[
+    CommitRecord {
+        oid: Oid(11bfd3697c40d128b96affe9dab651b9184c2009),
+        parents: [
+            Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+            Oid(cc1b189fe52ed9a7649f979c7c0a35cbf8f967a8),
+            Oid(138850a83a2a30fed614452d125897eecf0b6bf2),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000240,
+        commit_time: 1700000240,
+        subject: "octopus merge",
+    },
+    CommitRecord {
+        oid: Oid(138850a83a2a30fed614452d125897eecf0b6bf2),
+        parents: [
+            Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000180,
+        commit_time: 1700000180,
+        subject: "c3 on b2",
+    },
+    CommitRecord {
+        oid: Oid(cc1b189fe52ed9a7649f979c7c0a35cbf8f967a8),
+        parents: [
+            Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000120,
+        commit_time: 1700000120,
+        subject: "c2 on b1",
+    },
+    CommitRecord {
+        oid: Oid(6bb0202b75cdae672fc0949de9d6cdbad3228d0c),
+        parents: [],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000060,
+        commit_time: 1700000060,
+        subject: "c1 base",
+    },
+]

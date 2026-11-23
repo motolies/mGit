@@ -1,0 +1,92 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.empty {
+  padding: 8px 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.file,
+.dirRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding-right: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.file:hover {
+  background: var(--bg-hover);
+}
+
+.file[data-selected="true"] {
+  background: var(--bg-selected);
+}
+
+.letter {
+  width: 14px;
+  flex: 0 0 auto;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 상태 글자의 색 (LF-05: 글자로도 전하므로 색은 보조). 이름 바뀜·종류 바뀜은 수정과, 복사는 추가와 같은 색이다 */
+.letter[data-letter="M"],
+.letter[data-letter="R"],
+.letter[data-letter="T"] {
+  color: var(--status-modified);
+}
+
+.letter[data-letter="A"],
+.letter[data-letter="C"] {
+  color: var(--status-added);
+}
+
+.letter[data-letter="?"] {
+  color: var(--status-untracked);
+}
+
+.letter[data-letter="D"] {
+  color: var(--status-deleted);
+}
+
+.letter[data-letter="U"] {
+  color: var(--status-conflict);
+}
+
+/* 선택 배경 위에서는 색 글자의 대비가 모자라 기본 글자색으로 쓴다 (뜻은 글자가 전한다) */
+.file[data-selected="true"] .letter {
+  color: var(--fg);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file[data-open="true"] .name {
+  font-weight: 600;
+}
+
+.dir {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.toggle {
+  all: unset;
+  cursor: pointer;
+  color: var(--fg-muted);
+}

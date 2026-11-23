@@ -1,0 +1,79 @@
+/* 커밋을 포함하는 branch 줄 (CD-03). 상세 칸이 좁아도(최소 약 220px) 넘치지 않게 줄을 바꾼다.
+   이름 글자는 --fg, 로컬·원격·HEAD 는 ref 라벨과 같은 토큰의 아이콘 색으로 가린다 */
+.line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  min-width: 0;
+  /* 읽는 중·실패·0개도 한 줄을 차지한다 (다 읽혔을 때 아래 내용이 덜 밀리게) */
+  min-height: 1.5em;
+  /* 상세 뷰는 높이가 정해진 세로 flex 다. 위 min-height 가 flex 항목의 자동 최소 높이를 대신하므로
+     줄어들지 않게 막는다 (목록이 길 때 아래 부모·자식 줄과 겹치지 않게) */
+  flex: none;
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+/* 이름 목록: 상자를 만들지 않고 이름들이 머리글 뒤에 이어 흐른다. 줄이 바뀌면 다음 줄은 칸의 왼쪽 끝부터
+   쓴다 (머리글 옆의 좁은 칸에 갇히면 긴 원격 branch 이름이 여러 줄로 꺾인다) */
+.list {
+  display: contents;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--fg);
+  --icon-size: 14px;
+}
+
+/* 이름이 여러 줄로 넘어가도 아이콘은 첫 줄 글자의 기준선에 맞는다 */
+.icon {
+  flex: none;
+}
+
+.item[data-tone="head"] .icon {
+  color: var(--ref-head);
+}
+
+.item[data-tone="local"] .icon {
+  color: var(--ref-local);
+}
+
+.item[data-tone="remote"] .icon {
+  color: var(--ref-remote);
+}
+
+/* 긴 이름은 말줄임 대신 줄을 바꾼다 (`/`·`-` 가 없는 긴 조각도 칸 안에서 끊는다) */
+.name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* "외 N개"·"접기"·"다시 시도": 링크 모양의 글자 버튼 (해시 링크와 같은 색) */
+.action {
+  all: unset;
+  color: var(--accent-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.action:hover {
+  text-decoration: underline;
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

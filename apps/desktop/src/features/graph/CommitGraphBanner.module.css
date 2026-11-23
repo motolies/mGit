@@ -1,0 +1,17 @@
+/* commit-graph 생성 제안 배너 (AD-03) */
+.suggest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
+}
+
+.actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}

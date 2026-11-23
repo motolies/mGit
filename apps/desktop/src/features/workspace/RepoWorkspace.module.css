@@ -1,0 +1,9 @@
+/* Commit 도구 창(저장소 1개 모드)의 내용 칸: 변경 사항 목록 + 커밋 입력이 칸 높이를 채운다. 칸이 낮아 목록의 최소
+   높이와 커밋 입력이 다 들어가지 않으면 이 칸이 스크롤한다 (W21 — 960×600 에서 목록이 0줄이 되지 않게) */
+.changes {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}

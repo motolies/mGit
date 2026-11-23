@@ -1,0 +1,50 @@
+/* 본문 전체 높이에 걸친 세로 띠. 위 묶음과 아래 묶음을 양 끝에 둔다 */
+.stripe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  flex: 0 0 var(--stripe-w);
+  width: var(--stripe-w);
+  min-height: 0;
+  padding: var(--space-3) 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--panel-seam);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--icon-size) + var(--space-5));
+  height: calc(var(--icon-size) + var(--space-5));
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* 보이고 있는 도구 창 */
+.button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

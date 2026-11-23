@@ -1,0 +1,102 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 칸이 좁거나 문구가 길면(영어) 보기 전환이 다음 줄 오른쪽으로 내려간다 — 글자를 줄바꿈하거나 자르지 않는다 */
+.panelHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panelTitle {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.viewToggle {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.view,
+.viewActive {
+  all: unset;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.viewActive {
+  background: var(--bg-selected);
+}
+
+/* 목록은 남는 높이를 받고 스스로 스크롤한다. 칸이 낮아도(W21: Commit 도구 창, 960×600) 목록이 0줄이 되지 않게 영역 머리 +
+   몇 줄은 남긴다 — 넘치는 만큼은 바깥(Commit 도구 창 내용 칸)이 스크롤한다 */
+.lists {
+  flex: 1 1 auto;
+  min-height: calc(var(--tree-row-h) * 5);
+  overflow: auto;
+}
+
+.section {
+  border-bottom: 1px solid var(--border);
+}
+
+/* 제목과 단추가 한 줄에 들어가지 않으면 단추 묶음이 다음 줄 오른쪽으로, 그래도 넘치면 단추끼리 줄을 바꾼다
+   (충돌 영역은 단추가 4~5개라 영어나 좁은 칸에서 넘친다) */
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 4px 10px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.section[data-area="conflict"] .title {
+  color: var(--danger);
+}
+
+.actions {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.actions :global(button) {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.moduleGroup {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}

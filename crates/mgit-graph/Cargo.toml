@@ -1,0 +1,19 @@
+[package]
+name = "mgit-graph"
+description = "커밋 그래프 레인 배정과 범위 조회 (순수 로직, IO 없음)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-model.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

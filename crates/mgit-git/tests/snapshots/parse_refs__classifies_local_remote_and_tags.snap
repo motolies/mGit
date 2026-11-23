@@ -1,0 +1,94 @@
+---
+source: crates/mgit-git/tests/parse_refs.rs
+expression: labels
+---
+[
+    RefLabel {
+        full_name: "refs/heads/main",
+        short_name: "main",
+        kind: LocalBranch,
+        target: Oid(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),
+        is_current: true,
+        upstream: Some(
+            "refs/remotes/origin/main",
+        ),
+        ahead: Some(
+            1,
+        ),
+        behind: Some(
+            2,
+        ),
+        upstream_gone: false,
+        worktree_path: Some(
+            "/work/main",
+        ),
+    },
+    RefLabel {
+        full_name: "refs/heads/기능/한글",
+        short_name: "기능/한글",
+        kind: LocalBranch,
+        target: Oid(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
+        is_current: false,
+        upstream: None,
+        ahead: None,
+        behind: None,
+        upstream_gone: false,
+        worktree_path: None,
+    },
+    RefLabel {
+        full_name: "refs/heads/stale",
+        short_name: "stale",
+        kind: LocalBranch,
+        target: Oid(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
+        is_current: false,
+        upstream: Some(
+            "refs/remotes/origin/stale",
+        ),
+        ahead: None,
+        behind: None,
+        upstream_gone: true,
+        worktree_path: None,
+    },
+    RefLabel {
+        full_name: "refs/remotes/origin/main",
+        short_name: "origin/main",
+        kind: RemoteBranch {
+            remote: "origin",
+        },
+        target: Oid(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),
+        is_current: false,
+        upstream: None,
+        ahead: None,
+        behind: None,
+        upstream_gone: false,
+        worktree_path: None,
+    },
+    RefLabel {
+        full_name: "refs/tags/v1.0",
+        short_name: "v1.0",
+        kind: Tag {
+            annotated: true,
+        },
+        target: Oid(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
+        is_current: false,
+        upstream: None,
+        ahead: None,
+        behind: None,
+        upstream_gone: false,
+        worktree_path: None,
+    },
+    RefLabel {
+        full_name: "refs/tags/light",
+        short_name: "light",
+        kind: Tag {
+            annotated: false,
+        },
+        target: Oid(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),
+        is_current: false,
+        upstream: None,
+        ahead: None,
+        behind: None,
+        upstream_gone: false,
+        worktree_path: None,
+    },
+]

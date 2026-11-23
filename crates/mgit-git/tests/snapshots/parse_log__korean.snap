@@ -1,0 +1,26 @@
+---
+source: crates/mgit-git/tests/parse_log.rs
+expression: recs
+---
+[
+    CommitRecord {
+        oid: Oid(3c8d1c11f96b1db1fda81e835972ab758a89c804),
+        parents: [
+            Oid(58dff26aa7e6b80cac15f4f4431ea912ded24c7b),
+        ],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000120,
+        commit_time: 1700000120,
+        subject: "한글 NFD 메시지",
+    },
+    CommitRecord {
+        oid: Oid(58dff26aa7e6b80cac15f4f4431ea912ded24c7b),
+        parents: [],
+        author_name: "mGit Test",
+        author_email: "test@mgit.invalid",
+        author_time: 1700000060,
+        commit_time: 1700000060,
+        subject: "첫 커밋 (NFC 한글)",
+    },
+]

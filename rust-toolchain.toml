@@ -1,0 +1,4 @@
+# stable = 1.97.1 (2026-10-28). MSRV는 루트 Cargo.toml의 rust-version(1.90)으로 강제한다.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

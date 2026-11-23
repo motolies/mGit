@@ -1,0 +1,33 @@
+/* Stash 탭 아래 칸의 상세 (W23). 머리·본문·메시지·파일 목록은 커밋 상세(`CommitDetail.module.css`)의 모양을 그대로 쓰고,
+   여기에는 새 자리에 맞춘 것만 둔다 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 머리: 좁은 칸에서도 한 줄 — 제목은 줄바꿈하지 않고 이름·해시가 줄어든다 (전체 oid 는 툴팁). 커밋 상세의 `.hash`
+   (`all: unset`)보다 앞서게 두 클래스로 고른다 */
+.panel .title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.panel .hash {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* apply·pop·drop 단추 줄: 머리 바로 아래에 고정한다 (본문만 스크롤 — 낮은 창에서도 단추가 늘 보인다). 좁은 폭에서는
+   다음 줄로 넘긴다 */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}

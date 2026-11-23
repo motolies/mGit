@@ -1,0 +1,20 @@
+[package]
+name = "mgit-bench"
+description = "벤치 하네스: 대형 저장소 그래프 로드(PoC-1)와 폴더 열기(W0)의 시간·메모리 측정"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mgit-core.workspace = true
+mgit-git.workspace = true
+mgit-model.workspace = true
+mgit-watch.workspace = true
+tokio.workspace = true
+memory-stats.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

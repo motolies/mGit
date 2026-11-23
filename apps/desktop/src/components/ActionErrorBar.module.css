@@ -1,0 +1,20 @@
+.bar {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  background: var(--danger);
+  color: var(--danger-fg);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* all: unset 이 지운 포커스 링을 다시 그린다 (W19 ③). 채움 안쪽이라 채움 위 글자색으로 그린다 */
+.bar:focus-visible {
+  outline: 2px solid var(--danger-fg);
+  outline-offset: -3px;
+}

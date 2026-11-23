@@ -1,0 +1,114 @@
+/* 커밋 상세 (CD-02). 칸이 좁아도 넘치지 않게 스스로 스크롤한다.
+   position 은 안쪽의 절대 위치 요소(ref 라벨의 보조 기술용 글자)를 이 스크롤 영역 안에 가두어
+   문서 전체 높이를 늘리지 않게 한다 */
+.view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+  font-size: 12px;
+}
+
+/* 제목 한 줄: 고정폭 굵게 */
+.subject {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.body {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* `해시 작성자 <이메일> 날짜` */
+.line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  min-width: 0;
+}
+
+.lineMuted {
+  color: var(--fg-muted);
+}
+
+.hash,
+.link {
+  all: unset;
+  font-family: var(--font-mono);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.hash:hover,
+.link:hover {
+  text-decoration: underline;
+}
+
+/* all: unset 이 포커스 표시까지 지우므로 다시 그린다 */
+.hash:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.hashText {
+  font-family: var(--font-mono);
+}
+
+.copied {
+  margin-left: var(--space-2);
+  font-family: var(--font-ui);
+  color: var(--fg-muted);
+}
+
+.author {
+  font-weight: 600;
+}
+
+.email,
+.date {
+  color: var(--fg-muted);
+}
+
+.refs {
+  display: flex;
+  min-width: 0;
+}
+
+.meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  row-gap: var(--space-2);
+  column-gap: var(--space-4);
+}
+
+.meta:empty {
+  display: none;
+}
+
+.meta dt {
+  color: var(--fg-muted);
+}
+
+.meta dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+  min-width: 0;
+}

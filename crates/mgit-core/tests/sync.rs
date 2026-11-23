@@ -610,7 +610,8 @@ async fn auto_fetch_leaves_undo_stack_alone() {
 
     b.commit("from b");
     b.tag("v9", false);
-    b.git_ok(["push", "-q", "origin", "main", "refs/tags/v9"]);
+    // 한 트랜잭션으로 올려 자동 fetch 가 main 만 보고 tag 는 못 보는 경합을 막는다
+    b.git_ok(["push", "-q", "--atomic", "origin", "main", "refs/tags/v9"]);
     wait_for(&mut rx, Duration::from_secs(10), |e| {
         matches!(e, CoreEvent::AutoFetched { .. })
     })

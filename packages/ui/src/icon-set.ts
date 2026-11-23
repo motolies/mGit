@@ -43,6 +43,8 @@ export const ICON_GLYPHS = {
   fetch: 'git-fetch',
   // 사라진 워크트리 정리 (저장소 탭 Worktrees 그룹의 머리 단추, W22)
   prune: 'trash',
+  // 태그 문서 (C3a, TG-10): 트리 Tags 묶음 끝 단추
+  tagsDoc: 'list-unordered',
   expandAll: 'expand-all',
   collapseAll: 'collapse-all',
   sidebar: 'layout-sidebar-left',

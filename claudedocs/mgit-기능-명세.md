@@ -1,7 +1,7 @@
 # mGit 기능 명세서
 macOS·Windows에서 동작하는 개인용 Git GUI 클라이언트 mGit의 기능 요구사항과 아키텍처 초안.
 
-> ℹ️ 대상 독자: 개발자 본인 | 최종 수정: 2026-11-20 (다국어 반영, UX-06·11절) | 근거 조사: [git-gui-클라이언트-조사.md](git-gui-클라이언트-조사.md)
+> ℹ️ 대상 독자: 개발자 본인 | 최종 수정: 2026-11-23 (tag 관리 마감 — delete_tag 제거·트리 개선 전후·공용 부품, BR-06·12절) | 근거 조사: [git-gui-클라이언트-조사.md](git-gui-클라이언트-조사.md)
 
 ## 1. 제품 개요
 
@@ -474,7 +474,7 @@ flowchart TD
 | BR-03 | 변경 중 전환 | 로컬 변경이 있으면 stash 후 전환, 변경 가져가기, 취소 중에서 고른다 | P0 |
 | BR-04 | 이름 변경·삭제 | 로컬·원격 삭제. 병합되지 않은 브랜치를 지우면 경고한다 | P0 |
 | BR-05 | 업스트림 | 업스트림 지정과 해제 | P0 |
-| BR-06 | 태그 | lightweight·annotated 생성, 삭제, 푸시 | P0 |
+| BR-06 | 태그 | lightweight·annotated 생성, 삭제(로컬·원격별), 고른 원격으로 push(하나·여럿). 세부 규칙은 `TG-xx`(12.1) | P0 |
 | BR-07 | 빠른 전환 | 브랜치 퍼지 검색으로 바로 체크아웃 | P0 |
 | BR-08 | Git Flow | feature·release·hotfix 시작과 완료 | P2 |
 
@@ -507,7 +507,7 @@ flowchart TD
 | MRG-04 | Reset | soft·mixed·hard. hard는 확인 후 실행 | P0 |
 | MRG-05 | 진행 상태 배너 | MERGING·REBASING·CHERRY-PICKING 상태를 감지해 Continue·Skip·Abort 버튼 표시 | P0 |
 | MRG-06 | 충돌 해결 | 3-way 병합 편집기로 해결한다. 상세는 3.9 | P0 |
-| MRG-07 | 인터랙티브 리베이스 | 드래그로 순서 변경, pick·reword·edit·squash·fixup·drop. `GIT_SEQUENCE_EDITOR` 로 todo 목록을 주입한다 | P1 |
+| MRG-07 | 인터랙티브 리베이스 | 드래그로 순서 변경, pick·reword·edit·squash·fixup·drop. `GIT_SEQUENCE_EDITOR` 로 todo 목록을 주입한다. 로그 범위 선택(GRAPH-10)에서 "선택한 commit N개를 하나로 합치기": 메시지 하나만 받아 가장 오래된 commit reword + 나머지 fixup + 범위 뒤 pick 으로 실행 (범위·그 위에 merge 가 있으면 거부) | P1 |
 | MRG-08 | 충돌 예측 | 병합 미리보기, 충돌 레이더, 커밋 단위 rebase 예측, 병합 옵션 시뮬레이터. 상세는 3.9 A | P1 |
 | MRG-09 | 빠른 이력 수정 | 그래프에서 커밋 메시지 수정, 아래 커밋과 합치기를 바로 실행 | P1 |
 
@@ -1153,3 +1153,300 @@ VITE_MGIT_MOCK=2000 VITE_MGIT_MOCK_SCENE=folder pnpm -F @mgit/desktop dev:web   
 
 - 타입 검사(`pnpm typecheck`)가 첫 안전망이다: 영어 사전의 키 누락·여분 키·함수 시그니처 차이는 컴파일 오류다.
 - 검사하지 않는 것: 영어 문구가 화면에서 넘치거나 잘리는지(목 모드 스크린샷·실기기로 본다), 번역 품질, Rust 쪽 한글 잔여(가드 테스트 없음 — `rg -n '"[^"]*[가-힣]' crates apps/desktop/src-tauri/src` 결과가 테스트·로그·expect·`check.rs` 뿐인지 눈으로 본다).
+
+## 12. tag 관리 구현 메모 (2026-11-23)
+
+tag push·원격 삭제·로컬 삭제·원격 상태 확인(브랜치 `feat/tag-management`, 슬라이스 A1~A6·B1~B5·C1~C5)에서 명세를 고쳤거나 비워 두었던 결정. **지금 내용은 H4 까지 병합된 전부** — 코어·IPC(A1~A4·B1·B3·C1·C2·C2a~C2d), 자동 fetch 수정(B2), 화면(A5·A6·B5·C3a·C3b·C4·C5), 성능 측정(B4) — 이다. 영어 문구 검수(L)와 사용자 매뉴얼(Phase M)은 따로 한다. 계획·인수 조건 원문은 `agent-docs/태그-관리-기능-계획.md`.
+
+앞 절과 달라진 것: 7절 "자동 fetch" 의 명령이 `fetch --all --prune` → `fetch --all --prune --no-prune-tags` 다(12.2). BR-06 의 push 는 고른 원격으로 tag 만 보내는 별도 명령이고 RM-04 Push(branch)와 따로다 — 툴바 Push 의 follow-tags 는 이번 범위가 아니다.
+
+### 12.1 요구사항 (BR-06 하위, TG-01~15·17)
+
+두 열 모두 H4 기준으로 구현된 규칙이다. 화면 흐름의 구현 메모와 계획 대비 변경은 12.10. TG-16(자동 fetch 의 tag 정리 방지)은 12.2 "자동 fetch", TG-18(이름 바꾸기)은 범위 밖이다.
+
+| ID | 요구사항 | 코어·IPC (구현됨) | 화면 (구현됨) |
+|---|---|---|---|
+| TG-01 | tag push | 고른 원격 하나로 tag 하나·여럿을 같은 경로로 보낸다: `push --porcelain --progress --no-follow-tags --end-of-options <r> refs/tags/<n>:refs/tags/<n>…`. `push.followTags=true` 여도, 같은 이름의 branch 가 있어도 요청한 tag 만 간다(K3·G19). 결과는 요청 순서대로 tag 마다 하나(12.3). `--atomic` 을 쓰지 않아 일부가 거부돼도 나머지는 올라간다(G2). 진행률·취소는 op(kind `push`)로 붙는다. undo 항목 없음 | 진입점: 브랜치 칸 tag 메뉴(그 commit 으로 분리 checkout · ── push · 삭제… · ── 이름 복사)와 로그 행 메뉴의 tag 마다 `tag <n> ▸` 하위 메뉴(push · 삭제…). push 항목은 원격 0개면 꺼진 `push (원격 없음)`, 1개면 평면 `<r> 로 push`, 2개 이상이면 `push ▸` 아래 원격 이름이다. 세션 busy 일 때만 꺼진다(merge 같은 진행 중 작업은 보지 않는다, 계획 D16). 모두 성공하면 토스트 — 하나 `tag v1 을(를) origin 로 push 했습니다`, 이미 같으면 안내 `origin 에 같은 tag v1 이(가) 이미 있습니다`, 여럿 `tag N개를 origin 로 push 했습니다`. 이름 충돌은 TG-02 안내, 그 밖의 실패는 오류 줄 `<r> 로 push 하지 못한 tag: v1 (사유), …`. 이 작업의 op 끝 토스트는 띄우지 않는다(12.10) |
+| TG-02 | push 거부 안내 | 이름 충돌은 tag 결과 `rejectedExists`(사유 `already exists`), 서버 거부는 `rejectedRemote`(사유 = 서버 원문). 같은 거부를 stderr 로만 받는 경로는 힌트 `remoteTagExists`·`remoteRejected{reason}` 로 분류한다(TG-07) — NFF 가 아니므로 강제 push 를 권하지 않는다 | 이름 충돌(`rejectedExists`)이 하나라도 있으면 안내 대화상자(`PendingHint` `tagExists{remote, names, commits?}`): 제목 `<r> 에 이름이 같은 다른 tag v1 이(가) 있습니다`(여럿이면 `…N개 있습니다`), 설명 "원격의 tag 가 로컬과 다른 commit 을 가리켜 push 하지 않았습니다. 아무것도 바뀌지 않았습니다.". 안내를 띄운 뒤 단일 조회로 원격 commit 을 받아 목록을 두 commit 줄(`v1 — 원격 abc1234 · 로컬 def5678`)로 바꾼다(B5 — 조회가 실패하면 이름만). 모든 이름의 원격 객체를 알면 둘째 단추 **`원격 tag 를 로컬 것으로 덮어쓰기…`**(C5)가 생기고, 위험 확인(TG-15 "로컬 것으로 맞추기"와 같은 창)을 거쳐 lease push 한 번으로 덮어쓴다. branch 의 강제 push(NFF) 대화상자는 띄우지 않는다. 명령 전체가 `remoteTagExists` 힌트로 실패한 경우도 같은 안내로 받는다(대비책). 서버 거부는 오류 줄에 `서버가 거부함: <사유>` |
+| TG-03 | 지울 곳 대화상자 | 화면만의 요구다(코어는 TG-04~06 을 따로 부른다) | ① 위험 입력 대화상자(`prompt`, `danger`)의 "지울 곳" 묶음에 로컬 칸(기본 체크, 보조 글자 `해당 N개 · ↶ 되돌리기로 되살릴 수 있음`)과 원격마다 한 칸(기본 빈 칸). 칸 키는 원격 이름이 아니라 차례(`remote0`…)라 이름에 `/`·공백이 있어도 깨지지 않는다. ② 하나도 고르지 않으면 확인 단추가 꺼지고 `지울 곳을 하나 이상 고르세요` 를 보인다(`requireChecked`). ③ 확인 단추는 danger 이고 체크 칸의 Enter 는 제출하지 않는다(A5 `PromptDialog`). ④ 여럿이면 tag 목록을 20개까지 보이고 나머지는 `… 외 N개`(A5 `DialogItems`). ⑤ 원격이 0개면 지울 곳 칸 없이 확인창 하나에 `↶ 되돌리기로 되살릴 수 있습니다.`. ⑥ (B5) 원격 칸의 보조 글자는 그 원격을 확인했으면 `해당 N개 · 되돌릴 수 없음`, 확인한 적이 없으면 `확인 안 함 · 되돌릴 수 없음` 이고, 확인했는데 해당이 0개인 원격 칸은 꺼지고 `이 원격에 없음`. 고른 것이 모두 원격에만 있으면 로컬 칸이 꺼지고 `로컬에 없음`(C4). 로컬을 골랐을 때 경고(막지 않음, 확인한 원격만 센다): 고르지 않은 원격에 남는 tag 가 있으면 `로컬에서만 지우는 tag N개가 원격에 남아 있어 다음 fetch 때 다시 생길 수 있습니다.`(K2), 모든 원격을 확인했고 어디에도 없는 tag 가 있으면 `push 하지 않은 tag N개는 원격 어디에도 없습니다. 지우면 ↶ 되돌리기로만 되살릴 수 있습니다.`. 확인한 원격이 하나도 없으면 설명문 끝에 `로컬에서만 지우면 원격에 남아 있는 tag 는 다음 fetch 때 다시 생길 수 있습니다.` 를 붙인다. 설명문은 "원격을 고르면 그 원격에서 먼저 지우고, 고른 원격에서 모두 지워진 tag 만 로컬에서 지웁니다." |
+| TG-04 | 원격 삭제 안전장치 | ① 실행 직전에 요청한 이름을 모두 조회한다(12.2 "실행 직전 조회" — 4개 이하는 이름 패턴, 넘으면 전체). ② 원격에 없으면 `alreadyAbsent`(성공). ③ **확인 전에는 아무것도 지우지 않는다(C2a)**: `expectedRemote` 없이 원격 객체가 로컬 tag 객체와 다른 항목이 하나라도 있으면 이 호출에서는 원격을 하나도 바꾸지 않고, 그 항목은 `diverged` + `remoteOid`(원격 ref 객체)·`remoteCommit`(벗긴 commit), 나머지는 `notRun`(확인 대기). 확인한 뒤 `expectedRemote = remoteOid` 로 다시 부르면 다시 조회하고, 그 값과 같을 때만 지운다 — 그 사이 또 바뀌었으면 `rejectedStale`(사유 "확인한 뒤 원격 tag 가 바뀌었습니다. 다시 확인하세요"). 로컬에 없는 tag(원격에만)는 비교하지 않는다. ④ 지울 tag 마다 조회한 oid 로 `--force-with-lease=refs/tags/<n>:<oid>` 를 걸고 전체 ref 이름으로 `--delete` 한다. 그 사이 바뀌었으면 `rejectedStale` 이고 원격은 그대로다(K1·G3). ⑤ 캐시를 lease 근거로 쓰지 않는다(그 호출의 조회 결과만). ⑥ undo 항목 없음. 조회가 실패·취소되면 아무것도 바뀌지 않았으므로 오류로 돌려준다 | danger 확인창(`confirmDiverged`): 제목 `<r> 의 tag 가 로컬과 다릅니다`(여럿이면 `tag N개가`), 설명 "원격 tag 가 로컬과 다른 객체를 가리킵니다. 원격에서 지우면 되돌릴 수 없습니다.", 다른 tag 마다 두 commit 한 줄(`v1 — 원격 abc1234 · 로컬 def5678`, 같은 commit 이면 `v1 — 같은 commit abc1234, tag 객체만 다름`). 같은 요청에 다르지 않은 tag 가 있으면 [취소] [다른 tag 는 건너뛰고 삭제] [그래도 원격에서 삭제], 없으면 [취소] [그래도 원격에서 삭제]. **그래도**는 `diverged` 에 받은 `remoteOid` 를 넣고 `notRun` 과 함께 다시 부르고, **건너뛰기**는 `diverged` 를 빼고 `notRun` 만 다시 부르며, **취소**는 다시 부르지 않는다(원격은 하나도 바뀌지 않았다). 흐름은 12.10 |
+| TG-05 | 순서와 일부 실패 | 코어가 주는 바탕만 있다: 성공 판정(`deleted`·`alreadyAbsent` 를 포함한 12.3 의 성공 집합), 취소·끊김으로 결과를 모르는 ref 는 `unknown`(실패로 단정하지 않음, G5), 원격 삭제와 로컬 삭제는 따로 부르는 명령 | `runTagDelete`(`store/tag-ops.ts`)를 세션 스토어 `deleteTagsScoped` 가 한 번의 `run` 으로 감싼다 — busy 는 한 번만 켜지고 확인창을 묻는 동안에도 켜져 있다. ① 고른 원격을 원격 목록 순서로 먼저 처리하고, 모든 고른 원격에서 `deleted`·`alreadyAbsent` 인 tag 만 로컬에서 한 트랜잭션으로 지운다. 나머지는 "로컬에 남긴 tag". 한 원격이 통째로 실패해도(인증·연결) 다음 원격으로 가고 그 원격의 tag 는 로컬에 남는다. 다를 때 취소하면 그 자리에서 멈추고 남은 원격·로컬은 건드리지 않는다. ③ `unknown` 은 성공이 아니므로 로컬에 남는다. ④ 다 지우면 토스트 `tag v1 을(를) 지웠습니다 (로컬 · origin)`, 아니면 오류 줄에 원격별 실패(`origin: v1 (사유)`)·취소·로컬 실패·`로컬에 남긴 tag: …` 를 ` · ` 로 잇는다. 취소했고 바뀐 것이 없으면 알리지 않는다. 태그 문서 안에서는 토스트·오류 줄 대신 결과 칸으로 보고한다(`silent`, TG-12). 문서의 선택에 원격에만 있는 tag 가 섞이면 그 tag 는 로컬 삭제 대상도 "로컬에 남긴 tag"도 아니다(C4) |
+| TG-06 | 로컬 삭제와 Undo | `update-ref --stdin` 한 트랜잭션(`delete refs/tags/<n> <지금 객체 oid>` 줄)으로 지운다. 하나라도 그 사이 바뀌었거나 잠겨 있으면 아무것도 지우지 않는다. 로컬에 없는 이름이 섞이면 git 을 돌리지 않고 거부한다(G10). undo 항목은 하나, 라벨 `tag -d v1` / `tag -d v1 v2 v3 (+N)`, annotated 객체 oid 까지 복원된다. 원격 작업은 undo 목록에 없다. 단건 `delete_tag`(코어·IPC·스토어)는 `delete_local_tags` 로 대체돼 제거했다(계획 E4 — R `09f9f16`, U `5522979`). 원격이 없을 때 확인창 제목에 쓰는 문구 `S.dialog.deleteTag` 는 남는다 | 원격이 없을 때의 확인창 문구가 되돌리기 안내다(TG-03 ⑤). undo 단추·단축키는 기존 그대로 |
+| TG-07 | 오류 분류 | push 거부 분류 순서는 12.2 "오류 분류". 로컬 `fatal: tag 'v1' already exists` 는 힌트 없음. pre-receive hook 거부는 branch push 도 `remoteRejected`(G17) | `describeError` 가 `gitFailed` 의 힌트가 `remoteRejected` 면 git 원문 대신 `서버가 거부함: <사유>` 를 보인다. branch push 도 서버 거부에는 강제 push 대화상자를 띄우지 않고 오류 줄만 보인다(12.10). tag push 의 이름 충돌은 TG-02 안내 |
+| TG-08 | 원격 상태 조회 | `remote_tags(session, remote?, refresh, op)` → `TagSyncReport`(12.7). `refresh` 면 `ls-remote --tags <r>` 전체(`--refs` 없음)를 쓰기 잠금·세션 busy 없이 돌려 캐시를 바꾸고, 아니면 네트워크 없이 캐시와 지금 로컬 라벨로 비교만 한다. 상태는 `localOnly / remoteOnly / same / diverged{sameCommit} / unknown`, 비교 기준은 ref 가 가리키는 객체 oid. 보고서는 전체 개수와 "같음"이 아닌 항목만 싣는다. 캐시는 `common_dir`·원격별 메모리, 워크트리 세션끼리 공유, 마지막 세션을 닫으면 지운다. 무효화·오프라인은 12.7. 자동 fetch 때 조회하지 않는다. IPC `remote_tags`(B3, 12.5) | 진입점: 브랜치 칸 Tags 묶음 행 끝 단추 `원격 tag 확인`, 묶음 메뉴 `원격 tag 확인`, 팔레트 `원격 tag 확인`(`sync.checkRemoteTags`, 기본 키 없음) — 모두 모든 원격을 동시에 확인한다. 태그 문서 머리의 `원격 확인` 은 고른 원격 하나다. **busy 와 분리**: 확인은 세션 busy 를 켜지 않고 `tagChecking`(확인 중인 원격)만 둔다 — 확인 중에도 쓰기를 할 수 있고, 확인 중인 원격은 다시 확인하지 않는다(단추·메뉴가 꺼진다). **원격별 독립**: 원격마다 따로 부르고 받는 대로 반영한다 — 한 원격의 실패(`lastError`)가 다른 원격의 결과를 지우지 않는다. 조회 실패는 보고서의 `lastError` 로 보이고, 거부는 취소(조용히)와 원격 문제(오류 줄)뿐이다. **op 끝 토스트**: kind `tagCheck` op 는 오래 걸림·실패 토스트를 띄우지 않는다(결과는 묶음 요약·문서 머리에 보인다, D15). 네트워크 없는 다시 받기: ref 가 바뀌면 300ms 미뤄 한 번(받은 보고서가 있을 때만), 앱의 push·삭제·가져오기·덮어쓰기 뒤, 트리·문서가 보일 때 모든 원격(같은 저장소의 다른 탭이 확인한 캐시도 읽는다). 원격마다 차례를 매겨 늦게 온 옛 응답이 새 값을 덮지 않는다. 사라진 원격·비워진 캐시의 보고서는 버린다 |
+| TG-09 | 트리 상태 표시 | 코어 몫은 없다 — TG-08 보고서를 원격별로 합친다(`features/tags/tag-sync.ts`) | ① 로컬 tag 행: 확인한 원격이 하나 이상이고 그 모두에 없으면 suffix `push 안 됨`, 확인한 원격 하나라도 다르면 배지 `⚠ 다름`(경고 아이콘). 툴팁 끝에 원격별 한 줄(원격 목록 순서 — `origin: 같음`, `upstream: 확인 안 함`, 같은 commit 이면 `다름 (같은 commit, tag 객체만 다름)`). 확인한 원격이 없으면 아무것도 보이지 않는다(원격들을 합친다, D18). ② Tags 묶음 머리 suffix: `push 안 됨 2 · 원격에만 3 · 다름 1 · 14:02 · 오래됨` — 0 인 개수는 빼고 모두 0 이면 `원격과 같음`, 시각은 확인한 원격 중 가장 오래된 것, 원격에만 개수는 원격끼리 겹치면 한 번, 확인 중이면 앞에 `확인 중…`, 마지막 확인이 실패한 원격이 있으면 뒤에 `인증 실패`·`연결 실패`·`확인 실패`. ③ 묶음 행 끝 단추 둘(`tag 관리 열기`, `원격 tag 확인`)과 같은 항목의 묶음 메뉴(`tag 관리 열기` · `모든 tag push…` · `원격에만 있는 tag 보기 (N)`(있을 때만) · ── `원격 tag 확인`) — 행 단추에는 Tab 정지가 없어 키보드는 메뉴로 한다. ④ 원격에만 있는 tag 는 트리에 넣지 않는다(D14, 문서 전용). ⑤ 앱의 push·삭제·가져오기 뒤에는 네트워크 없이 표시가 바뀐다(코어 캐시 패치 → 다시 받기). 트리 렌더링 비용은 12.8 |
+| TG-10 | 태그 문서 | 코어·IPC 는 목록 하나만 있다: `tag_list(session)` → `LocalTag[]`(이름순, 종류·만든 시각·commit 제목·tag 제목·tagger — 12.2 "tag 목록"). 문서의 비교 열은 TG-08 보고서를 쓴다 | 진입점: 묶음 행 끝 단추·묶음 메뉴 `tag 관리 열기`, 팔레트 `tag 관리`(`view.tagsDoc`, 기본 키 없음). 저장소 탭 에디터 공간의 고정 탭(저장소당 하나, id `tags:<저장소 경로>`)으로 열고 목록에 포커스한다. 폴더 탭에는 없다. **머리**: 비교할 원격(select, 기본은 현재 branch 업스트림의 원격 → origin → 첫 원격), 확인 상태 한 줄(`확인 중…` / 실패 종류 + 이전 확인 시각 / `확인 14:02 · 오래됨` / `확인 전 — 원격 확인을 누르면 원격과 견줍니다`, 원격이 없으면 `원격이 없어 비교할 수 없습니다`), `원격 확인`, `N개 고름`. **찾기·필터**: 이름 부분 일치(대소문자 무시). 상태 필터 단추 `전체`·`로컬에만`·`원격에만`·`같음`·`다름` 에 개수(검색과 무관한 전체 줄 기준)를 붙이고, 확인 전에는 `전체` 외 단추가 꺼진다. **정렬**: 기본 이름 역순(숫자 마디는 수로 — `v2.10` 이 `v2.9` 위). 이름·상태(할 일 먼저: 로컬에만 → 다름 → 원격에만 → 알 수 없음 → 같음 → 확인 전)·날짜(모르는 날짜는 뒤)로 바꾸며, 상태·날짜 안에서는 이름 역순. **열**: 이름·종류(annotated/경량)·로컬 commit·원격 commit·상태·날짜. 줄 툴팁은 tag 제목(경량이면 commit 제목)과 `만든 이: …`. 줄은 로컬 tag 마다 하나와, 확인했으면 원격에만 있는 tag 마다 하나. **목록**: 가상 listbox(`aria-multiselectable`, `aria-activedescendant`, 보이는 줄만 그림). ↑↓·Home·End 는 커서, ⇧ 와 함께면 범위, Space 는 커서 줄 토글, ⌘A 는 보이는 줄 전부, Esc 는 선택 비우기, Enter·더블클릭은 로그에서 보기(포커스는 목록에 남음), ⇧F10·메뉴 키는 줄 메뉴. 클릭은 그 줄만, ⌘(Ctrl)-클릭은 토글, ⇧-클릭은 범위. 선택은 필터로 숨어도 남는다. **빈 상태**: `tag 가 없습니다`, `조건에 맞는 tag 가 없습니다`. **줄 메뉴**: 로그에서 보기 · ── `<r> 로 push` · 삭제… · (다름이면 ── 원격 것으로 맞추기… · 로컬 것으로 맞추기…) · ── 그 commit 으로 분리 checkout · ── 이름 복사. 원격에만 있는 줄은 가져오기 · 삭제… · ── 이름 복사. 화면 상태(원격·필터·검색·정렬·선택·커서·여는 쪽의 요청)는 탭의 워크스페이스(`tagsView`)에 두고 저장하지 않는다. 문서가 보일 때와 ref 가 바뀔 때 `tag_list` 를 다시 읽는다(실패하면 이전 값) |
+| TG-11 | 원격 tag 가져오기 | `fetch_tags(session, remote, names, overwrite, op)` → `TagRefResult[]`. `fetch --porcelain --verbose --progress --no-tags --no-prune --no-write-fetch-head --end-of-options <r> refs/tags/<n>:refs/tags/<n>…`(`overwrite` 면 refspec 앞에 `+` — TG-15 "원격 것으로 맞추기"의 코어). 지정한 tag 만 받고(`--no-tags`, G8), `fetch.prune`·`pruneTags` 가 켜져 있어도 다른 ref 를 지우지 않는다(`--no-prune`, G9). 결과는 tag 마다 `fetched` / `upToDate` / `rejectedExists`(로컬에 다른 tag 가 있고 덮어쓰기가 아님, `remoteOid` = 원격 객체) / `unknown`. 로컬 ref 를 바꾸므로 undo 항목이 하나다(라벨 `fetch tag v1` / `fetch tags v1 v2 v3 (+N)`, 덮어쓰기면 `fetch +tag v1`, 청크가 여럿이어도 하나, G11). **원격에 없는 이름이 하나라도 섞이면 git 이 전체를 멈춘다** — 첫 청크면 `CommandFailed`(IPC `gitFailed`)이고 아무것도 받지 않는다(G8). 받은 결과는 원격 tag 캐시에도 반영한다(push 와 같은 규칙) | 원격에만 있는 줄의 줄 메뉴 `가져오기`(단건)와 일괄 `가져오기 (N)`(TG-12), 묶음 메뉴 `원격에만 있는 tag 보기 (N)`(원격들을 합친 개수 — 그런 tag 가 있는 첫 원격의 `원격에만` 필터로 문서를 연다). 원격에 없는 이름이 섞여 git 이 전체를 멈추면(`couldn't find remote ref`) `<r> 에 없는 tag 가 섞여 아무것도 가져오지 않았습니다. 원격 확인 뒤 다시 시도하세요.`. 결과는 결과 칸(TG-12), undo 는 하나. 받은 tag 는 트리에 바로 생긴다 |
+| TG-12 | 일괄 처리와 결과 | 코어는 TG-01·04·11·15 의 다건 호출(청크·op 하나) 그대로 | ① 태그 문서의 일괄 단추는 고른 줄(필터로 숨은 줄 포함) 가운데 해당하는 개수를 붙이고, 0 이거나 세션이 busy 면 꺼진다: `<r> 로 push (n)`(로컬에 있고 원격에 없거나 모름 — 로컬에만·알 수 없음·확인 전), `가져오기 (n)`(원격에만), `삭제… (n)`(로컬이나 원격에 있음 — 모든 줄). ② 결과 칸: 요약 한 줄(`role=status`, `<r> 로 push: 3개 완료, 1개 남음`), 실패만 남긴 목록(이름과 사유, 삭제는 원격 이름을 붙이고 로컬에 남긴 것은 `로컬에 남김`), 명령 전체 실패·확인창 취소의 사유, `실패한 것 다시 시도`, `결과 닫기`. 실패한 것은 선택으로 남는다. 다시 시도는 다시 해 볼 만한 것이 있을 때만 켜진다 — `unknown`·`failed`·`notRun`, 명령 전체가 실패했으면 전부, 삭제의 로컬 실패면 로컬에 남긴 것. 거부(이름 충돌·서버 거부·다름·바뀜)는 다시 시도하지 않는다. 삭제의 다시 시도는 같은 지울 곳으로 대화상자 없이 부른다(원격 것이 다르면 다시 묻는다). 결과 칸은 문서가 내려가면 사라진다. ③ 문서 안 작업은 토스트를 띄우지 않는다 — 트리·로그 메뉴의 작업은 토스트·오류 줄로 알린다(12.10). busy 는 작업마다 한 번 |
+| TG-13 | 모든 tag push | 코어 몫은 TG-01 의 다건 push 다. `push --tags` 는 쓰지 않는다. 비용 한계는 12.8 | 진입점: 팔레트 `모든 tag push…`(`sync.pushAllTags`, 기본 원격), Tags 묶음 메뉴(원격 1개면 `origin 로 모든 tag push…`, 2개 이상이면 `모든 tag push… ▸` 원격 이름, 0개면 꺼짐). 순서: 태그 문서를 열고 그 원격·검색 비움·`로컬에만` 필터로 바꾼다 → 그 원격을 확인한다 → 확인이 끝나면 `로컬에만` 줄을 모두 고른다 → 포커스를 `<r> 로 push (n)` 단추로(꺼져 있으면 목록으로) 옮긴다 → 사용자가 검토한 뒤 그 단추로 보낸다. 다른 원격에만 있는 tag 표시는 넣지 않았다(D19) |
+| TG-14 | 로컬 정리 | 코어 몫은 TG-06 이다 | 따로 단추를 두지 않는다: 태그 문서에서 `로컬에만` 필터 → 고르기 → `삭제… (n)`. 지울 곳 대화상자는 로컬만 체크된 채로 열리고, 그 원격에 없는 tag 라 원격 칸은 `이 원격에 없음` 으로 꺼질 수 있으며, 모든 원격을 확인했으면 `push 하지 않은 tag N개는 원격 어디에도 없습니다…` 경고가 보인다(TG-03 ⑥). Undo 한 번에 모두 되살린다 |
+| TG-15 | 다름 해소 | **원격 것으로 맞추기**: `fetch_tags(overwrite=true)` — `+refs/tags/<n>:refs/tags/<n>` 가져오기, undo 항목 하나(`fetch +tag v1`). **로컬 것으로 맞추기**: `replace_remote_tags(session, remote, items[{name, expectedRemote}], op)`(C2b) — 확인한 원격 객체로 lease 를 건 push 한 번(`push --porcelain --progress --no-follow-tags --force-with-lease=refs/tags/<n>:<expected> --end-of-options <r> refs/tags/<n>:refs/tags/<n>…`, 청크). lease 가 맞으면 `--force` 없이 덮어쓴다(G13). 결과는 `pushed`(덮어씀)·`upToDate`·`rejectedStale`(그 사이 원격이 바뀜 — 원격 그대로)·`rejectedRemote`·`failed`·`unknown`, undo 없음. 삭제 → push 두 단계가 아니라서 사이에서 실패해 원격 tag 가 사라진 채 남는 일이 없다. `--force` 단독 경로는 없다 | 두 동작은 태그 문서의 **다름인 줄의 줄 메뉴에만** 있다. `원격 것으로 맞추기…` 는 일반 확인창(`로컬 tag v1 을(를) origin 것으로 바꿀까요?`, 두 commit, "로컬 tag 가 원격 tag 와 같은 객체를 가리키게 됩니다. ↶ 되돌리기로 되돌릴 수 있습니다.", 단추 `원격 것으로 바꾸기`). `로컬 것으로 맞추기…` 는 위험 확인창(`origin 의 tag 를 로컬 것으로 덮어쓸까요?`, 두 commit, "이미 받아 간 저장소에는 옛 tag 가 남습니다. 되돌릴 수 없습니다.", 단추 `로컬 것으로 덮어쓰기`)이고, 원격 객체를 모르면 꺼진다. push 이름 충돌 안내의 둘째 단추(TG-02)도 같은 덮어쓰기다. 결과는 결과 칸 |
+| TG-17 | 성능 측정 | `mgit-bench --tags`(12.8). 보고서 JSON 은 5만 개 픽스처에서 3.5MB 로 기준(2MB)을 넘었고, IPC 응답(캐시 보고서 + 직렬화)은 24ms 로 기준(100ms) 안이다. 지연 조회 슬라이스는 넣지 않는다(12.8 판단). 일괄 push·삭제는 refspec 수 × ref 수로 느려지는 git 의 한계가 있다(1만 개 저장소에서 1천 개 push 8.0s). 브랜치 칸 트리는 tag 3,004개에서 묶음을 펼칠 때 117~231ms, 원격 확인 뒤 로컬 삭제의 다시 그리기는 개선 뒤 300~335ms(가상화는 후속 항목) | 트리 렌더링(U 실측, 12.8 "브랜치 칸 트리") |
+
+### 12.2 구현 메모
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 이름·원격 검사 | 원격은 등록된 것(`refs.remotes`)만 받고, 아니면 `CoreError::Invalid`("원격이 없습니다"). tag 이름은 `check_tag_name`(`crates/mgit-core/src/refname.rs`)이 빈 이름, `-` 시작, `..`, 공백·제어 문자, `: * ? [ \ ^ ~`, `@{`, `/` 로 시작·끝을 거부한다(모두 git 이 tag 이름으로 받지 않는 것). 중복은 빼고 순서를 지킨다. 검사는 git 을 돌리기 전이다. branch 이름 검사 `check_ref_name` 도 같은 파일로 옮겨 함께 쓴다 | refspec 을 깨거나 옵션·glob·revision 으로 해석될 이름을 git 앞에서 막는다 |
+| push 결과 읽기 | `--porcelain` 결과 표(stdout, ref 하나가 한 줄 `<flag>\t<from>:<to>\t<summary> (<reason>)`)를 `mgit_git::parse::parse_push_porcelain` 으로 읽는다. 분기는 flag 와 summary 의 대괄호, 사유의 고정 문구(`already exists`·`stale info`)로만 하고 사유 원문은 `message` 로 넘긴다. 일부 거부(종료 코드 1)여도 표는 stdout 에 있으므로 `keep_failed_output` 으로 받는다(G1) | stderr 의 사람용 문장에 기대지 않고 ref 마다 결과를 낸다 |
+| 청크와 op | 인자 예산 `CoreConfig.tag_chunk_bytes`(256KiB)·`tag_chunk_refs`(1,000)로 차례대로 나눠 git 명령을 여러 번 돈다. 예산은 refspec 과 그 ref 의 옵션(lease)을 합친 바이트이고, 하나가 예산을 넘으면 혼자 한 청크다. op 는 하나로 잇고(`keep_op_open`) 마지막에 한 번 닫는다: 모두 성공 = ok, 일부 실패 = "tag N개 중 M개가 처리되지 않았습니다", 취소 = 취소됨(G5). 중간 청크 뒤에는 ref 를 다시 읽지 않는다 | 명령 줄 길이 한계(계획 D9). B4 측정에서 청크는 시간을 줄이지 못했다 — git push 가 refspec 수 × ref 수로 느려진다(12.8) |
+| 실패를 결과로 | 첫 청크가 결과 표 없이 통째로 실패하면(인증·연결) 아무것도 바뀌지 않았으므로 `CommandFailed`(IPC `gitFailed` + 힌트). 결과 표에 없는 ref 는 `unknown`(사유 = stderr 의 `fatal:`·`error:` 줄, 없으면 "결과를 알 수 없습니다. 원격 tag 를 다시 확인하세요"). 앞 청크가 끝난 뒤 명령이 오류면 남은 ref 를 그 오류 문구로 `unknown`. 청크 사이·실행 중에 취소하면 그 청크와 남은 ref 가 `unknown`("취소됨") | 일부가 이미 원격에 반영됐을 수 있어 실패로 단정하지 않는다 |
+| 실행 직전 조회 | `ls-remote --tags --end-of-options <r>` 뒤에, 이름이 **4개 이하**면 이름마다 `refs/tags/<n>`·`refs/tags/<n>^{}` 패턴을 붙이고 넘으면 전체를 받는다(C2c — 처음에는 50개였다). `--refs` 는 쓰지 않는다(`^{}` 줄이 벗긴 commit). 비슷한 이름(`xv1`·`release/v1`·`v1.0`·`v10`, branch `v1`)은 걸리지 않는다(G6). 두 줄은 `parse_ls_remote_tags` 가 이름 하나(`RemoteTag{object, peeled}`)로 합친다(줄 순서에 기대지 않음). 코어 API `lookup_remote_tags` 도 같은 경로다(IPC 는 B3). ls-remote 의 이름 패턴은 클라이언트가 광고된 ref 전부에 맞춰 보므로 비용이 패턴 수 × ref 수다 — B4 실측(12.8)의 손익분기가 약 4개라 C2c 에서 낮췄다(G: `lookup_switches_to_full_listing_above_four_names`) | 원격 삭제는 되돌릴 수 없다 |
+| 네트워크 읽기 | `CoreInner::run_network_read` 가 쓰기 잠금 없이 `run_write_in` 을 부른다. undo 스냅샷·감시 억제·재조회가 없고 다른 쓰기를 기다리게 하지 않는다. askpass·설정 덮어쓰기·명령 로그·취소는 쓰기와 같고, `quiet` 라 큰 출력을 op 출력 이벤트로 흘리지 않는다 | 조회가 쓰기 큐를 막지 않게 |
+| 로컬 객체 | `mgit_git::cmd::tag_objects`(`for-each-ref --format=%(refname)%00%(objectname) refs/tags`): ref 가 가리키는 객체(annotated 면 tag 객체). 원격 삭제의 비교와 로컬 삭제의 기대값에 쓴다 | 비교 기준은 객체 oid(계획 TG-08 의 원격 상태와 같은 기준) |
+| 원격 삭제 명령 | `push --porcelain --no-follow-tags --delete --force-with-lease=refs/tags/<n>:<oid>… --end-of-options <r> refs/tags/<n>…`. 진행률 없음. 지운 것·거부된 것에도 조회한 원격 값(`remoteOid`·`remoteCommit`)을 붙인다. 지울 것이 없으면(모두 `alreadyAbsent`, 또는 확인 전이라 `diverged`·`notRun`) push 를 돌리지 않는다 | 화면이 원격 상태를 네트워크 없이 고칠 수 있게 |
+| 덮어쓰기 명령 (C2b, TG-15) | `push --porcelain --progress --no-follow-tags --force-with-lease=refs/tags/<n>:<expected>… --end-of-options <r> refs/tags/<n>:refs/tags/<n>…` 를 청크로 돈다. 같은 이름이 여러 번 오면 처음 것의 기대값을 쓴다. 결과는 push 결과 표 그대로(lease 거부 = `rejectedStale`)이고 원격 tag 캐시에도 push 처럼 반영한다(`rejectedStale` 이면 그 이름을 `unknown`). undo 없음 | 삭제 → push 두 단계의 일부 성공 상태를 없앤다(계획 E8) |
+| 로컬 삭제 명령 | `update-ref --stdin` 에 `delete refs/tags/<n> <oid>` 줄을 넘긴다. 일반 쓰기 경로라 undo 스냅샷(ref 전체)·감시 억제·재조회가 붙는다 | 원자성과 undo 하나 |
+| 가져오기 명령 (C1, TG-11) | `fetch --porcelain --verbose --progress --no-tags --no-prune --no-write-fetch-head --end-of-options <r> [+]refs/tags/<n>:refs/tags/<n>…` 를 push 와 같은 청크로 돈다. 결과 표(`--porcelain`, git 2.41+)는 stdout 에 ref 하나가 한 줄 `<flag> <old> <new> <local ref>` 이고 `mgit_git::parse::parse_fetch_porcelain` 이 읽는다. **`--verbose` 가 없으면 이미 같은 ref(`=`) 줄이 생략돼** 결과 표에 없는 tag 가 `unknown` 이 되므로 붙인다. `--no-tags` 는 지정한 것만 받게, `--no-prune` 은 `fetch.prune`·`pruneTags` 설정이 다른 ref 를 지우지 못하게, `--no-write-fetch-head` 는 `FETCH_HEAD` 를 바꾸지 않게 한다. 로컬 ref 를 바꾸는 명령이라 청크마다 undo 를 쌓지 않고 처음과 끝의 ref 스냅샷으로 undo 항목을 하나만 쌓은 뒤 한 번 다시 읽는다(`refresh_after_write`, 같은 `common_dir` 의 다른 세션 포함). 받은 tag(`fetched`·`upToDate`)의 `remoteOid`·`remoteCommit` 은 받은 뒤의 로컬 값으로 채운다. 원격에 없는 이름이 섞이면 git 이 전체를 멈춘다 — 첫 청크면 `CommandFailed` 이고, 화면은 다시 확인한 뒤 고쳐 부른다 | 지정한 tag 만, 다른 ref 를 건드리지 않고, 한 번에 되돌릴 수 있게 |
+| tag 목록 (C1, TG-10) | `for-each-ref` 한 번(`TAG_LIST_FORMAT`: refname, objecttype, objectname, `*objectname`, `creatordate:unix`, subject, `*subject`, taggername, taggeremail). 필드도 레코드도 NUL 로 끝내 제목에 무엇이 와도 경계가 흔들리지 않는다(`parse_tag_list`). annotated 면 `commit` = 벗긴 객체, `tagSubject` = tag 메시지 제목, `commitSubject` = 가리키는 commit 제목, `tagger` = `이름 <메일>`. 경량이면 `commit` = `object`, `commitSubject` 만 있다. `date` 는 creatordate(annotated 는 tagger 날짜, 경량은 commit 날짜) | 태그 문서의 열·툴팁을 git 한 번으로 |
+| 오류 분류 (A1, TG-07) | `classify_stderr` 의 push 쪽 순서: (index.lock·워크트리 사용 중·변경 있음·미병합 뒤) `stale info`·`remote ref updated since checkout` → `StaleInfo`, `non-fast-forward`·`fetch first` → `NonFastForward`, `(already exists)` → `RemoteTagExists`, `[remote rejected]` 줄 → `RemoteRejected{reason}`(괄호 안 사유, 없으면 빈 문자열), `failed to push some refs` → `NonFastForward`(마지막 대비책). 한 push 에 NFF 와 tag 충돌이 함께 있으면 NFF 가 먼저다 | 예전에는 `failed to push some refs` 만 보고 NFF 로 판단해 tag 충돌·hook 거부에도 강제 push 를 권했다 |
+| 자동 fetch (B2, 계획 TG-16) | `fetch --all --prune --no-prune-tags`. `fetch.pruneTags=true` 여도 백그라운드에서 push 하지 않은 로컬 tag 를 지우지 않는다. 수동 fetch(`fetch --progress [--prune] …`)는 사용자 설정을 따른다(G15) | 되돌릴 수 없는 삭제를 사용자 모르게 하지 않는다 |
+| `WriteSpec` 확장 | `keep_failed_output`(실패해도 stdout·stderr·`status` 를 결과로), `keep_op_open`(명령이 끝나도 op 를 닫지 않음 — 호출자가 `end_op`), `quiet`(op 출력 이벤트 없음, 취소는 유지), `WriteResult.status`, `WriteSpec::failure`(받은 실패를 기존과 같은 `CommandFailed` + 힌트로). 모두 기본 꺼짐이라 기존 호출부는 그대로다(G4) | 기존 동작 보존 |
+
+### 12.3 결과 상태 (`TagRefStatus`, wire camelCase)
+
+| 상태 | 뜻 | 성공 | 나오는 곳 |
+|---|---|---|---|
+| `pushed` | 원격에 새로 올라감 (porcelain `*`, 갱신 ` `·`+` 포함 — 덮어쓰기는 `+`) | ○ | push·덮어쓰기 |
+| `upToDate` | 이미 같은 객체 (`=`). 가져오기는 `--verbose` 가 있어야 이 줄이 나온다 | ○ | push·가져오기·덮어쓰기 |
+| `deleted` | 지워짐 (`-`) | ○ | 원격 삭제 |
+| `alreadyAbsent` | 지우려 했는데 원격에 없음 | ○ | 원격 삭제 |
+| `fetched` | 원격에서 받아 옴 (fetch porcelain `*` 새로·`+` 강제·`t` tag 갱신·` ` fast-forward) | ○ | 가져오기 |
+| `diverged` | 원격 tag 가 로컬(또는 `expectedRemote`)과 다른 객체라 실행하지 않음. `remoteOid`·`remoteCommit` 이 붙는다 | × | 원격 삭제 |
+| `notRun` | 확인 대기로 실행하지 않음 — 같은 원격 삭제 호출의 다른 tag 가 `diverged` 라 원격을 하나도 바꾸지 않았다(C2a). 확인한 뒤 다시 부르면 실행된다. 화면은 `확인 대기` 로 보이고 다시 시도할 수 있다 | × (실패도 아님) | 원격 삭제 |
+| `rejectedExists` | push: `[rejected] (already exists)` — 원격에 같은 이름의 다른 tag. 가져오기: `!` — 로컬에 다른 tag 가 있고 덮어쓰기가 아님(사유 `would clobber existing tag`, `remoteOid` = 원격 객체) | × | push·가져오기 |
+| `rejectedStale` | `[rejected] (stale info)` — lease 불일치, 원격은 그대로. 원격 삭제를 `expectedRemote` 로 다시 불렀는데 조회값이 다를 때도(사유 "확인한 뒤 원격 tag 가 바뀌었습니다. 다시 확인하세요") | × | 원격 삭제·덮어쓰기 |
+| `rejectedRemote` | `[remote rejected]` — hook·보호 규칙. 사유는 `message` | × | push·원격 삭제 |
+| `failed` | 그 밖의 `!` 줄. 원문은 `message` | × | push·원격 삭제 |
+| `unknown` | 취소·끊김·결과 표에 없음·`[remote failure]`(push)·`-`(가져오기, 정리 — `--no-prune` 이라 나오지 않아야 한다) — 반영됐을 수도 있어 다시 확인해야 한다 | × (실패로 단정하지 않음) | 모두 |
+
+- 원격 삭제를 `expectedRemote` 로 다시 부를 때의 `rejectedStale` 사유(Rust 문구 "확인한 뒤 원격 tag 가 바뀌었습니다. 다시 확인하세요")는 화면에 나오지 않는다. 화면의 결과 문구(`tagResultText`)는 `rejectedRemote`·`failed` 에서만 `message` 를 쓰고, `rejectedStale` 은 상태 문구 `S.tag.status.rejectedStale`("원격이 그사이 바뀜")다. 사용자 매뉴얼 10장도 화면 글자를 적었다.
+- 성공 판정은 `TagRefStatus::is_success`(목·화면의 `isTagSuccess` 가 같은 집합)이고, op 의 ok·요약 문구도 이 판정을 쓴다. 화면의 "다시 해 볼 만한" 상태(`isTagRetryable`)는 `unknown`·`failed`·`notRun` 이다.
+- `message` 는 성공 상태면 비어 있고, 실패·`unknown` 이면 사유(괄호 안)나 summary·안내 문구다.
+- 결과는 요청한 이름 순서(중복 제거)다. 결과 표의 branch 줄은 tag 결과로 치지 않는다.
+
+### 12.4 관문 실측 (`crates/mgit-core/tests/tags.rs`)
+
+로컬 bare 원격으로 실제 git(2.54.0) 동작을 확인한다. 2026-11-23 H1 병합본에서 20개, H3 병합본에서 30개, H4 병합본에서 34개(`cargo test -p mgit-core --test tags`)가 모두 통과했다. 대비 설계(조건 없는 삭제, ref 별 명령)로 바꾼 것은 없다.
+
+| 관문 | 확인한 것 | 결과 |
+|---|---|---|
+| K1 | 삭제에도 lease 가 적용되는지 | 적용된다. 기대값이 다르면 `!\t(delete):refs/tags/v1\t[rejected] (stale info)` 이고 원격은 그대로다. 원격에 없는 ref 에 lease 를 걸어도 `stale info` 다. 값이 맞으면 `-\t:refs/tags/v1\t[deleted]` |
+| K2 | 로컬에서만 지운 tag 가 fetch 로 다시 생기는지 | **다시 생긴다.** 수동 fetch·자동 fetch 모두, annotated·경량 모두. 원격에서도 지운 tag 는 생기지 않는다. 확인한 tag 는 원격 branch 이력 위에 있었다 — git 기본 tag auto-follow 는 받는 이력을 가리키는 tag 만 받으므로, 이력 밖 commit 의 tag 는 다시 생기지 않는다(`git help fetch`, 관문으로는 확인하지 않음). 그 뒤 로컬 삭제를 undo 하면 둘로 갈린다: 삭제 전과 **같은 객체로 돌아온 tag 는 할 일이 없다**(되돌릴 것이 없고 `skipped` 에도 들지 않는다). 원격 것이 다른 객체라 **그 객체로 생긴 tag 는 `skipped` 로 보고**하고 그 값을 그대로 둔다. 되돌린 것이 하나도 없으면 redo 항목도 생기지 않는다. **화면 문구 결정(H1.5)**: "원격에 남아 있으면 다음 fetch 때 다시 생길 수 있습니다" — 위 auto-follow 규칙 때문에 단정하지 않는다 |
+| K3 | `push.followTags=true` 에서 `--no-follow-tags` 가 다른 tag 를 막는지 | 막는다. 같은 설정의 일반 push(대조군)는 요청하지 않은 annotated tag 를 따라 보냈고, `push_tags` 는 요청한 tag 만 보냈다 |
+| G3 | 한 명령의 lease 여러 개가 ref 마다 적용되는지 | ref 마다 적용된다. 셋 중 하나만 stale 이면 그것만 `(stale info)` 이고 나머지 둘은 지워진다(종료 코드 1). 거부된 삭제 줄의 보낸 쪽은 빈 문자열이 아니라 `(delete)` 다. 같은 이름의 원격 branch 는 그대로다 |
+| G8 | 명시 tag 가져오기 | 지정한 tag 만 받는다(`--no-tags` — 같은 원격의 다른 tag 는 오지 않는다). 다시 받으면 `upToDate`. `+` 없이 로컬의 다른 tag 는 덮지 않고 `rejectedExists` + 원격 객체, `+` 면 교체한다. 원격에 없는 이름이 섞이면(`other`, `missing`) 전체가 멈춰 `CommandFailed` 이고 `other` 도 받지 않는다 |
+| G9 | 가져오기와 `fetch.prune` | `fetch.prune=true`·`fetch.pruneTags=true` 여도 원격에 없는 로컬 tag 와 지워진 원격 브랜치의 추적 ref 를 지우지 않는다 |
+| G11 | 덮어쓰기 undo | `+` 교체가 undo 항목 하나(`fetch +tag clash`)를 만들고, undo 하면 옛 tag 객체로 돌아온다(skipped 없음). 예산 1개씩 청크 둘로 받아도 undo 는 하나(`fetch tags n1 n2`)이고, 끝에서 한 번 다시 읽어 라벨에 들어온다 |
+| G16 | tag 목록 | annotated 는 종류·만든 시각·commit 제목·tag 제목·tagger(`이름 <메일>`), 경량은 tag 제목·tagger 가 없고 `commit` = `object`, 둘 다 날짜가 있다. 이름순 |
+| 그 밖 | G1·G4(표는 stdout 이고 stderr 와 섞이지 않음, 일부 거부면 종료 코드 1, 기본 호출은 `CommandFailed`), G2(atomic 아님), G5(청크마다 push 한 번·op 시작·끝 한 쌍, 청크 사이 취소면 나머지 `unknown`), G6, G10, G15, G17, G18, G19 | 모두 통과 |
+
+### 12.5 IPC 계약 (A4·B3·C2·C2b)
+
+| 셸 명령 (프런트 `client.ts`) | 내용 |
+|---|---|
+| `push_tags` (`pushTags(session, remote, names)`) → `TagRefResult[]` | op kind `push`, 라벨 `push <r> v1 v2 v3 (+N)`. 첫 청크가 통째로 실패하면 `gitFailed` |
+| `delete_remote_tags` (`deleteRemoteTags(session, remote, items)`) → `TagRefResult[]` | `items: TagDeleteItem{name, expectedRemote: string \| null}[]`. op kind `push`, 라벨 `push <r> --delete v1 …`. `expectedRemote` 없이 다른 것이 있으면 아무것도 지우지 않고 `diverged`·`notRun`(C2a) |
+| `replace_remote_tags` (`replaceRemoteTags(session, remote, items)`) → `TagRefResult[]` | C2b. `items: TagLeaseItem{name, expectedRemote: string}[]`. op kind `push`, 라벨 `push <r> --force-with-lease v1 …`. undo 없음 |
+| `delete_local_tags` (`deleteLocalTags(session, names)`) → `void` | undo 항목 하나 |
+| `remote_tags` (`remoteTags(session, remote \| null, refresh)`) → `TagSyncReport` | `refresh` 일 때만 op kind `tagCheck`(라벨 `ls-remote --tags <r>`) — 세션 busy 와 무관, 취소 가능. 조회 실패는 거부가 아니라 `lastError` 가 붙은 보고서, 취소는 `cancelled` |
+| `lookup_remote_tags` (`lookupRemoteTags(session, remote, names)`) → `RemoteTag[]` | 원격에 있는 것만 요청 순서대로. op kind `tagCheck`, 라벨 `ls-remote --tags <r> v1 …` |
+| `fetch_tags` (`fetchTags(session, remote, names, overwrite)`) → `TagRefResult[]` | op kind `fetch`, 라벨 `fetch <r> v1 …`(덮어쓰기면 `fetch <r> +v1 …`). undo 항목 하나. 원격에 없는 이름이 섞이면 `gitFailed` |
+| `tag_list` (`tagList(session)`) → `LocalTag[]` | op 없음. 이름순 |
+
+- DTO `TagRefResult{name, status, message, remoteOid, remoteCommit}` — oid 는 hex 문자열, `status` 는 12.3 의 12가지(`TagRefStatus`, C2a 에서 `notRun` 을 더했다).
+- 힌트 `GitHint` 에 `remoteTagExists`·`remoteRejected{reason}` 를 더했다(셸 `dto.rs` 미러).
+- 이름·원격 검사 실패와 로컬에 없는 tag 는 `CoreError::Invalid` → wire `internal`(10.1 과 같은 규칙).
+- B3·C2 DTO: `TagSyncReport{remote, checkedAt, stale, lastError{kind, at, message}, counts{localOnly, remoteOnly, same, diverged, unknown}, entries[{name, state{kind, sameCommit?}, localObject, localCommit, remoteObject, remoteCommit}], pushUrlDiffers}`, `RemoteTag{name, object, peeled}`, `LocalTag{name, annotated, object, commit, date(epoch 초), commitSubject, tagSubject, tagger}`. 시각·oid 형식은 12.7 과 같다(oid 는 hex).
+- op kind `tagCheck` 는 조회 전용이다. 프런트는 이 op 의 오래 걸림·실패 토스트를 띄우지 않는다(B5, TG-08).
+- 단건 `delete_tag`(`deleteTag`)는 `delete_local_tags` 로 대체돼 제거했다(TG-06, R `09f9f16`·U `5522979`).
+
+### 12.6 목 (`packages/ipc/src/mock/mock-tags.ts`)
+
+- 저장소 장면의 tag 표(`MockRepoData.tags`)는 로컬 tag 객체와 원격별 tag 표다. push·원격 삭제·로컬 삭제가 표를 실제로 바꾸고, 원격 표는 세션이 닫힐 때까지 남는다.
+  - origin: `v2.4.0` 없음(로컬에만), `v2.3.1` 다른 commit(push 하면 주입 없이도 `rejectedExists`), `v2.3.0` 같음, `v2.2.0` 같은 commit 다른 객체(원격은 경량), 원격에만 `v2.5.0-rc.1`(annotated)·`v1.9.0`
+  - upstream: `v2.3.0`·`v2.2.0` 같음, 나머지 없음, 원격에만 `v3.0.0-alpha.1`
+- 실패 주입은 `globalThis.__mgitMockTagFail` 이다. 부를 때마다 읽으므로 개발 도구나 Playwright `page.evaluate` 로 켜고 끈다. 원격 자리는 `true`(모든 원격) 또는 원격 이름 배열이다.
+
+| 키 | 효과 |
+|---|---|
+| `deleteRemote: true \| string[]` | 그 원격의 원격 삭제를 서버가 거부한다(`rejectedRemote`, 사유 `pre-receive hook declined`) |
+| `pushExists: string[]` | 그 tag 의 push 가 이름 충돌로 거부된다(`rejectedExists`) |
+| `diverged: string[]` | 원격 삭제가 `diverged` 를 돌려준다. `expectedRemote` 로 다시 부르면 지운다 |
+| `auth: true \| string[]` | 그 원격과의 명령 전체가 `gitFailed`(hint `authFailed`, 종료 코드 128)로 거부된다 |
+
+- 흉내 내는 차례는 코어·셸과 같다: `operationStarted`(kind `push`) → 원격 등록·tag 이름 검사(실패면 `internal`) → 인증 주입 → 결과·명령 기록(모두 성공이면 0, 아니면 1)·`operationFinished`. 호출 인자는 `__mgitMockBatches` 에 `{method, session, …}` 로 남는다.
+- 로컬 삭제는 한 번에 지우고 `refsChanged`·`graphReloaded` 를 보낸다. 없는 이름이 섞이면 아무것도 지우지 않고 거부한다. **목에는 undo 가 없다.**
+- push 에서 로컬에 없는 이름은 `failed`(`src refspec … does not match any`)다.
+- B3·C2 에서 더한 것: 실패 주입 키 `lookup: true | string[]`(그 원격의 조회가 연결 실패 — 원격 확인은 이전 값 + `lastError`(network), 단일 조회와 원격 삭제·가져오기는 `gitFailed`), `stale: true | string[]`(보고서를 오래됨으로 — 목에는 바깥 변경이 없다). `auth` 는 원격 확인에서 `lastError`(auth)로 보인다.
+- `remoteTags`·`lookupRemoteTags` 는 kind `tagCheck` op, `fetchTags` 는 kind `fetch` op 를 열고 닫는다. 가져오기는 원격에 없는 이름이 섞이면 전체를 멈추고(`gitFailed`), 받은 tag 를 라벨·그래프에 넣고 `refsChanged`·`graphReloaded` 를 보낸다(목에는 undo 가 없다). `tagList` 는 라벨과 그래프 행으로 만든다. 원격별 마지막 확인 시각·실패는 장면의 `checks` 에 둔다.
+- C2a·C2b 에서 더한 것(R 레인): 원격 삭제 흉내가 확인되지 않은 다름이 있으면 아무것도 지우지 않고 `diverged`·`notRun` 을 돌려준다(주입 `diverged` 도 같다). `replaceRemoteTags` 는 지금 원격이 `expectedRemote` 일 때만 로컬 것으로 바꾸고 아니면 `rejectedStale`. U 레인(B5·C3~C5)은 목을 바꾸지 않았다.
+- 합성 tag: `VITE_MGIT_MOCK_TAGS=N` 이나 `localStorage['mgit.mock.tags']`(장면은 한 번 만들므로 바꾼 뒤 페이지를 다시 읽는다)로 저장소마다 tag N 개를 더한다. 로컬·원격 상태를 고르게 섞는다(tag 수천 개 화면 측정용).
+
+### 12.7 원격 tag 상태 (TG-08 코어, B1)
+
+`Core::remote_tags(session, remote, refresh, op) -> TagSyncReport`(`crates/mgit-core/src/tags.rs`)와 캐시(`tag_cache.rs`), 모델(`crates/mgit-model/src/tags.rs`). IPC 는 B3, 화면은 B5 에서 더한다.
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 비교 대상 원격 | `remote` 가 없으면 현재 branch 업스트림의 원격 → `origin` → 첫 원격. 원격이 하나도 없으면 `Invalid`("원격이 없습니다. 먼저 원격을 추가하세요"), 등록되지 않은 이름도 `Invalid` | 태그 문서의 기본 원격(계획 TG-10 ②)과 같게 |
+| 전체 조회 (`refresh=true`) | `ls-remote --tags --end-of-options <r>` 한 번. `--refs` 를 쓰지 않는다(`^{}` 줄이 벗긴 commit). `run_network_read` 라 쓰기 잠금·세션 busy 가 없고 `quiet` 이며 `op` 로 취소할 수 있다. op 는 성공이면 ok, 조회 실패면 그 문구로 실패, 취소면 취소로 한 번 닫는다. 취소는 `CoreError::Cancelled` | 명시적인 동작에서만 네트워크를 쓴다. 자동 fetch 는 조회하지 않는다 |
+| 캐시 비교 (`refresh=false`) | 네트워크 없이 캐시의 원격 표와 지금 로컬 라벨로 다시 비교한다. 확인에 성공한 적이 없으면 `checkedAt` 이 없고 개수·항목이 비어 있다 | 로컬 tag 가 바뀔 때(`RefsChanged`) 화면이 싸게 다시 부른다(12.8 `cached`) |
+| 로컬 쪽 재료 | 재조회가 이미 읽는 ref 라벨에서 뽑는다 — git 을 새로 돌리지 않는다. `RefLabel.tag_object`(annotated 면 tag 객체)를 더했고 `serde(skip)` 라 IPC·`RefsChanged` 로는 나가지 않는다. 객체 = `tag_object` 또는 `target`, commit = `target` | 비교 기준이 ref 가 가리키는 객체 oid 다 |
+| 상태 (`TagSyncState`, wire `{kind, …}`) | `localOnly`, `remoteOnly`, `same`, `diverged{sameCommit}`(벗긴 commit 이 같으면 true — 원격 경량 ↔ 로컬 annotated 등), `unknown`(결과를 알 수 없는 작업 뒤의 이름. 어느 쪽에 있든 이것이 먼저) | 계획 TG-08 ③ |
+| 보고서 (`TagSyncReport`) | `remote`, `checkedAt`(마지막 성공 조회, epoch ms), `stale`, `lastError{kind: auth\|network\|other, at, message}`, `counts{localOnly, remoteOnly, same, diverged, unknown}`(전부 셈), `entries`("같음"이 아닌 것만, 이름순 — `name·state·localObject·localCommit·remoteObject·remoteCommit`), `pushUrlDiffers`(push URL 이 fetch URL 과 다름) | 크기를 줄이려고 "같음"을 빼지만, 5만 개에서는 그래도 2MB 를 넘는다(12.8) |
+| 캐시 | `CoreInner.tag_cache`: canonical `common_dir` 키 → 원격별. 메모리에만 두고 같은 저장소의 워크트리 세션끼리 공유하며, 그 저장소를 쓰는 마지막 세션을 닫으면 지운다. 원격 표, 모르는 이름, `checkedAt`·`stale`·`lastError`, 조회 때의 fetch URL, 마지막 반영 시각을 둔다. 표시용이고 원격 삭제의 lease 근거로 쓰지 않는다 | 계획 TG-08 ②, D6·D7 |
+| 실패 (오프라인·인증) | 오류로 돌려주지 않는다. 이전 원격 표·`checkedAt` 을 지우지 않고 `lastError` 만 남긴 보고서를 준다. 종류는 힌트 `authFailed` 면 `auth`, 연결 불가·저장소 없음 문구면 `network`, 그 밖은 `other` 이고, 문구는 stderr 의 `fatal:`·`error:` 줄(자격 증명 가림)이다. 다음 성공 조회가 `lastError` 를 지운다 | 계획 TG-08 ⑤ |
+
+**무효화** — 그 원격의 캐시가 있을 때만 적용한다(확인한 적이 없으면 고칠 것도 없다).
+
+| 사건 | 처리 |
+|---|---|
+| 앱의 tag push·가져오기·덮어쓰기 | `pushed`·`upToDate`·`fetched` 면 그 tag 의 원격 값을 로컬 값으로 둔다(네트워크 없음). 덮어쓰기의 `rejectedStale` 은 그 이름을 `unknown` 으로. `rejectedExists` 인데 캐시가 다름으로 보지 않았으면 그 이름을 `unknown` 으로. `unknown` 이면 그 이름 `unknown` + 원격 `stale` |
+| 앱의 원격 삭제 | 직전 조회가 있음·없음·다름을 이미 반영했다(단일 조회 줄). 실제로 돈 삭제 명령의 `deleted` 면 원격 표에서 뺀다. `rejectedStale` 이면 `unknown`. `unknown` 이면 `unknown` + `stale`. 확인 대기(`notRun`)는 고칠 것이 없다 |
+| 단일 조회 (원격 삭제 직전 조회, `lookup_remote_tags`) | 찾은 이름은 넣고 없는 이름은 빼며, 그 이름들의 `unknown` 을 푼다. 캐시를 새로 만들지는 않는다(일부 이름으로는 원격 전체를 모른다) |
+| 수동 fetch·pull, 자동 fetch | 전후 로컬 tag 지문(이름·객체)이 다를 때만 그 저장소의 모든 원격을 `stale`(fetch 가 실패해도 비교한다). tag 없는 fetch 는 그대로 |
+| 폴더 일괄 fetch·pull (C2d) | 세션 없이 도는 폴더 일괄 fetch·pull 도 수동 fetch 경로다: 그 저장소에 캐시가 있을 때만 전후로 `for-each-ref` 한 번씩 지문을 읽어, 다르면 그 저장소의 모든 원격을 `stale`(열린 저장소 탭의 보고서에 보인다) |
+| branch push | `tags` 옵션이나 `push.followTags` 가 참일 때만 그 원격을 `stale` |
+| 원격 이름·URL 변경 (CLI 포함) | 읽을 때 지금 원격 목록(이름·fetch URL)과 맞지 않으면 버린다 |
+| 조회 중에 반영된 쓰기 | 쓰기 반영 시각이 조회 시작보다 늦으면 새 조회 결과를 `stale` 로 둔다 |
+| 다시 전체 조회 | 원격 표를 바꾸고 `stale`·`unknown`·`lastError` 를 지운다 |
+
+**관문 실측** (`crates/mgit-core/tests/tags.rs`, G7 의 5만 줄은 `mgit-git` 단위 테스트)
+
+| 관문 | 확인한 것 | 결과 |
+|---|---|---|
+| G7 | 큰 출력 | 파서가 5만 줄(annotated 2만 개 = 4만 줄 + 경량 1만 개)을 tag 3만 개로 정확히 합친다. bare 원격 tag 5천 개를 한 번에 조회하면 `same` 5,000, 항목 0 |
+| G12 | 무효화 규칙 | push 결과가 `ls-remote` 없이 반영된다(조회 수 그대로). 원격 삭제 뒤 그 tag 는 다시 `localOnly`(stale 아님). tag 없는 fetch 는 그대로, tag 를 받아 온 fetch 는 `stale`, 다시 확인하면 풀린다. 그냥 branch push 는 그대로, `tags` push 는 `stale`. CLI `remote set-url` 뒤 `checkedAt` 없음, `remote rename` 뒤 새 이름은 캐시 없음·옛 이름은 `Invalid` |
+| G13 | 워크트리 공유 | 같은 `common_dir` 의 두 세션이 같은 `checkedAt`·개수를 본다. 하나를 닫아도 남고, 마지막을 닫은 뒤 다시 열면 없다. **기록용**: lease 가 맞으면 `--force` 없이도 원격의 다른 tag 를 덮는다 — `push --porcelain --no-follow-tags --force-with-lease=refs/tags/v1:<원격 옛 oid> --end-of-options origin refs/tags/v1:refs/tags/v1` 이 `+\trefs/tags/v1:refs/tags/v1` 로 성공한다(`(already exists)` 를 넘는다, 12.9 C2b 의 근거) |
+| G14 | 오프라인 | 원격 폴더를 옮기면 `lastError.kind = network` 이고 문구가 있으며, `checkedAt`·개수·항목은 그대로고 op 는 실패로 닫힌다. 되돌리고 다시 확인하면 `lastError` 가 없다 |
+| G18 | 같은 commit 다른 객체 | 원격 경량 ↔ 로컬 annotated 가 같은 commit 이면 `diverged{sameCommit:true}`, commit 이 다르면 `sameCommit:false`. "같음"은 항목에 없고, 확인 전에는 `checkedAt` 없음·항목 0. 원격을 고르지 않으면 업스트림의 원격(origin) |
+| C2a | 확인 전 무삭제 | diverged 가 섞인 다건 원격 삭제는 원격을 하나도 바꾸지 않고 `diverged`·`notRun` 을 돌려준다. diverged 를 빼고 다시 부르면 나머지만, `expected_remote` 를 채워 부르면 전부 지워진다. 기대값이 지금 원격과 다르면 `rejectedStale`(`g18_mixed_call_deletes_nothing_until_confirmed`, `g18_diverged_then_delete_with_expected_remote`) |
+| C2b | lease 덮어쓰기 | 원격 tag 를 로컬 것으로 lease push 한 번에 덮어쓴다. 그 사이 원격이 바뀌었으면 `rejectedStale` 이고 원격은 그대로, 같은 이름의 원격 branch 는 무관하다. `--force` 단독 인자를 쓰지 않고, 확인한 원격 상태도 네트워크 없이 고친다(`replace_remote_tags_with_lease`) |
+| C2c | 단일 조회 기준 | 이름 4개까지는 이름 패턴, 5개부터는 전체 조회이고 결과는 같다(`lookup_switches_to_full_listing_above_four_names`) |
+| C2d | 폴더 일괄 fetch | tag 를 받아 온 폴더 일괄 fetch 는 열린 저장소 세션의 보고서를 오래됨으로, tag 가 바뀌지 않았으면 그대로 둔다(`folder_batch_fetch_marks_tag_cache_stale_only_when_tags_change`) |
+
+### 12.8 성능 측정 (TG-17, B4)
+
+`cargo run --release -p mgit-bench -- --tags bench/repos/tags-<N>` 으로 잰다(방법·출력은 `bench/README.md` "tags 픽스처" 절). 픽스처는 `bench/setup.sh tags N` 이 만든 작업 저장소 + bare 원격(로컬 경로)이다. tag 이름 N개 중 "같음"이 아닌 것이 30%(로컬에만 10%·원격에만 10%·다름 10%)이고 약 2/3 가 annotated 다.
+
+**측정 조건**: 2026-11-23, macOS 27.2.1, Apple M4 Pro 14코어·24GB, git 2.54.0, 릴리스 빌드, 페이지 캐시가 데워진 상태. 다른 레인의 빌드와 겹쳐 load average 가 7~56 이었다(1천·1만 47~49 → 17, 5만 읽기 30~34, 5만 쓰기 7~9). 시간 값은 흔들림이 크고 크기 값은 결정적이다.
+
+**읽기** (5회 중앙값)
+
+| N | 보고서 항목 | 보고서 JSON | 캐시 보고서 + 직렬화 (IPC) | 전체 조회 (그중 ls-remote) | 파싱 / 비교 | ls-remote 출력 |
+|---|---|---|---|---|---|---|
+| 1,000 | 300 | 70,183 B | 0.3ms | 18ms (17) | 0.2 / 0.1ms | 1,484줄, 89,177 B |
+| 10,000 | 3,000 | 700,097 B | 2.9ms | 36ms (30) | 1.9 / 0.8ms | 14,834줄, 891,407 B |
+| 50,000 | 15,000 | **3,511,698 B (초과)** | 24ms | 186ms (155) | 12.6 / 5.1ms | 74,168줄, 4,516,249 B |
+
+- 판정: 보고서 JSON 2MB 이하는 1만까지 통과하고 **5만은 넘는다**. IPC 100ms 이하는 모두 통과.
+- 보고서 항목 하나가 약 234 B(oid hex 4개 + 이름 + 상태)라 2MB 에는 약 8,500개가 든다. 이 픽스처 비율로는 tag 약 2.8만 개가 경계다.
+- 전체 조회 시간의 대부분은 ls-remote 다. 파싱과 비교는 5만에서도 18ms 다. 부하가 낮을 때(load 9) 5만을 한 번 더 재면 전체 조회 86ms(ls-remote 64), IPC 15ms 였다.
+
+**`RefsChanged` 기준선** (지금 동작 — ref 가 바뀔 때마다 라벨 전부를 싣는 `RepoRefs`, 코어 serde JSON. 셸 DTO 와 필드가 같고 `tag_object` 는 빠진다)
+
+| N | 라벨 | JSON | 직렬화 |
+|---|---|---|---|
+| 1,000 | 902 | 224,472 B | 0.2ms |
+| 10,000 | 9,002 | 2,234,535 B | 1.7ms |
+| 50,000 | 45,002 | 11,240,135 B | 11.3ms |
+
+**일괄 push·원격 삭제** (로컬에만 있는 tag 를 `push_tags` 로 올린 뒤 같은 tag 를 `delete_remote_tags` 로 지운다, 픽스처 복사본에서)
+
+| 픽스처 | tag 수 | push | 원격 삭제 (그중 직전 조회) | 청크 예산 없이 명령 하나 (push / 삭제) | 횟수 |
+|---|---|---|---|---|---|
+| 1,000 | 100 | 0.36s | 0.27s (19ms) | 0.42 / 0.25s | 5회 중앙값 |
+| 10,000 | 1,000 | **8.0s** | **9.2s** (27ms) | 7.7 / 9.1s | 5회 중앙값 |
+| 50,000 | 1,000 | **35.0s** | **43.0s** (69ms) | — | 1회 |
+| 50,000 | 5,000 | 약 175s (추정) | 약 215s (추정) | — | 재지 않음 |
+
+- 원인은 git 클라이언트다. 5만 push 중에 `sample` 로 스택을 뜨면 `check_push_refs → match_explicit_lhs → count_refspec_match → refname_match → mkpath`(snprintf)가 CPU 를 다 쓰고 receive-pack 은 놀았다. git 이 refspec 마다 ref 전부를 규칙 형식별 문자열로 만들어 대조하므로 비용이 대략 "refspec 수 × ref 수"다.
+- 규모 법칙 확인: 같은 1천 개가 라벨 9,002 → 45,002(5.0배)에서 push 4.4배·삭제 4.7배 느려졌다. 5만의 5천 개는 이 법칙으로 1천 개 값의 5배를 어림한 **추정값**이다(한 번에 수 분이라 재지 않았다).
+- 청크로 나눠도 합계가 같다(1만: 청크 1개 8.0s ↔ 예산 없음 7.7s). 청크 예산(12.2, 계획 D9)은 명령 줄 길이만 지키고 시간을 줄이지 못한다. 진행률과 취소는 붙어 있다(TG-01).
+
+**단일 조회** (`lookup_remote_tags`, 원격 삭제 직전 조회와 같은 경로, 5회 중앙값)
+
+| N | 이름 1개 (패턴 2개) | 50개 (패턴 100개) | 51개 (전체 조회) |
+|---|---|---|---|
+| 1,000 | 17ms | 25ms | 17ms |
+| 10,000 | 31ms | 94ms | 33ms |
+| 50,000 | 139ms | 557ms | 165ms |
+
+- 이름별 패턴 50개가 전체 조회보다 3~4배 느리다. 패턴 하나(이름 1개)가 전체 조회와 비슷하다.
+
+**브랜치 칸 트리** (U 레인 실측 — tag 3,004개, 개발 빌드, Chromium, 목 모드 `VITE_MGIT_MOCK_TAGS`)
+
+| 항목 | 결과 |
+|---|---|
+| Tags 묶음 펼치기 | 처음 231ms, 다시 117~146ms (긴 작업 1개) |
+| 접기 | 17~21ms |
+| 펼친 채 스크롤 | p50 8.3ms · p95 9.2ms, 긴 작업 0 |
+| 로컬 삭제 뒤 다시 그리기 | 128~227ms |
+| 원격 확인 뒤 로컬 삭제 | 225~294ms |
+| 원격 확인 반영 | 150ms |
+
+- 트리는 가상화돼 있지 않아 펼칠 때 tag 행을 모두 만든다. 펼친 뒤의 스크롤은 문제없다. 태그 문서의 목록은 가상 listbox 라 보이는 줄만 그린다(TG-10).
+- 팀장 판단: 툴팁 줄을 늦게 만들기와, 같은 보고서면 행 상태를 그대로 두기로 개선한다(U `9d2d300`). 트리 가상화는 후속 항목이다.
+
+**트리 개선 전후** (U 실측 — `VITE_MGIT_MOCK_TAGS=3000`, 원격 2개 확인, 개발 빌드, 쓰기 한 번에 1.5초 창)
+
+| 항목 | 전 | 후 |
+|---|---|---|
+| 원격 확인 뒤 로컬 삭제 → 다시 그리기 | 380~386ms | 300~335ms |
+| 로컬 삭제 한 번의 다시 그리기 횟수 | 3 | 2 |
+| tag push 한 번의 다시 그리기 횟수 | 2 | 2 |
+
+- 툴팁 줄 늦게 만들기의 직접 효과는 약 1ms 이고, 실제 개선은 값이 같은 보고서로 인한 다시 그리기 한 번(60~80ms)이 사라진 것이다.
+- 남은 약 300ms 는 행 3,000개의 React 렌더이고 가상화가 근본 해결이다(후속).
+- 다음 후보: `use-repo-branch-tree` 의 콜백을 안정시켜 쓰기마다 다시 그리기를 한 번 더 줄이기(후속).
+
+**판단 (H1.5, 팀장)**
+
+| 항목 | 판단 | 근거 | 후속 후보 |
+|---|---|---|---|
+| 보고서 JSON 2MB 초과 (5만, 3.5MB) | 지연 조회 슬라이스를 **넣지 않는다** | 크기 기준은 전송 비용의 대리 지표이고 실제 IPC 시간(24ms)은 기준 안이다. 같은 규모에서 `RefsChanged` 가 이미 11MB 를 보낸다. "같음"이 아닌 것이 30% 인 5만 개는 극단적인 경우다 | 항목에서 로컬 oid 두 개를 빼기(약 35% 감소, 어림), entries 를 따로 조회하기 |
+| `RefsChanged` 기준선 (1만 2.2MB, 5만 11MB) | 이번 범위 밖 — 기록만 | 지금 동작이고 tag 관리와 무관하다 | 라벨 전부 대신 바뀐 것만 보내기 등 (후속 항목) |
+| 일괄 push·삭제의 git 클라이언트 비용 | 알려진 한계로 둔다 | `match_explicit_lhs` 의 refspec 수 × ref 수. 청크로 줄일 수 없고 진행률·취소가 있다 | 아이디어만: 고른 것이 그 원격의 "로컬에만" 전부일 때 패턴 refspec 쓰기 등 |
+| 단일 조회의 패턴 기준선 | 패턴은 **이름 4개 이하**일 때만 쓴다 — C2c 로 반영했다 | 패턴 50개가 전체 조회보다 3~4배 느리다 | — |
+
+### 12.9 확정된 변경 (H4)
+
+H1.5 에 "예정"으로 적었던 것이 모두 들어왔다(계획 E1·E7·E8·E11, 슬라이스 C2a~C2d).
+
+- **C2a 원격 삭제의 확인 대기 (`notRun`)**: `expectedRemote` 없이 로컬과 다른 항목이 하나라도 있으면 그 호출에서는 원격을 하나도 지우지 않고 `diverged` + 나머지 `notRun` 을 돌려준다. 확인한 뒤 다시 부를 때는 다시 조회하고, 기대값과 다르면 `rejectedStale`("확인한 뒤 원격 tag 가 바뀌었습니다. 다시 확인하세요")이다. 원격 삭제는 되돌릴 수 없어 [취소] 가 실제로 취소여야 하기 때문이다. 12.1 TG-04, 12.3, 12.6 에 반영했다. 화면(`runTagDelete`)은 성공하지 못한 것만 다시 부르므로 바꾸지 않았다.
+- **C2b 로컬 것으로 맞추기 = lease push 한 번 (`replace_remote_tags`)**: 삭제 → push 두 단계 대신 `--force-with-lease=refs/tags/<n>:<원격 oid>` 를 건 push 한 번이고 `--force` 는 쓰지 않는다(G13 근거). 12.1 TG-15, 12.2 "덮어쓰기 명령".
+- **C2c 단일 조회의 패턴 기준선 4개**: 원격 삭제 직전 조회와 `lookup_remote_tags` 가 이름 4개 이하일 때만 이름 패턴을 쓰고 넘으면 전체 조회한다(B4 손익분기). 12.2 "실행 직전 조회".
+- **C2d 폴더 일괄 fetch·pull 의 캐시 무효화**: 세션 밖의 폴더 일괄 fetch·pull 도 tag 를 받아 오면 그 저장소의 원격 tag 캐시를 오래됨으로 둔다. 12.7 무효화 표.
+
+### 12.10 화면 구현 메모 (A6·B5·C3~C5)
+
+브랜치 칸 tag 메뉴·로그 행 `tag <n> ▸` 하위 메뉴의 push 와 지울 곳 삭제(A6), 원격 상태 표시(B5), 태그 문서와 일괄·다름 해소(C3a~C5). 파일은 `apps/desktop/src/features/tags/`(`tag-flows.ts`, `tag-sync.ts`, `tag-list-model.ts`, `tag-results.ts`, `TagsDoc.tsx`), `store/tag-ops.ts`, `store/session-store.ts`, `store/workspace-store.ts`(`tagsView`), `features/branches/repo-branch-{tree,menu}.ts`, `actions.ts`. 문구는 `S.tag.*`(ko·en). 각 요구의 화면 규칙은 12.1.
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 나눔 | `tag-flows.ts` 는 무엇을 물을지(push 항목, 지울 곳 칸, 다를 때 확인)만 정하고 브랜치 칸 트리(`repo-branch-menu.ts`)·로그 행 메뉴(`graph-menu.ts`)·태그 문서가 같이 쓴다. `tag-ops.ts` 는 순서·결과 정리이고 IPC 를 주입받는 순수 로직이다. 실행·busy·알림은 세션 스토어 `pushTags`·`deleteTagsScoped` 가 맡는다 | 메뉴 세 곳이 같은 흐름을 쓰고, 순서·일부 실패·답 처리를 IPC 없이 시험한다(`tag-ops.test.ts`) |
+| 다를 때 확인 흐름 | 원격마다 먼저 한 번 부르고, `diverged` 가 있으면 `onDiverged(items, others)` 로 묻는다 — `tag-flows` 가 `confirmChoice`(세 갈래) 또는 `confirm`(다르지 않은 tag 가 없으면 두 갈래)으로 넣고, 콜백이 없으면 취소로 본다. 답이 **그래도**면 성공하지 못한 것을 다시 부르되 다른 것은 그때 받은 `remoteOid` 를 `expectedRemote` 로 넘긴다. **건너뛰기**면 다른 것을 뺀 나머지 중 성공하지 못한 것만 다시 부른다. **취소**면 다시 부르지 않고 남은 원격과 로컬도 멈춘다. 두 결과는 이름별로 겹쳐(뒤가 이긴다) 요청 순서로 둔다. 다시 부른 명령이 통째로 실패하면 첫 결과를 남기고 그 원격의 오류로 적는다. 묻는 동안에도 busy 는 켜져 있다(`run` 하나 안) | 코어가 다른 것이 있을 때 나머지를 지우든(지금) 아무것도 지우지 않든(`notRun`, C2a) 같게 동작한다. 이미 성공한 tag 를 두 번 부르지 않는다 |
+| op 끝 토스트 거르기 | 결과를 스스로 알리는 tag 원격 작업(push·원격 삭제·덮어쓰기·가져오기)을 `quietly` 로 감싼다. 감싼 동안(`quietDepth > 0`) 시작된 kind `push`·`fetch` op 의 번호를 `quietOps` 에 적고, 그 op 의 `operationFinished` 에서는 오래 걸림·실패 토스트(UX-09)를 띄우지 않는다. 끝 이벤트는 이벤트 통로가 달라 명령 응답보다 늦게 올 수 있어 시작 때의 번호로 거른다. 감싸지 않은 push op(branch push 등)는 그대로 알린다. 원격 tag 확인(kind `tagCheck`)은 늘 뺀다(결과는 묶음 요약·문서 머리에 보인다) | 같은 결과를 토스트·오류 줄로 두 번 알리지 않는다 |
+| branch push 의 서버 거부 | push 실패 힌트 중 대화상자로 돌리는 것은 `nonFastForward`·`staleInfo`·`noUpstream` 뿐이고, `remoteRejected`(hook·보호 규칙)는 대화상자 없이 오류 줄에 `서버가 거부함: <사유>`(`describeError`)를 보인다 | 서버 거부는 강제 push 로 풀리지 않는다. 예전에는 `failed to push some refs` 를 NFF 로 보고 강제 push 대화상자를 띄웠다(TG-07) |
+| busy | push·지울 곳 삭제는 세션 `run` 하나로 감싸 busy 를 한 번만 켠다(원격 여럿 + 확인창 + 로컬까지). 메뉴 항목은 busy 일 때만 꺼진다 | 원격 사이·확인창 동안 다른 쓰기가 끼어들지 않게 |
+| 원격 tag 보고서 | 세션 스토어 `tagReports`(원격 → 보고서, 확인했거나 확인에 실패한 원격만), `tagChecking`(확인 중인 원격), `tagList`(로컬 tag 목록). 확인은 busy 를 켜지 않는다(D15). 다시 받기는 원격마다 차례(`tagSeq`)를 매겨 늦게 온 옛 응답을 버리고, 확인(네트워크)은 끝난 시점에 차례를 받아 늘 반영한다. 화면 모양은 순수 함수(`tag-sync.ts` — 행 상태·묶음 요약, 보고서마다 이름 색인을 `WeakMap` 에 둔다)가 만든다 다시 받은 보고서가 지금 값과 같으면(확인 시각·오래됨·실패·push 주소 다름·개수·항목) 상태를 바꾸지 않아 트리를 다시 그리지 않는다(U `9d2d300`). | 쓰기와 확인을 겹칠 수 있게, tag 수천 개에서 행마다 찾지 않게 |
+| 공용 부품 변경 (U, 성능) | `BranchTreeNode.detail` 을 `string` 에서 `() => string` 으로 바꿨다 — 행을 그릴 때 만들지 않고 툴팁이 필요할 때(마우스를 올릴 때, 키보드 커서 행의 보조 기술 설명)만 부른다. `BranchBadge.title` 은 선택이 됐다 — 없으면 행 툴팁이 보인다(tag `다름` 배지는 따로 툴팁을 두지 않고 원격별 줄이 든 행 툴팁을 보인다). 두 변경 모두 기존 사용처의 동작은 같다 | tag 수천 개에서 쓰기 한 번마다 원격별 줄을 행마다 만들던 비용을 없앤다 |
+| 태그 문서 | 목록 모델(`tag-list-model.ts` — 줄 만들기·필터·개수·검색·정렬·일괄 해당·기본 원격·키보드·클릭)과 결과 칸 모델(`tag-results.ts`)은 순수 함수이고 `TagsDoc.tsx` 는 그리기만 한다. 일괄 작업은 스토어 `runTagBatch`(push·가져오기·덮어쓰기, busy 한 번, 알리지 않고 결과를 돌려줌)와 `deleteTagsScoped(…, {silent})` 로 한다. 여는 쪽의 요청(`tagsView.request` — `pushAll`·`remoteOnly`, 차례 `seq`)을 문서가 받아 처리하고 지운다 | 여는 곳(트리·팔레트)과 문서의 결합을 요청 하나로 줄인다 |
+| 폴더 탭 | 새 힌트 `tagExists` 는 `folderHintMode` 가 `off` 다 — tag push 는 저장소 탭에서만 생기고, 같은 저장소의 저장소 탭이 열려 있으면 그 탭이 보인다 | 폴더 탭은 tag 동작을 세션에 걸지 않는다 |
+
+검증: `apps/desktop/src/__tests__/session-store-tags.test.ts`(알림, 이름 충돌 힌트, 끝 토스트 거르기, busy 한 번·묻는 동안 유지, 서버 거부), `tag-ops.test.ts`(순서와 일부 실패, 다를 때 세 갈래 × 지금·`notRun` 두 계약), `tag-flows.test.ts`(메뉴 구조, 지울 곳 칸, 확인창), `repo-branch-menu.test.ts`, `review-ui.test.tsx`. 2026-11-23 H3 병합본에서 위 다섯 파일과 `packages/ipc/src/__tests__/mock-tags.test.ts` 를 함께 돌려 6개 파일 135개가 통과했다.
+
+**계획 대비 변경 (U 레인, 팀장 확인)**
+
+| # | 계획 | 구현 | 이유 |
+|---|---|---|---|
+| 1 | diverged 확인을 PendingHint `remoteTagDiverged` 로 | 스토어 `onDiverged` 콜백과 `confirmChoice`(계획 E2) | PendingHint 는 `run()` 이 끝난 뒤 떠서 "확인창 동안 busy 유지"와 함께 성립하지 않는다 |
+| 2 | "모든 tag push…"는 원격을 고른 뒤 | 팔레트는 기본 원격(문서 머리에서 바꿀 수 있다), 묶음 메뉴는 원격 하위 메뉴(1개면 평면) | 팔레트에는 하위 메뉴가 없다 |
+| 3 | 이름 충돌 안내의 둘째 단추 `원격 tag 를 지우고 다시 push…` | `원격 tag 를 로컬 것으로 덮어쓰기…` | C2b 로 삭제 → push 가 lease push 한 번이 됐다 |
+| 4 | 다름 해소 두 동작의 자리를 정하지 않음 | 태그 문서의 다름인 줄의 줄 메뉴에만 | 두 commit 과 원격 객체를 아는 자리가 문서다. 트리·로그 메뉴는 push·삭제만 둔다 |
+| 5 | 단건은 토스트·오류 줄, 문서는 결과 칸 | 문서 안 작업은 단건도 결과 칸, 트리·로그 메뉴는 토스트·오류 줄 | 보고 자리를 "어디서 했는가"로 나눈다 |
+| 6 | — | 묶음 메뉴 `원격에만 있는 tag 보기 (N)` → 그 원격의 `원격에만` 필터로 문서 열기 | 원격에만 있는 tag 는 트리에 넣지 않아(D14) 찾아갈 길이 필요하다 |
+| 7 | — | 문서의 선택에 원격에만 있는 tag 가 섞이면 지울 곳의 로컬 칸 개수에서 빼고, 모두 원격에만이면 로컬 칸을 끈다(`로컬에 없음`) | 로컬에 없는 tag 는 로컬 삭제 대상도 "로컬에 남김"도 아니다 |
+| 8 | `실패한 것 다시 시도` 는 일시적 실패에만 | 대상은 `unknown`·`failed`·`notRun` 과 명령 전체 실패(그 이름 전부), 삭제의 로컬 실패면 로컬에 남긴 것 | 거부(이름 충돌·서버 거부·다름·바뀜)는 다시 해도 같다 |
+| 9 | — | 목은 바꾸지 않았다(목 변경은 R 레인 C2a·C2b 뿐) | 레인 소유 범위 |

@@ -83,6 +83,7 @@ const BADGE_ICON: Record<BranchBadge['icon'], IconName> = {
   worktree: 'worktree',
   radarOk: 'ok',
   radarConflict: 'warning',
+  tagDiffers: 'warning',
 };
 
 /** 행 앞 아이콘: 모양과 색조, 설명. 현재 브랜치 > 즐겨찾기 > 종류 순으로 고른다 */
@@ -120,13 +121,22 @@ function TrackMarks({ track, title }: { track: BranchTrack; title?: string }) {
   );
 }
 
-/** 행 툴팁: 이름과 회색 글자(잘렸을 때 전체를 보인다), 그 아래 현재 저장소·업스트림 차이 */
+/** 행 툴팁: 이름과 회색 글자(잘렸을 때 전체를 보인다), 그 아래 현재 저장소·업스트림 차이·덧붙인 설명 */
 function rowTitle(node: BranchTreeNode): string {
   return [
     node.suffix ? `${node.label} ${node.suffix}` : node.label,
     ...(node.currentTitle ? [node.currentTitle] : []),
     ...(node.trackTitle ? [node.trackTitle] : []),
+    ...(node.detail ? [node.detail()] : []),
   ].join('\n');
+}
+
+/**
+ * 덧붙인 설명(`detail`)이 있는 행에 마우스가 올라가면 그때 툴팁을 만들어 넣는다. 이 행들은 키보드 커서 행이 아니면
+ * React 가 `title` 을 그리지 않으므로(늦게 만들기) 여기서 직접 넣어도 다음 렌더와 부딪히지 않는다
+ */
+function fillLazyTitle(el: HTMLElement, node: BranchTreeNode): void {
+  el.title = rowTitle(node);
 }
 
 /** 키보드 커서가 있는 행: 커서 노드가 보이면 그 행, 아니면 선택된 첫 행. 없으면 -1 */
@@ -313,6 +323,9 @@ export const BranchTree = memo(function BranchTree({
             const { node } = row;
             const icon = iconOf(node);
             const favorite = node.favorite === true;
+            // 덧붙인 설명은 툴팁이 필요할 때 만든다: 키보드 커서 행(보조 기술이 설명을 읽는다)만 렌더에서, 나머지는 마우스가
+            // 올라갈 때
+            const lazyTitle = node.detail !== undefined && index !== cursorIndex;
             return (
               // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
               // biome-ignore lint/a11y/useFocusableInteractive: 트리가 포커스를 받고 행은 activedescendant 로 알린다
@@ -333,7 +346,8 @@ export const BranchTree = memo(function BranchTree({
                 data-leaf={row.expandable ? 'false' : 'true'}
                 data-cursor={index === cursorIndex ? 'true' : 'false'}
                 style={{ '--depth': row.depth } as CSSProperties}
-                title={rowTitle(node)}
+                title={lazyTitle ? undefined : rowTitle(node)}
+                onMouseEnter={node.detail ? (e) => fillLazyTitle(e.currentTarget, node) : undefined}
                 onClick={(e) => {
                   setCursorId(node.id);
                   if (row.expandable) {

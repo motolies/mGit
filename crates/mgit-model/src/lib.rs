@@ -27,6 +27,7 @@ mod settings;
 mod stash;
 mod status;
 mod store;
+mod tags;
 mod version;
 mod watch;
 mod worktree;
@@ -73,6 +74,10 @@ pub use status::{
 };
 pub use store::{
     BackupRecord, MemoryStore, RecentEntry, RecentKind, Store, StoreError, now_millis,
+};
+pub use tags::{
+    LocalTag, LocalTagRef, RemoteTag, TagLookupError, TagLookupErrorKind, TagRefResult,
+    TagRefStatus, TagSyncCounts, TagSyncEntry, TagSyncReport, TagSyncState, compare_tags,
 };
 pub use version::{GitVersion, MIN_GIT_VERSION};
 pub use watch::{

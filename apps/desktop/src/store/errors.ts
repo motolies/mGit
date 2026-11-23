@@ -16,6 +16,10 @@ export function describeError(value: unknown): string {
     case 'sessionNotFound':
       return S.error.sessionNotFound;
     case 'gitFailed':
+      // 서버 거부(hook 등)는 강제 push 로 풀리지 않는다 — git 원문 대신 서버가 준 사유를 보인다 (TG-02·07)
+      if (err.hint?.kind === 'remoteRejected') {
+        return S.error.remoteRejected(err.hint.reason);
+      }
       return S.error.gitFailed(err.args, err.stderr);
     case 'cancelled':
       return S.error.cancelled;

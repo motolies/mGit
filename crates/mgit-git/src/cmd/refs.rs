@@ -44,3 +44,44 @@ async fn remote_names(runner: &dyn GitRunner, work_tree: &Path) -> Vec<String> {
         _ => Vec::new(),
     }
 }
+
+/// 로컬 tag 이름(`refs/tags/` 뒤) → 그 ref 가 가리키는 객체(annotated 면 tag 객체). 원격 tag 와 비교·삭제 검증에 쓴다
+pub async fn tag_objects(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+) -> Result<std::collections::HashMap<String, mgit_model::Oid>, GitError> {
+    let req = GitRequest::new(
+        work_tree,
+        [
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)",
+            "refs/tags",
+        ],
+    );
+    let args = req.display_args();
+    let out = runner.run(req).await?.ok(&args)?;
+    let mut map = std::collections::HashMap::new();
+    for line in String::from_utf8_lossy(&out).lines() {
+        if let Some((name, oid)) = line.split_once('\0')
+            && let Some(tag) = name.strip_prefix("refs/tags/")
+            && let Ok(oid) = mgit_model::Oid::from_hex(oid.trim().as_bytes())
+        {
+            map.insert(tag.to_string(), oid);
+        }
+    }
+    Ok(map)
+}
+
+/// 로컬 tag 목록 (TG-10 열·툴팁): `for-each-ref` 한 번으로 종류·날짜·commit 제목·tag 제목·tagger 를 읽는다
+pub async fn tag_list(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+) -> Result<Vec<mgit_model::LocalTag>, GitError> {
+    let req = GitRequest::new(
+        work_tree,
+        ["for-each-ref", crate::parse::TAG_LIST_FORMAT, "refs/tags"],
+    );
+    let args = req.display_args();
+    let out = runner.run(req).await?.ok(&args)?;
+    Ok(crate::parse::parse_tag_list(&out))
+}

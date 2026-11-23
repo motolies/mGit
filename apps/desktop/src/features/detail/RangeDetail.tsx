@@ -1,12 +1,10 @@
 import { S, shortHash } from '@mgit/ui';
 import { ContextMenuArea } from '../../components/ContextMenu';
 import { useSession } from '../../store';
+import { EMPTY_TREE } from '../../store/squash-range';
 import styles from './CommitDetail.module.css';
 import { changeLetter } from './change-letter';
 import own from './RangeDetail.module.css';
-
-/** git 의 빈 트리 (루트 commit 범위의 기준) */
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /** 우측 패널: ⇧+클릭으로 고른 commit 범위의 결합 diff 파일 목록 (GRAPH-10) */
 export function RangeDetail() {

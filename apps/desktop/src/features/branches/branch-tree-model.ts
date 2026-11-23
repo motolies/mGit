@@ -22,9 +22,10 @@ export interface BranchTrack {
 
 /** 행 끝의 작은 표시 (아이콘 + 툴팁) */
 export interface BranchBadge {
-  icon: 'worktree' | 'radarOk' | 'radarConflict';
+  icon: 'worktree' | 'radarOk' | 'radarConflict' | 'tagDiffers';
   text?: string;
-  title: string;
+  /** 툴팁. 없으면 행 툴팁이 보인다 (tag `다름`: 원격별 상태는 행 툴팁이 늦게 만든다) */
+  title?: string;
 }
 
 /**
@@ -57,6 +58,11 @@ export interface BranchTreeNode {
   track?: BranchTrack;
   /** 업스트림 차이 표시의 툴팁 (폴더: 저장소별 수치). 행 툴팁에도 덧붙는다 */
   trackTitle?: string;
+  /**
+   * 행 툴팁 끝에 덧붙는 설명을 만드는 함수 (저장소 탭 tag 행: 원격별 상태, B5). 행을 그릴 때 만들지 않고 툴팁이 필요할 때
+   * (마우스가 올라갈 때·키보드 커서 행)만 부른다 — tag 수천 개의 다시 그리기 비용. 없으면 덧붙이지 않는다
+   */
+  detail?: () => string;
   badges?: BranchBadge[];
 }
 

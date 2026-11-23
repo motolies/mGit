@@ -33,6 +33,10 @@ pub enum GitHint {
     HookFailed,
     /// 업스트림이 없어 push·pull 대상이 없음
     NoUpstream,
+    /// 원격에 같은 이름의 다른 tag 가 있어 push 가 거부됨 (`(already exists)`)
+    RemoteTagExists,
+    /// 서버가 ref 갱신을 거부함 (`[remote rejected]`, pre-receive hook·보호 규칙 등). `reason` 은 괄호 안 사유
+    RemoteRejected { reason: String },
 }
 
 /// stderr 본문에서 힌트를 분류한다. 영어 메시지 패턴에 의존하므로 실패해도 원문은 항상 보여 준다
@@ -66,10 +70,18 @@ pub fn classify_stderr(stderr: &str) -> Option<GitHint> {
     if lower.contains("stale info") || lower.contains("remote ref updated since checkout") {
         return Some(GitHint::StaleInfo);
     }
-    if lower.contains("non-fast-forward")
-        || lower.contains("fetch first")
-        || lower.contains("failed to push some refs")
-    {
+    // push 거부는 구체적인 것부터: non-fast-forward → tag 이름 충돌 → 서버 거부 → 그 밖의 push 실패(NFF 대비책).
+    // 예전에는 `failed to push some refs` 만 보고 NFF 로 판단해 tag·hook 거부에도 강제 push 를 권했다
+    if lower.contains("non-fast-forward") || lower.contains("fetch first") {
+        return Some(GitHint::NonFastForward);
+    }
+    if lower.contains("(already exists)") {
+        return Some(GitHint::RemoteTagExists);
+    }
+    if let Some(reason) = remote_rejected_reason(stderr) {
+        return Some(GitHint::RemoteRejected { reason });
+    }
+    if lower.contains("failed to push some refs") {
         return Some(GitHint::NonFastForward);
     }
     if lower.contains("authentication failed")
@@ -99,6 +111,20 @@ pub fn classify_stderr(stderr: &str) -> Option<GitHint> {
         return Some(GitHint::HookFailed);
     }
     None
+}
+
+/// `! [remote rejected] <src> -> <dst> (<사유>)` 줄의 사유. 그런 줄이 없으면 `None`, 괄호가 없으면 빈 문자열
+fn remote_rejected_reason(stderr: &str) -> Option<String> {
+    let line = stderr
+        .lines()
+        .find(|l| l.to_ascii_lowercase().contains("[remote rejected]"))?;
+    let reason = line
+        .rfind('(')
+        .zip(line.rfind(')'))
+        .filter(|(open, close)| open < close)
+        .map(|(open, close)| line[open + 1..close].trim().to_string())
+        .unwrap_or_default();
+    Some(reason)
 }
 
 /// 서버가 자격 증명을 거부했는지. 취소·네트워크 오류와 구분해 저장된 비밀을 지울 때만 쓴다
@@ -184,5 +210,58 @@ mod tests {
             Some(GitHint::StaleInfo)
         );
         assert_eq!(classify_stderr("fatal: unknown"), None);
+    }
+
+    /// TG-07: push 거부 분류 순서 (StaleInfo → NFF → tag 충돌 → 서버 거부 → NFF 대비책)
+    #[test]
+    fn push_rejection_order() {
+        assert_eq!(
+            classify_stderr(
+                "To /r.git\n ! [rejected]        v1 -> v1 (already exists)\nerror: failed to push some refs to '/r.git'\nhint: Updates were rejected because the tag already exists in the remote.\n"
+            ),
+            Some(GitHint::RemoteTagExists)
+        );
+        assert_eq!(
+            classify_stderr(
+                "remote: nope\nTo /r.git\n ! [remote rejected] main -> main (pre-receive hook declined)\nerror: failed to push some refs to '/r.git'\n"
+            ),
+            Some(GitHint::RemoteRejected {
+                reason: "pre-receive hook declined".into()
+            })
+        );
+        // 사유 괄호가 없어도 서버 거부로 본다
+        assert_eq!(
+            classify_stderr(" ! [remote rejected] v1\nerror: failed to push some refs to 'x'\n"),
+            Some(GitHint::RemoteRejected {
+                reason: String::new()
+            })
+        );
+        // 한 push 에 non-fast-forward 와 tag 충돌이 함께 있으면 NFF 가 먼저다
+        assert_eq!(
+            classify_stderr(
+                " ! [rejected] main -> main (non-fast-forward)\n ! [rejected] v1 -> v1 (already exists)\nerror: failed to push some refs to 'x'\n"
+            ),
+            Some(GitHint::NonFastForward)
+        );
+        assert_eq!(
+            classify_stderr(
+                " ! [rejected] main -> main (fetch first)\nerror: failed to push some refs to 'x'\n"
+            ),
+            Some(GitHint::NonFastForward)
+        );
+        // lease 거부는 여전히 StaleInfo
+        assert_eq!(
+            classify_stderr(
+                " ! [rejected] v1 (stale info)\nerror: failed to push some refs to 'x'\n"
+            ),
+            Some(GitHint::StaleInfo)
+        );
+        // 다른 줄 없이 실패만 말하면 예전처럼 NFF 로 본다 (마지막 대비책)
+        assert_eq!(
+            classify_stderr("error: failed to push some refs to 'x'\n"),
+            Some(GitHint::NonFastForward)
+        );
+        // 로컬 tag 생성 실패는 원격 충돌이 아니다
+        assert_eq!(classify_stderr("fatal: tag 'v1' already exists\n"), None);
     }
 }

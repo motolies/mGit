@@ -78,6 +78,7 @@ fn parse_line(line: &[u8], head: &HeadState) -> Option<RefLabel> {
     }
     let upstream = (!fields[4].is_empty()).then(|| String::from_utf8_lossy(fields[4]).into_owned());
 
+    let mut tag_object = None;
     let (kind, short_name, target) = if let Some(name) = full_name.strip_prefix("refs/heads/") {
         (
             RefKind::LocalBranch,
@@ -109,6 +110,9 @@ fn parse_line(line: &[u8], head: &HeadState) -> Option<RefLabel> {
             return None; // 블롭·트리를 가리키는 태그는 그래프에 붙일 수 없다
         };
         let target = Oid::from_hex(target_field).ok()?;
+        if annotated {
+            tag_object = Some(Oid::from_hex(fields[1]).ok()?);
+        }
         (RefKind::Tag { annotated }, name.to_string(), target)
     };
 
@@ -128,6 +132,7 @@ fn parse_line(line: &[u8], head: &HeadState) -> Option<RefLabel> {
         behind,
         upstream_gone,
         worktree_path,
+        tag_object,
     })
 }
 

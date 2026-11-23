@@ -435,22 +435,6 @@ pub async fn create_tag(
     Ok(())
 }
 
-/// 태그 삭제
-#[tauri::command]
-#[specta::specta]
-pub async fn delete_tag(
-    state: State<'_, AppState>,
-    session: u32,
-    name: String,
-) -> Result<(), IpcError> {
-    state
-        .core()?
-        .core
-        .delete_tag(SessionId(session), &name)
-        .await?;
-    Ok(())
-}
-
 /// merge (MRG-01)
 #[tauri::command]
 #[specta::specta]

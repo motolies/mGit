@@ -159,7 +159,7 @@ export interface EditorHint {
 
 export interface EditorEmptyStateProps {
   hints: readonly EditorHint[];
-  /** 안내 아래의 링크 (폴더 워크스페이스의 "개요 열기") */
+  /** 안내 아래의 링크 (폴더 워크스페이스의 "개요 열기", 저장소 워크스페이스의 "tag 관리 열기") */
   action?: { label: string; onClick: () => void };
 }
 

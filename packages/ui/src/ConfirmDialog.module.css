@@ -133,3 +133,11 @@
   color: var(--fg-muted);
   font-size: 12px;
 }
+
+/* 막지 않는 경고 한 줄 (PromptDialog `notice`, tag 지울 곳 B5): 단추 줄 위 */
+.notice {
+  margin: 0;
+  color: var(--status-untracked);
+  font-size: 12px;
+  white-space: pre-wrap;
+}

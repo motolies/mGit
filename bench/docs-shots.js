@@ -286,10 +286,13 @@ async (page) => {
       name: 'branch-pane-repo',
       scene: 'repo',
       // 저장소 탭 브랜치 칸 전체: 아래 도구 창을 최대화하고 접힌 태그·백업 묶음을 펼친다 (충돌 레이더 배지·원격 삭제됨·
-      // 워크트리 꼬리표가 함께 보인다)
+      // 워크트리 꼬리표가 함께 보인다). 원격 tag 를 확인해 태그 묶음 요약과 행 표시(push 안 됨·다름)도 보인다 — 요약이
+      // 잘리지 않게 왼쪽 칸을 넓힌다 (사용법 4.4)
+      storage: { 'react-resizable-panels:git-log': { 'gitlog-branches': 30, 'gitlog-commits': 70 } },
       steps: async (page, h) => {
         await h.click(h.button('도구 창 최대화'));
         await h.afterPaint();
+        await showTreeTagStatus(page, h, { expand: false });
         for (const group of ['태그', '백업']) {
           await page
             .locator('[data-panel="git-branches"] [role="treeitem"]')
@@ -437,6 +440,100 @@ async (page) => {
       },
       rest: { menuItem: 'merge (--no-ff)' },
       clip: { selector: ['[role="menu"] >> nth=0', '[role="menu"] >> nth=1'], pad: 6 },
+    },
+    {
+      name: 'branch-pane-tag-status',
+      scene: 'repo',
+      // 사용법 3.8: 브랜치 칸 태그 묶음만. 원격 tag 를 확인해 묶음 행의 요약·행 끝 단추 둘(tag 관리 열기·원격 tag 확인)과
+      // tag 행의 push 안 됨·⚠ 다름이 보이게 한다. 요약이 잘리지 않게 왼쪽 칸을 넓히고 로컬·원격 묶음을 접는다
+      storage: {
+        'react-resizable-panels:git-log': { 'gitlog-branches': 32, 'gitlog-commits': 68 },
+        'react-resizable-panels:bottom-dock': { 'shell-body': 40, 'shell-dock': 60 },
+      },
+      steps: async (page, h) => {
+        await showTreeTagStatus(page, h, { collapse: ['로컬', '원격'] });
+        await page.evaluate(() => document.activeElement?.blur());
+        await h.afterPaint();
+      },
+      clip: {
+        selector: [
+          '[data-panel="git-branches"] [data-node-id="group:tags"]',
+          '[data-panel="git-branches"] [data-node-id="ref:refs/tags/v2.2.0"]',
+        ],
+        // 위아래 행이 비치지 않게 여백을 작게
+        pad: 2,
+      },
+    },
+    {
+      name: 'tag-menu-tree',
+      scene: 'repo',
+      // 사용법 5.4 tag push 하기: 브랜치 칸 태그 묶음. 원격 tag 를 확인해 묶음 머리 요약과 행 표시(push 안 됨·다름)를 켠 뒤
+      // 다름 행(v2.3.1)의 오른쪽 끝을 우클릭해 push 하위 메뉴를 펼친다 (메뉴가 아래 tag 행을 덮지 않게). 왼쪽 칸을 넓히고
+      // Git 도구 창을 높이고 로컬·원격 묶음을 접어 태그 묶음이 다 보이게 한다
+      storage: {
+        'react-resizable-panels:git-log': { 'gitlog-branches': 32, 'gitlog-commits': 68 },
+        'react-resizable-panels:bottom-dock': { 'shell-body': 40, 'shell-dock': 60 },
+      },
+      steps: async (page, h) => {
+        await showTreeTagStatus(page, h, { collapse: ['로컬', '원격'] });
+        const row = page.locator('[data-panel="git-branches"] [role="treeitem"][data-node-id="ref:refs/tags/v2.3.1"]');
+        const box = await row.boundingBox();
+        await page.mouse.click(box.x + box.width - 12, box.y + box.height / 2, { button: 'right' });
+        await h.visible('[role="menu"]');
+        await page.locator('[role="menuitem"][aria-haspopup="menu"]').filter({ hasText: prefix('push') }).first().hover();
+        await h.visible('[role="menu"] >> nth=1');
+        await h.afterPaint();
+      },
+      rest: { menuItem: 'origin' },
+      clip: {
+        selector: ['[data-panel="git-branches"]', '[role="menu"] >> nth=0', '[role="menu"] >> nth=1'],
+        pad: 6,
+      },
+    },
+    {
+      name: 'tags-doc',
+      scene: 'repo',
+      // 사용법 5.4 태그 문서: 모든 원격을 확인하고 문서를 연 뒤 두 줄(로컬에만 v2.4.0, 원격에만 v2.5.0-rc.1)을 골라
+      // 필터 단추의 개수와 일괄 단추의 해당 개수가 보이게 한다. 편집기 영역만 찍는다
+      steps: async (page, h) => {
+        await openCheckedTagsDoc(page, h);
+        await pickTags(page, ['v2.4.0', 'v2.5.0-rc.1']);
+        await h.afterPaint();
+      },
+      clip: '[data-panel="editor"]',
+    },
+    {
+      name: 'tag-delete-dialog',
+      scene: 'repo',
+      // 사용법 5.4 tag 지우기: 모든 원격을 확인한 태그 문서에서 v2.4.0(어느 원격에도 없음)과 v2.3.0(두 원격에 있음)을
+      // 골라 삭제… → 지울 곳 대화상자. 칸마다 해당 개수가, 아래에 다시 생길 수 있음·push 하지 않은 tag 경고가 보인다
+      // (push 하지 않은 tag 경고는 모든 원격을 확인했을 때만 나온다)
+      steps: async (page, h) => {
+        await openCheckedTagsDoc(page, h);
+        await pickTags(page, ['v2.4.0', 'v2.3.0']);
+        await h.click(page.locator('[data-panel="editor"] button').filter({ hasText: prefix('삭제… (') }).first());
+        await h.visible('dialog[open] [role="status"]');
+        await h.afterPaint();
+      },
+      clip: { selector: 'dialog[open]', pad: 8 },
+    },
+    {
+      name: 'tag-differs-confirm',
+      scene: 'repo',
+      // 사용법 5.4 원격 tag 가 로컬과 다를 때: 태그 문서에서 v2.3.1(origin 과 다름)과 v2.3.0(같음)을 골라 origin 과 로컬에서
+      // 지우기 → 목의 origin 이 다름을 돌려주어 세 갈래 확인창(취소·건너뛰고 삭제·그래도 삭제)이 뜬다. 찍은 뒤 새로 고치므로
+      // 지우지 않는다
+      steps: async (page, h) => {
+        await openCheckedTagsDoc(page, h);
+        await pickTags(page, ['v2.3.1', 'v2.3.0']);
+        await h.click(page.locator('[data-panel="editor"] button').filter({ hasText: prefix('삭제… (') }).first());
+        await h.visible('dialog[open] #pf-remote0');
+        await page.locator('dialog[open] #pf-remote0').check();
+        await h.click(h.button('삭제', 'dialog[open]'));
+        await h.visible('dialog[open]:has-text("로컬과 다릅니다")');
+        await h.afterPaint();
+      },
+      clip: { selector: 'dialog[open]', pad: 8 },
     },
     {
       name: 'reset-hard-confirm',
@@ -999,6 +1096,73 @@ async (page) => {
         store.setState(p);
       }, patch),
   };
+
+  /**
+   * 브랜치 칸에서 원격 tag 상태를 켠다 (사용법 3.8·4.4·5.4 그림): `collapse` 묶음을 접고, 태그 묶음 행 끝의 원격 tag 확인을
+   * 눌러 묶음 요약이 나올 때까지 기다린 뒤, `expand` 가 false 가 아니면 태그 묶음을 펼친다
+   */
+  async function showTreeTagStatus(page, h, { collapse = [], expand = true } = {}) {
+    const pane = '[data-panel="git-branches"]';
+    const group = (name) =>
+      page.locator(`${pane} [role="treeitem"][aria-level="1"]`).filter({ hasText: prefix(name) }).first();
+    for (const name of collapse) {
+      if ((await group(name).getAttribute('aria-expanded')) === 'true') {
+        await group(name).click();
+      }
+    }
+    await h.click(`${pane} button[aria-label="원격 tag 확인"]`);
+    await h.waitFor(() => {
+      const row = [...document.querySelectorAll('[data-panel="git-branches"] [role="treeitem"]')].find((t) =>
+        t.textContent.trim().startsWith('태그'),
+      );
+      return row?.textContent.includes('원격에만') && !row.textContent.includes('확인 중');
+    });
+    if (expand && (await group('태그').getAttribute('aria-expanded')) !== 'true') {
+      await group('태그').click();
+    }
+  }
+
+  /** 커맨드 팔레트에서 글자가 꼭 그것인 명령을 실행한다 */
+  async function runPalette(page, h, name) {
+    await h.press('Meta+Shift+P');
+    await h.visible('[cmdk-input]');
+    await h.type(name);
+    await h.click(page.locator('[cmdk-item]').filter({ hasText: exact(name) }).first());
+  }
+
+  /**
+   * 모든 원격의 tag 를 확인하고(팔레트 "원격 tag 확인") 태그 문서를 연다(팔레트 "tag 관리"). 필터 단추가 켜질 때까지
+   * 기다린다 (사용법 5.4 그림들). 문서의 처음 원격은 origin 이다 (목 장면에 업스트림이 없다)
+   */
+  async function openCheckedTagsDoc(page, h) {
+    await runPalette(page, h, '원격 tag 확인');
+    for (;;) {
+      const reports = await h.sessionValue('tagReports');
+      const checking = await h.sessionValue('tagChecking');
+      if (Object.keys(reports ?? {}).length === 2 && (checking ?? []).length === 0) {
+        break;
+      }
+      await h.pause(100);
+    }
+    await runPalette(page, h, 'tag 관리');
+    await h.visible('[data-panel="editor"] [role="listbox"][aria-label="tag 목록"]');
+    await h.waitFor(() =>
+      [...document.querySelectorAll('[data-panel="editor"] button')].some(
+        (b) => /^로컬에만 \d/.test(b.textContent.trim()) && !b.disabled,
+      ),
+    );
+  }
+
+  /** 태그 문서에서 이름이 그것인 줄들을 고른다 (첫 줄은 클릭, 나머지는 ⌘ 클릭) */
+  async function pickTags(page, names) {
+    for (const [i, name] of names.entries()) {
+      await page
+        .locator('[data-panel="editor"] [role="option"]')
+        .filter({ hasText: prefix(name) })
+        .first()
+        .click(i === 0 ? {} : { modifiers: ['Meta'] });
+    }
+  }
 
   // ── 찍기 ──────────────────────────────────────────────────────────────────────
 

@@ -86,6 +86,7 @@ export function folderHintMode(hint: PendingHint): FolderHintMode {
     case 'branchElsewhere':
     case 'nonFastForward':
     case 'staleInfo':
+    case 'tagExists':
     case 'detachedHead':
     case 'noUpstream':
     case 'nestedRepo':

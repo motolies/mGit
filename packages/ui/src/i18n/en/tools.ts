@@ -52,6 +52,9 @@ export const enTools: Pick<
     fetch: 'Fetch (all remotes)',
     pull: 'Pull',
     push: 'Push',
+    checkRemoteTags: 'Check remote tags',
+    tagsDoc: 'Manage tags',
+    pushAllTags: 'Push all tags…',
     search: 'Search commits',
     quickSwitch: 'Switch branch…',
     createBranch: 'Create branch…',
@@ -196,6 +199,16 @@ export const enTools: Pick<
       'This range contains merge commits. Running the rebase removes the merges and flattens the history.',
     messageLoading: 'Loading message…',
     stopped: 'Stopped for edit. Make your changes, then Continue',
+    squashRangeTitle: (n: number) => `Squash ${n} commits into one`,
+    squashRangeMessage: (older: string, newer: string) =>
+      `Combines ${older} through ${newer} into a single commit with the message below. The author of the oldest commit is kept, and later commits are rewritten.`,
+    squashRangeRun: 'Squash',
+    squashRangeMerges:
+      "The range or the history above it (up to HEAD) has merge commits, so it can't be squashed without flattening history. Select only commits above the merge",
+    squashRangeNotOnBranch:
+      'The range is not on the current branch. Switch to that branch and try again',
+    squashRangeMixed:
+      "The selected rows don't match consecutive commits on the current branch (commits from other branches are mixed in, or a filter hides some). Select consecutive commits on the current branch only",
   },
   dnd: {
     title: (from: string, head: string) => `${from} → ${head}`,
@@ -617,6 +630,7 @@ export const enTools: Pick<
     sessionNotFound: 'Session not found',
     gitFailed: (args: readonly string[], stderr: string) =>
       `git ${args.join(' ')} failed${stderr ? `: ${stderr.trim()}` : ''}`,
+    remoteRejected: (reason: string) => `Rejected by the server: ${reason}`,
     cancelled: 'Canceled',
     conflictMarkers: (files: readonly string[]) =>
       `Conflict markers remain in: ${files.join(', ')}`,

@@ -60,6 +60,7 @@ import { filterMockGraph } from './mock-filter';
 import { createMockFs, type MockFs, type MockFsLayout } from './mock-fs';
 import { type MockGraph, mulberry32, oidOf } from './mock-graph-source';
 import { mockReason, pick } from './mock-l10n';
+import { addSyntheticTags, type MockTagData, repoTagData, syntheticTags } from './mock-tags';
 
 /** 목 장면 이름 */
 export type MockSceneName = 'folder' | 'repo' | 'conflict';
@@ -150,6 +151,11 @@ export interface MockRepoData {
   modules: Module[];
   /** 모듈 수동 보정의 처음 값 (`moduleOverrides`): 직접 추가한 모듈 하나 (kind manual) */
   moduleOverrides: ModuleOverrides;
+  /**
+   * tag 상태 (BR-06): 로컬 tag 객체와 원격별 tag 표 (`mock-tags.ts`). push·원격 삭제·로컬 삭제가 바꾼다 — origin 에 상태 다섯
+   * 가지(로컬에만·다름·같음·같은 commit 다른 객체·원격에만)가, upstream 에 같음·없음·원격에만이 있다
+   */
+  tags: MockTagData;
   /** 서브모듈 (`submodules`): 상태 다섯 가지(깨끗함·commit 다름·변경 있음·미초기화·충돌)가 다 보이게. storefront-web 에만 */
   submodules: SubmoduleInfo[];
   /** 추적되지 않는 하위 저장소의 절대 경로 (`openRepo().nestedRepos`). storefront-web 에만 */
@@ -1826,7 +1832,7 @@ function sideText(doc: ConflictDoc, side: 'ours' | 'base' | 'theirs'): string {
 }
 
 /** 그래프의 ref 라벨을 장면 것으로 바꾼다 (생성기가 붙인 라벨은 지운다). 사이드바와 그래프가 같은 ref 를 보게 한다 */
-function relabelGraph(graph: MockGraph, labels: readonly RefLabel[]): void {
+export function relabelGraph(graph: MockGraph, labels: readonly RefLabel[]): void {
   const byTarget = new Map<string, RefLabel[]>();
   for (const l of labels) {
     byTarget.set(l.target, [...(byTarget.get(l.target) ?? []), l]);
@@ -1895,7 +1901,13 @@ function folderRepoShape(
  * 이동할 수 있다. 현재 브랜치·작업 트리 변경·진행 중 작업은 `shape` 를 따르고, 충돌 항목마다 충돌 목록과
  * 3-way 자료를 만든다 (삭제 충돌은 한쪽 선택)
  */
-function repoData(path: string, graph: MockGraph, seed: number, shape: RepoShape): MockRepoData {
+function repoData(
+  path: string,
+  graph: MockGraph,
+  seed: number,
+  shape: RepoShape,
+  extraTags = 0,
+): MockRepoData {
   /** 그래프 행의 oid. 그래프가 짧으면 마지막 행 */
   const oidAt = (row: number) => graph.rows[Math.min(row, graph.rows.length - 1)]?.oid ?? '';
   const headOid = oidAt(0);
@@ -1925,6 +1937,8 @@ function repoData(path: string, graph: MockGraph, seed: number, shape: RepoShape
           worktreePath: b.worktree ? `${path}${b.worktree}` : null,
         }),
   );
+  // 합성 tag (`VITE_MGIT_MOCK_TAGS`): 그래프가 비면 만들지 않는다
+  const synthTags = graph.rows.length === 0 ? [] : syntheticTags(extraTags, graph.rows.length);
   const extraCurrent =
     shape.branch !== null && !REPO_LOCALS.some((b) => b.name === shape.branch)
       ? [current(shape.branch, 0)]
@@ -1937,6 +1951,7 @@ function repoData(path: string, graph: MockGraph, seed: number, shape: RepoShape
           ...locals,
           ...REPO_REMOTES.map(([name, row]) => remoteLabel(name, oidAt(row))),
           ...REPO_TAGS.map(([name, row, annotated]) => tagLabel(name, oidAt(row), annotated)),
+          ...synthTags.map(([name, row, annotated]) => tagLabel(name, oidAt(row), annotated)),
         ];
   relabelGraph(graph, labels);
 
@@ -2169,6 +2184,15 @@ function repoData(path: string, graph: MockGraph, seed: number, shape: RepoShape
         createdAt: BASE_TIME - 86_400,
       },
     ],
+    // tag 상태 (BR-06): 장면 tag 의 로컬 객체와 원격별 tag 표 (그래프가 비면 tag 도 없다)
+    tags: (() => {
+      if (graph.rows.length === 0) {
+        return { local: {}, remotes: {}, checks: {} };
+      }
+      const tags = repoTagData(REPO_TAGS, oidAt, seed);
+      addSyntheticTags(tags, synthTags, oidAt, seed);
+      return tags;
+    })(),
     // 호스팅 (W24 Pull Requests 도구 창): 저장소 이름으로 프로젝트 경로를 만든다 (조절값은 클라이언트가 적용한다)
     ...mockHostingData(path.slice(path.lastIndexOf('/') + 1), oidAt),
     // 모듈·서브모듈·하위 저장소 (W25 Project 트리): 저장소 장면의 storefront-web 에만 있다 (다른 장면·폴더 장면의 하위
@@ -2783,6 +2807,11 @@ export interface MockSceneOptions {
   folderOps?: number;
   /** 화면 측정용 크기 조절값 (기본은 모두 꺼짐) */
   scale?: MockScale;
+  /**
+   * 저장소마다 더할 합성 tag 수 (`VITE_MGIT_MOCK_TAGS=N`, tag 수천 개 화면 측정). 로컬·원격 상태를 고르게 섞는다
+   * (`mock-tags.ts` 의 `addSyntheticTags`). 기본 0
+   */
+  tags?: number;
 }
 
 /** 장면을 만든다. `seed` 는 그래프에 없는 객체(스태시·blob)의 oid 에만 쓴다 */
@@ -2803,7 +2832,13 @@ export function createMockScene(
         startupPaths: [FOLDER_PATH],
         folder,
         repo: (path, graph) =>
-          repoData(path, graph, seed, folderRepoShape(path, folder, specs) ?? REPO_SHAPE),
+          repoData(
+            path,
+            graph,
+            seed,
+            folderRepoShape(path, folder, specs) ?? REPO_SHAPE,
+            options.tags,
+          ),
         fs,
       };
     }
@@ -2812,7 +2847,7 @@ export function createMockScene(
         name,
         startupPaths: [REPO_PATH],
         folder: null,
-        repo: (path, graph) => repoData(path, graph, seed, REPO_SHAPE),
+        repo: (path, graph) => repoData(path, graph, seed, REPO_SHAPE, options.tags),
         fs,
       };
     case 'conflict':
@@ -2821,7 +2856,13 @@ export function createMockScene(
         startupPaths: [CONFLICT_PATH],
         folder: null,
         repo: (path, graph) =>
-          repoData(path, graph, seed, path === CONFLICT_PATH ? CONFLICT_SHAPE : REPO_SHAPE),
+          repoData(
+            path,
+            graph,
+            seed,
+            path === CONFLICT_PATH ? CONFLICT_SHAPE : REPO_SHAPE,
+            options.tags,
+          ),
         fs,
       };
   }

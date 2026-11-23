@@ -1,6 +1,7 @@
 import { S } from '@mgit/ui';
 import { type AppStore, effectiveDock, type LeftTool, type TabKind } from './store/app-store';
 import type { SessionState } from './store/session-store';
+import { type TagsDocRequest, tagsDoc, type WorkspaceState } from './store/workspace-store';
 
 /** 팔레트·단축키·메뉴가 공유하는 동작 하나 (UX-02·03) */
 export interface Action {
@@ -62,6 +63,7 @@ export type ActionSession = Pick<
   | 'setReflogOpen'
   | 'openFileBackups'
   | 'remoteProject'
+  | 'checkRemoteTags'
 >;
 
 /** 동작이 읽을 상태. 훅이 아니라 호출 시점의 스냅샷이다 */
@@ -87,6 +89,11 @@ export interface ActionContext {
    * false. 주지 않으면 ⌘W 는 언제나 탭(폴더·저장소)을 닫는다
    */
   closeEditorDoc?: () => boolean;
+  /**
+   * 저장소 탭의 태그 문서를 연다 (C3a, `openTagsDoc`). 요청(C4: 모든 tag push 등)을 함께 줄 수 있다. 주지 않으면 팔레트의
+   * "tag 관리"·"모든 tag push…" 가 꺼진다
+   */
+  openTagsDoc?: (request?: TagsDocRequestInput) => void;
 }
 
 /**
@@ -168,6 +175,36 @@ function focusIsInDock(): boolean {
  */
 function focusPanelSoon(name: PanelName): void {
   setTimeout(() => focusPanel(name), 0);
+}
+
+/** 여는 쪽이 주는 태그 문서 요청 (차례는 `openTagsDoc` 이 붙인다) */
+export type TagsDocRequestInput =
+  | { kind: 'pushAll'; remote: string | null }
+  | { kind: 'remoteOnly'; remote: string };
+
+// 태그 문서 요청의 차례 (같은 요청을 다시 해도 새 요청으로 보이게)
+let tagsRequestSeq = 0;
+
+/**
+ * 저장소 탭의 태그 문서를 연다 (C3a, TG-10 ①): 고정 탭으로 열고(이미 있으면 그 탭을 보인다) 에디터 공간 — 문서의 목록
+ * — 에 포커스를 준다. 요청(C4)이 있으면 문서가 받아 처리한다 (모든 tag push 는 그 뒤 push 단추로 포커스를 옮긴다).
+ * 트리 Tags 묶음의 단추·메뉴와 팔레트가 같이 쓴다. 워크스페이스가 없으면 아무것도 하지 않는다
+ */
+export function openTagsDoc(
+  ws: Pick<WorkspaceState, 'openDoc' | 'setTagsView'> | null | undefined,
+  repoPath: string,
+  repoName: string,
+  request?: TagsDocRequestInput,
+): void {
+  if (!ws) {
+    return;
+  }
+  if (request) {
+    tagsRequestSeq += 1;
+    ws.setTagsView({ request: { ...request, seq: tagsRequestSeq } as TagsDocRequest });
+  }
+  ws.openDoc(tagsDoc({ repoPath, repoName }), 'pinned');
+  focusPanelSoon('editor');
 }
 
 /**
@@ -679,6 +716,38 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       group: 'view',
       enabled: remoteKind !== null,
       run: () => showLeftTool(app, 'pullRequests'),
+    },
+    // 원격 tag 확인 (B5, TG-09 ③): 모든 원격의 tag 상태를 받아 브랜치 칸에 보인다. 기본 키는 없다. 쓰기가 아니라 busy 와
+    // 무관하다 (D15)
+    {
+      id: 'sync.checkRemoteTags',
+      title: S.actions.checkRemoteTags,
+      group: 'sync',
+      enabled: hasRepo && hasRemotes,
+      run: () => void session?.checkRemoteTags(),
+    },
+    // tag 관리 (C3a, TG-10 ①): 저장소 탭의 태그 문서를 고정 탭으로 열고 목록에 포커스한다. 기본 키는 없다
+    {
+      id: 'view.tagsDoc',
+      title: S.actions.tagsDoc,
+      group: 'view',
+      enabled: hasRepo && ctx.openTagsDoc !== undefined,
+      run: () => {
+        app.setDockMaximized(false);
+        ctx.openTagsDoc?.();
+      },
+    },
+    // 모든 tag push (C4, TG-13): 문서를 열고 기본 원격을 확인한 뒤 "로컬에만" 을 모두 골라 push 단추에 포커스한다 —
+    // 보내는 것은 사용자가 검토한 뒤 그 단추로 한다. 원격은 문서 머리에서 바꿀 수 있다. 기본 키는 없다
+    {
+      id: 'sync.pushAllTags',
+      title: S.actions.pushAllTags,
+      group: 'sync',
+      enabled: hasRepo && hasRemotes && ctx.openTagsDoc !== undefined,
+      run: () => {
+        app.setDockMaximized(false);
+        ctx.openTagsDoc?.({ kind: 'pushAll', remote: null });
+      },
     },
   ];
 }

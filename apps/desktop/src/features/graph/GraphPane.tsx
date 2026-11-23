@@ -110,7 +110,14 @@ export function GraphPane() {
     openRemergeDiff: st.openRemergeDiff,
     rewordCommit: st.rewordCommit,
     squashIntoParent: st.squashIntoParent,
+    prepareSquashRange: st.prepareSquashRange,
+    squashRange: st.squashRange,
     commitMessageOf: st.commitMessageOf,
+    pushTags: st.pushTags,
+    deleteTagsScoped: st.deleteTagsScoped,
+    tagReports: st.tagReports,
+    // 참조 그대로 고른다 (이름 배열은 아래 useMemo 로 — 선택자 안에서 만들면 얕은 비교가 깨진다)
+    remotes: st.refs.remotes,
     worktreeWips: st.worktreeWips,
     signingInfo: st.signingInfo,
     range: st.range,
@@ -129,6 +136,7 @@ export function GraphPane() {
     headBranch: headBranchOf(st.refs),
   }));
   const dialogs = useDialogs();
+  const remoteNames = useMemo(() => s.remotes.map((r) => r.name), [s.remotes]);
   const openRepositoryAt = useAppStore((st) => st.openRepositoryAt);
   // 로그는 Git 도구 창의 탭이라 콘솔·터미널로 바꾸거나 숨기면 내려간다 (W21): 다시 붙을 때 보던 자리에서 시작한다
   const anchor = useWorkspace((w) => ({ remember: w.rememberLogAnchor, recall: w.logAnchor }));
@@ -363,7 +371,7 @@ export function GraphPane() {
             const oid = el?.getAttribute('data-oid');
             return oid ? (rowsByOid.current.get(oid) ?? null) : null;
           }}
-          items={(row) => graphMenuItems(row, s, dialogs)}
+          items={(row) => graphMenuItems(row, { ...s, remoteNames }, dialogs)}
         >
           <GraphView
             key={`${s.id}:${mountEpoch}`}

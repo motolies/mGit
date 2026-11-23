@@ -12,6 +12,13 @@ import {
 } from '@mgit/ipc';
 import { formatDateTime, S, shortHash } from '@mgit/ui';
 import {
+  localTagSync,
+  localTagSyncLines,
+  type TagReports,
+  tagGroupSummary,
+  tagGroupSync,
+} from '../tags/tag-sync';
+import {
   type BranchBadge,
   type BranchTrack,
   type BranchTreeNode,
@@ -33,6 +40,12 @@ export interface RepoBranchSource {
   radar: readonly RadarEntry[];
   /** 이 탭의 작업 트리 경로 (지금 연 워크트리 표시) */
   path: string;
+  /** 원격별 tag 상태 보고서 (B5). 확인 전이면 비어 있고 tag 행·묶음에 아무것도 보이지 않는다 */
+  tagReports: TagReports;
+  /** 등록된 원격 이름 (원격 목록 순서) — 보고서를 합칠 원격과 툴팁의 순서 */
+  remoteNames: readonly string[];
+  /** 원격 tag 를 확인하는 중인지 (묶음 요약 앞의 `확인 중…`) */
+  tagChecking: boolean;
 }
 
 export interface RepoBranchTreeInput extends RepoBranchSource {
@@ -151,7 +164,12 @@ function group(
   id: string,
   label: string,
   children: BranchTreeNode[],
-  options: { count?: number; defaultCollapsed?: boolean; keepEmpty?: boolean } = {},
+  options: {
+    count?: number;
+    defaultCollapsed?: boolean;
+    keepEmpty?: boolean;
+    suffix?: string;
+  } = {},
 ): BranchTreeNode[] {
   if (children.length === 0 && !options.keepEmpty) {
     return [];
@@ -164,8 +182,33 @@ function group(
       count: options.count ?? children.length,
       children,
       ...(options.defaultCollapsed ? { defaultCollapsed: true } : {}),
+      ...(options.suffix ? { suffix: options.suffix } : {}),
     },
   ];
+}
+
+/**
+ * tag 잎 (TG-09 ①): 확인한 모든 원격에 없으면 suffix `push 안 됨`, 하나라도 다르면 배지 `⚠ 다름`, 툴팁 끝에 원격별
+ * 상태. 확인한 원격이 없으면 이름만 (D14: 원격에만 있는 tag 는 트리에 넣지 않는다). 원격별 상태 줄은 툴팁이 필요할 때
+ * 만든다 (`detail` 함수) — 배지에는 따로 툴팁을 두지 않아 행 툴팁이 보인다
+ */
+function tagLeaf(label: RefLabel, input: RepoBranchTreeInput): BranchTreeNode {
+  const { tagReports, remoteNames } = input;
+  const name = label.shortName;
+  const sync = localTagSync(tagReports, remoteNames, name);
+  return {
+    id: refNodeId(label.fullName),
+    kind: 'tag',
+    label: name,
+    fullName: label.fullName,
+    ...(sync?.unpushed ? { suffix: S.tag.tree.unpushed } : {}),
+    ...(sync?.differs
+      ? { badges: [{ icon: 'tagDiffers' as const, text: S.tag.tree.differs }] }
+      : {}),
+    ...(sync
+      ? { detail: () => (localTagSyncLines(tagReports, remoteNames, name) ?? []).join('\n') }
+      : {}),
+  };
 }
 
 /** HEAD 에 커밋이 있으면 그 커밋 (현재 브랜치·분리 HEAD). 커밋이 없으면(unborn) null */
@@ -209,14 +252,16 @@ export function buildRepoBranchTree(input: RepoBranchTreeInput): BranchTreeNode[
   const tagNodes = tags
     .sort((a, b) => a.shortName.localeCompare(b.shortName))
     .reverse()
-    .map(
-      (l): BranchTreeNode => ({
-        id: refNodeId(l.fullName),
-        kind: 'tag',
-        label: l.shortName,
-        fullName: l.fullName,
-      }),
-    );
+    .map((l) => tagLeaf(l, input));
+  // 태그 묶음 머리 요약 (TG-09 ②): 확인 전·확인 중이 아니면 비어 있다
+  const tagSummary = tagGroupSummary(
+    tagGroupSync(
+      input.tagReports,
+      input.remoteNames,
+      tags.map((l) => l.shortName),
+    ),
+    input.tagChecking,
+  );
   const worktreeNodes = input.worktrees.map((wt): BranchTreeNode => {
     const suffix = worktreeSuffix(wt);
     const current = wt.path === input.path;
@@ -244,7 +289,10 @@ export function buildRepoBranchTree(input: RepoBranchTreeInput): BranchTreeNode[
     ...head,
     ...group(REPO_GROUP_IDS.local, S.branches.local, sortBranchNodes(locals)),
     ...group(REPO_GROUP_IDS.remote, S.branches.remote, remoteGroups, { count: remoteCount }),
-    ...group(REPO_GROUP_IDS.tags, S.sidebar.tags, tagNodes, { defaultCollapsed: true }),
+    ...group(REPO_GROUP_IDS.tags, S.sidebar.tags, tagNodes, {
+      defaultCollapsed: true,
+      suffix: tagSummary,
+    }),
     ...group(REPO_GROUP_IDS.worktrees, S.sidebar.worktrees, worktreeNodes, { keepEmpty: true }),
     ...group(REPO_GROUP_IDS.backups, S.safety.backups, backupNodes, { defaultCollapsed: true }),
   ];
@@ -257,13 +305,15 @@ export type RepoBranchTarget =
   | { kind: 'remote'; label: RefLabel; remote: string }
   | { kind: 'remoteGroup'; remote: string }
   | { kind: 'tag'; label: RefLabel }
+  /** Tags 묶음 (B5): 원격 tag 확인 */
+  | { kind: 'tagGroup' }
   | { kind: 'worktreeGroup' }
   | { kind: 'worktree'; worktree: WorktreeInfo }
   | { kind: 'backup'; backup: BackupRef };
 
 /**
- * 노드 id → 대상. 세션의 지금 상태에서 찾는다 (우클릭·클릭한 순간의 값). 대상이 없는 노드(로컬·원격·태그·백업
- * 그룹)나 이미 사라진 것이면 null
+ * 노드 id → 대상. 세션의 지금 상태에서 찾는다 (우클릭·클릭한 순간의 값). 대상이 없는 노드(로컬·원격·백업 그룹)나
+ * 이미 사라진 것이면 null. Tags 묶음은 원격 tag 확인 메뉴의 대상이다 (B5)
  */
 export function repoBranchTarget(
   nodeId: string,
@@ -275,6 +325,9 @@ export function repoBranchTarget(
   }
   if (nodeId === REPO_GROUP_IDS.worktrees) {
     return { kind: 'worktreeGroup' };
+  }
+  if (nodeId === REPO_GROUP_IDS.tags) {
+    return { kind: 'tagGroup' };
   }
   if (nodeId.startsWith(REMOTE_GROUP_PREFIX)) {
     return { kind: 'remoteGroup', remote: nodeId.slice(REMOTE_GROUP_PREFIX.length) };

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react';
 import { Button } from './Button';
 import styles from './ConfirmDialog.module.css';
+import { DialogItems } from './DialogItems';
 import { S } from './strings';
 import { useNativeDialog } from './use-native-dialog';
 
@@ -72,14 +73,7 @@ export function ConfirmDialog({
         <p id={messageId} className={styles.message}>
           {message}
         </p>
-        {items && items.length > 0 ? (
-          <ul className={styles.items}>
-            {items.slice(0, 20).map((it) => (
-              <li key={it}>{it}</li>
-            ))}
-            {items.length > 20 ? <li>{S.confirm.more(items.length - 20)}</li> : null}
-          </ul>
-        ) : null}
+        <DialogItems items={items} />
         <div className={styles.actions}>
           <Button ref={cancelRef} type="button" onClick={onCancel}>
             {S.confirm.cancel}

@@ -281,6 +281,31 @@ describe('BranchTree 렌더 (BT-01·02)', () => {
     expect(plain.getAttribute('title')).toBe('plain');
   });
 
+  it('덧붙인 설명(detail)은 툴팁이 필요할 때만 만든다: 마우스가 올라갈 때, 키보드 커서 행 (tag 원격별 상태)', () => {
+    const detail = vi.fn(() => 'origin: 다름');
+    setup({
+      nodes: [
+        { id: 'ref:refs/tags/v2', kind: 'tag', label: 'v2', detail },
+        { id: 'ref:refs/tags/v1', kind: 'tag', label: 'v1', suffix: 'push 안 됨', detail },
+      ],
+    });
+    // 그리기만 해서는 만들지 않는다
+    expect(detail).not.toHaveBeenCalled();
+    expect(row('ref:refs/tags/v1').getAttribute('title')).toBeNull();
+    fireEvent.mouseEnter(row('ref:refs/tags/v1'));
+    expect(row('ref:refs/tags/v1').getAttribute('title')).toBe('v1 push 안 됨\norigin: 다름');
+    expect(detail).toHaveBeenCalledTimes(1);
+    // 키보드 커서 행은 렌더에서 툴팁을 단다 (보조 기술이 설명으로 읽는다). 커서가 떠나면 다시 늦게 만든다
+    act(() => tree().focus());
+    key('ArrowDown');
+    expect(cursor()).toBe('ref:refs/tags/v2');
+    expect(row('ref:refs/tags/v2').getAttribute('title')).toBe('v2\norigin: 다름');
+    key('ArrowDown');
+    expect(cursor()).toBe('ref:refs/tags/v1');
+    expect(row('ref:refs/tags/v2').getAttribute('title')).toBeNull();
+    expect(row('ref:refs/tags/v1').getAttribute('title')).toBe('v1 push 안 됨\norigin: 다름');
+  });
+
   it('노드가 없으면 빈 상태 문구를 쓴다 (읽는 중이면 받은 문구)', () => {
     setup({ nodes: [] });
     expect(screen.getByText(S.branches.empty)).toBeTruthy();

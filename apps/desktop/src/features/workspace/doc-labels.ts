@@ -5,7 +5,7 @@ import { baseName, parentDir } from '../../store/fs-path';
 import type { DocTarget } from '../../store/workspace-store';
 
 /**
- * 탭 제목. 커밋 diff 는 `파일이름 @해시8`, 파일 보기·작업 트리 diff·범위 파일 diff 는 파일 이름, 충돌은 파일 이름(저장하지
+ * 탭 제목. 태그 문서는 "태그", 커밋 diff 는 `파일이름 @해시8`, 파일 보기·작업 트리 diff·범위 파일 diff 는 파일 이름, 충돌은 파일 이름(저장하지
  * 않은 편집이 있으면 ` *`). 저장소 탭에서 충돌을 읽는 동안(경로가 빈 문서, W20)은 "충돌 여는 중…" 이다 (W21)
  */
 export function docTitle(doc: DocTarget): string {
@@ -26,6 +26,8 @@ export function docTitle(doc: DocTarget): string {
       return doc.path === ''
         ? S.workspace.conflictOpening
         : S.workspace.conflictTitle(baseName(doc.path), doc.draft);
+    case 'tags':
+      return S.tag.doc.title;
   }
 }
 
@@ -42,6 +44,7 @@ export function docDetail(doc: DocTarget): string | undefined {
     case 'worktreeDiff':
     case 'historyDiff':
     case 'conflict':
+    case 'tags':
       return doc.repoName;
     case 'file': {
       if (doc.repoName !== null) {
@@ -79,5 +82,7 @@ export function docTooltip(doc: DocTarget): string | undefined {
       return doc.path === ''
         ? S.workspace.conflictOpeningTip(doc.repoName)
         : S.workspace.conflictTip(doc.repoName, doc.path, doc.draft);
+    case 'tags':
+      return undefined;
   }
 }

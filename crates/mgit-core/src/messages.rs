@@ -100,6 +100,48 @@ pub(crate) fn cancelled() -> &'static str {
     pick("취소됨", "Canceled")
 }
 
+/// 원격이 하나도 없다 (push 대상·원격 tag 비교 대상이 없음)
+pub(crate) fn no_remotes() -> &'static str {
+    pick(
+        "원격이 없습니다. 먼저 원격을 추가하세요",
+        "No remotes. Add a remote first",
+    )
+}
+
+/// 등록되지 않은 원격 이름
+pub(crate) fn unknown_remote(name: &str) -> String {
+    tr!("원격이 없습니다: {name}", "No such remote: {name}")
+}
+
+/// 로컬에 없는 tag
+pub(crate) fn tag_not_found(name: &str) -> String {
+    tr!("tag 가 없습니다: {name}", "No such tag: {name}")
+}
+
+/// tag 일괄 작업 중 일부가 원하는 결과에 이르지 못했다 (op 끝 이벤트 문구)
+pub(crate) fn tag_results_failed(failed: usize, total: usize) -> String {
+    tr!(
+        "tag {total}개 중 {failed}개가 처리되지 않았습니다",
+        "Tags not processed: {failed} of {total}"
+    )
+}
+
+/// 원격 삭제를 다시 불렀는데 확인한 뒤 원격 tag 가 또 바뀌었다 (`expected_remote` 불일치)
+pub(crate) fn tag_remote_changed() -> &'static str {
+    pick(
+        "확인한 뒤 원격 tag 가 바뀌었습니다. 다시 확인하세요",
+        "The remote tag changed after it was checked. Check again",
+    )
+}
+
+/// 취소·연결 끊김으로 tag 결과를 알 수 없다
+pub(crate) fn tag_result_unknown() -> &'static str {
+    pick(
+        "결과를 알 수 없습니다. 원격 tag 를 다시 확인하세요",
+        "Result unknown. Check the remote tags again",
+    )
+}
+
 /// 옵션으로 읽힐 수 있거나 쓸 수 없는 경로 (값은 따옴표로 보인다)
 pub(crate) fn bad_path(path: impl Debug) -> String {
     tr!("잘못된 경로: {path:?}", "Invalid path: {path:?}")

@@ -137,6 +137,9 @@ function input(extra: Partial<RepoBranchTreeInput> = {}): RepoBranchTreeInput {
     backups: BACKUPS,
     radar: RADAR,
     path: PATH,
+    tagReports: {},
+    remoteNames: ['origin', 'upstream'],
+    tagChecking: false,
     isFavorite: (fullName) => isFavorite(NO_FAVORITE_OVERRIDES, fullName),
     ...extra,
   };
@@ -369,6 +372,8 @@ describe('repoBranchTarget · repoTargetCommit (노드 → 대상 → 이동할 
       backup: BACKUPS[1],
     });
     expect(repoBranchTarget(REPO_GROUP_IDS.worktrees, source)).toEqual({ kind: 'worktreeGroup' });
+    // Tags 묶음은 원격 tag 확인 메뉴의 대상이다 (B5)
+    expect(repoBranchTarget(REPO_GROUP_IDS.tags, source)).toEqual({ kind: 'tagGroup' });
     expect(repoBranchTarget('head', source)).toEqual({ kind: 'head', oid: oid(1) });
   });
 
@@ -376,7 +381,6 @@ describe('repoBranchTarget · repoTargetCommit (노드 → 대상 → 이동할 
     for (const id of [
       REPO_GROUP_IDS.local,
       REPO_GROUP_IDS.remote,
-      REPO_GROUP_IDS.tags,
       REPO_GROUP_IDS.backups,
       'ref:refs/heads/gone',
       worktreeNodeId('/nowhere'),

@@ -16,7 +16,7 @@ import {
   registerWorkspace,
 } from '../store/session-registry';
 import { createSessionStore } from '../store/session-store';
-import { conflictDocId, worktreeDiffDocId } from '../store/workspace-store';
+import { conflictDocId, tagsDocId, worktreeDiffDocId } from '../store/workspace-store';
 import { installDialogStub, removeDialogStub, tick } from './dialog-stub';
 
 // 그래프·터미널·홈은 jsdom 에서 그리지 않는다 (뷰 자체는 각 패키지가 테스트한다)
@@ -170,6 +170,18 @@ describe('저장소 탭의 화면 틀 (WS-15, W21)', () => {
     expect(inArea('editor').getByText(S.workspace.empty.title)).toBeTruthy();
     expect(inArea('editor').queryByText(S.workspace.empty.openOverview)).toBeNull();
     expect(inArea('editor').queryByRole('tab')).toBeNull();
+  });
+
+  it('빈 에디터 공간의 "tag 관리 열기" 링크는 팔레트(view.tagsDoc)처럼 태그 문서를 고정 탭으로 연다', async () => {
+    const { ws } = await mountRepo();
+    fireEvent.click(inArea('editor').getByRole('button', { name: S.tag.doc.open }));
+    await tick();
+    const doc = ws()?.docs.find((d) => d.kind === 'tags');
+    expect(doc?.id).toBe(tagsDocId(REPO));
+    expect(ws()?.activeDocId).toBe(doc?.id);
+    expect(inArea('editor').getByRole('tab', { name: new RegExp(S.tag.doc.title) })).toBeTruthy();
+    // 문서가 열렸으니 빈 화면(과 링크)은 사라진다
+    expect(inArea('editor').queryByText(S.workspace.empty.title)).toBeNull();
   });
 
   it('상세 칸은 범위 → commit → 빈 상태 순으로 고르고 스태시는 그리지 않는다 (CD-09, W23). 빈 상태는 변경 수와 Commit 도구 창(변경 탭) 진입', async () => {

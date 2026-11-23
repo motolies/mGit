@@ -434,7 +434,9 @@ async fn tags_lightweight_and_annotated() {
     assert_ne!(v1.target, repo.head());
     assert!(repo.git_ok(["tag", "-l", "-n1", "v1"]).contains("릴리스 1"));
 
-    core.delete_tag(opened.session, "light").await.unwrap();
+    core.delete_local_tags(opened.session, &["light".to_string()])
+        .await
+        .unwrap();
     assert!(
         !core
             .repo_state(opened.session)

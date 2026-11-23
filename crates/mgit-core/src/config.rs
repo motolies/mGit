@@ -47,6 +47,10 @@ pub struct CoreConfig {
     pub command_path: Option<String>,
     /// 사용자 셸 명령의 최대 실행 시간
     pub command_timeout: Duration,
+    /// tag push·원격 삭제·가져오기에서 git 명령 하나에 넣는 refspec 인자 바이트 상한 (청크 예산, D9)
+    pub tag_chunk_bytes: usize,
+    /// 위와 같은 청크의 ref 개수 상한
+    pub tag_chunk_refs: usize,
 }
 
 impl Default for CoreConfig {
@@ -71,6 +75,8 @@ impl Default for CoreConfig {
             timeline_max_per_repo: 10_000,
             command_path: None,
             command_timeout: Duration::from_secs(600),
+            tag_chunk_bytes: 256 * 1024,
+            tag_chunk_refs: 1_000,
         }
     }
 }

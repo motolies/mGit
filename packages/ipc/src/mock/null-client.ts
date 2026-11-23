@@ -1,6 +1,7 @@
 import type { IpcClient } from '../client';
 import { EMPTY_COMMIT_FILTER } from '../commit-filter';
 import type { AuthorList } from '../types';
+import { emptyTagReport } from './mock-tags';
 
 /** 빈 작성자 후보 */
 const NO_AUTHORS: AuthorList = { authors: [], total: 0, truncated: false, timedOut: false };
@@ -61,7 +62,14 @@ export function createNullClient(): IpcClient {
     deleteRemoteBranch: async () => {},
     setUpstream: async () => {},
     createTag: async () => {},
-    deleteTag: async () => {},
+    pushTags: async () => [],
+    deleteRemoteTags: async () => [],
+    deleteLocalTags: async () => {},
+    replaceRemoteTags: async () => [],
+    remoteTags: async (_s, remote: string | null) => emptyTagReport(remote ?? ''),
+    lookupRemoteTags: async () => [],
+    fetchTags: async () => [],
+    tagList: async () => [],
     merge: async () => 'clean',
     rebase: async () => 'clean',
     cherryPick: async () => 'clean',

@@ -3,7 +3,7 @@
 import { S } from '@mgit/ui';
 import type { Action } from '../../actions';
 import { PALETTE_SHORTCUT } from '../../global-keys';
-import type { EditorHint } from './EditorArea';
+import type { EditorEmptyStateProps, EditorHint } from './EditorArea';
 
 /** 빈 에디터 공간에 단축키를 안내할 동작 (팔레트 다음 줄부터) */
 const HINT_ACTION_IDS = ['view.focusSidebar', 'view.focusGraph', 'view.terminal'];
@@ -20,4 +20,13 @@ export function editorHints(actions: readonly Action[]): EditorHint[] {
       return action ? [{ label: action.title, shortcut: action.shortcut }] : [];
     }),
   ];
+}
+
+/**
+ * 저장소 탭 빈 에디터 공간의 링크 (폴더 탭의 "개요 열기" 자리): 팔레트의 `view.tagsDoc` 을 그대로 부른다. 그 동작은 기본
+ * 키가 없어 단축키 안내 줄에 들지 않으므로 링크로 둔다. 동작이 없거나 꺼져 있으면 링크도 없다
+ */
+export function tagsDocLink(actions: readonly Action[]): EditorEmptyStateProps['action'] {
+  const action = actions.find((a) => a.id === 'view.tagsDoc');
+  return action?.enabled ? { label: S.tag.doc.open, onClick: action.run } : undefined;
 }

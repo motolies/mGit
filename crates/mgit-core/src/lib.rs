@@ -38,6 +38,7 @@ mod ops;
 mod preview;
 mod rebase_plan;
 mod ref_index;
+mod refname;
 mod refresh;
 mod repo_ops;
 mod repo_settings;
@@ -49,6 +50,8 @@ mod stash;
 mod state;
 mod submodule;
 mod sync;
+mod tag_cache;
+mod tags;
 mod verify;
 mod window;
 mod worktree;
@@ -113,6 +116,7 @@ pub use secrets::glob_match;
 pub use session::{LoadState, SessionProfile};
 pub use state::{RepoRefs, RepoState};
 pub use submodule::{SubmoduleCommit, SubmodulePointerLog, SubmoduleSides, SubmoduleUnpushed};
+pub use tags::{TagDeleteItem, TagLeaseItem};
 pub use verify::{CommandRun, SyntaxCompare};
 pub use window::{GraphRow, GraphWindow};
 pub use worktree::{WorktreeSource, default_worktree_path};
@@ -128,6 +132,12 @@ pub use mgit_model::{
     RecentKind, RefKind, RefLabel, RemoteInfo, RepoInfo, RepoKind, RepoSummary, StashInfo,
     StatusEntry, StatusSummary, SubmoduleInfo, SubmoduleState, SubmoduleStatus, WorkTreeStatus,
     WorktreeInfo, WorktreeRemoveCheck,
+};
+
+// tag 관리 (BR-06) 모델 재수출
+pub use mgit_model::{
+    LocalTag, RemoteTag, TagLookupError, TagLookupErrorKind, TagRefResult, TagRefStatus,
+    TagSyncCounts, TagSyncEntry, TagSyncReport, TagSyncState,
 };
 
 // 충돌 해결 (S6) 모델 재수출

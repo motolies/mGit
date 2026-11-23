@@ -159,7 +159,54 @@ describe('아래 도구 창 동작 (WS-03)', () => {
       'view.focusEditor',
       'view.toolCommit',
       'view.toolPullRequests',
+      'sync.checkRemoteTags',
+      'view.tagsDoc',
+      'sync.pushAllTags',
     ]);
+  });
+
+  it('원격 tag 확인(B5): 기본 키가 없고 원격이 있는 저장소 탭에서 켜진다. 실행 중(busy)이어도 켜진다 (D15)', () => {
+    const checkRemoteTags = vi.fn(async () => {});
+    expect(byId(ctx())['sync.checkRemoteTags']?.enabled).toBe(false);
+    expect(
+      byId(ctx({ active: 2, session: { refs: { remotes: [], labels: [] } } as never }))[
+        'sync.checkRemoteTags'
+      ]?.enabled,
+    ).toBe(false);
+    const busy = byId(ctx({ active: 2, session: { busy: true, checkRemoteTags } as never }));
+    expect(busy['sync.checkRemoteTags']?.enabled).toBe(true);
+    expect(busy['sync.checkRemoteTags']?.shortcut).toBeUndefined();
+    expect(busy['sync.checkRemoteTags']?.title).toBe(S.actions.checkRemoteTags);
+    busy['sync.checkRemoteTags']?.run();
+    expect(checkRemoteTags).toHaveBeenCalledWith();
+  });
+
+  it('tag 관리(C3a): 기본 키가 없고, 연 쪽이 문서 열기를 준 저장소 탭에서만 켜진다. 실행하면 최대화를 풀고 연다', () => {
+    const openTagsDoc = vi.fn();
+    expect(byId(ctx({ active: 2, session: {} }))['view.tagsDoc']?.enabled).toBe(false);
+    const c = { ...ctx({ active: 2, session: {} }), openTagsDoc };
+    const action = byId(c)['view.tagsDoc'];
+    expect(action?.enabled).toBe(true);
+    expect(action?.shortcut).toBeUndefined();
+    expect(action?.title).toBe(S.actions.tagsDoc);
+    action?.run();
+    expect(c.app.setDockMaximized).toHaveBeenCalledWith(false);
+    expect(openTagsDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it('모든 tag push…(C4, TG-13): 원격이 있고 문서를 열 수 있는 저장소 탭에서 켜지고, 기본 원격으로 요청해 연다', () => {
+    const openTagsDoc = vi.fn();
+    const c = { ...ctx({ active: 2, session: {} }), openTagsDoc };
+    const action = byId(c)['sync.pushAllTags'];
+    expect(action?.enabled).toBe(true);
+    expect(action?.shortcut).toBeUndefined();
+    action?.run();
+    expect(openTagsDoc).toHaveBeenCalledWith({ kind: 'pushAll', remote: null });
+    const none = {
+      ...ctx({ active: 2, session: { refs: { remotes: [], labels: [] } } as never }),
+      openTagsDoc,
+    };
+    expect(byId(none)['sync.pushAllTags']?.enabled).toBe(false);
   });
 
   it('Pull Requests 도구 창(W24): 기본 키가 없고, 원격 프로젝트가 있는 저장소 탭에서만 켜진다. 열면 왼쪽 자리에 PR 을 열고 최대화를 푼다', () => {

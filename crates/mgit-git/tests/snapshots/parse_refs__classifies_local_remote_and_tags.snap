@@ -22,6 +22,7 @@ expression: labels
         worktree_path: Some(
             "/work/main",
         ),
+        tag_object: None,
     },
     RefLabel {
         full_name: "refs/heads/기능/한글",
@@ -34,6 +35,7 @@ expression: labels
         behind: None,
         upstream_gone: false,
         worktree_path: None,
+        tag_object: None,
     },
     RefLabel {
         full_name: "refs/heads/stale",
@@ -48,6 +50,7 @@ expression: labels
         behind: None,
         upstream_gone: true,
         worktree_path: None,
+        tag_object: None,
     },
     RefLabel {
         full_name: "refs/remotes/origin/main",
@@ -62,6 +65,7 @@ expression: labels
         behind: None,
         upstream_gone: false,
         worktree_path: None,
+        tag_object: None,
     },
     RefLabel {
         full_name: "refs/tags/v1.0",
@@ -76,6 +80,9 @@ expression: labels
         behind: None,
         upstream_gone: false,
         worktree_path: None,
+        tag_object: Some(
+            Oid(cccccccccccccccccccccccccccccccccccccccc),
+        ),
     },
     RefLabel {
         full_name: "refs/tags/light",
@@ -90,5 +97,6 @@ expression: labels
         behind: None,
         upstream_gone: false,
         worktree_path: None,
+        tag_object: None,
     },
 ]

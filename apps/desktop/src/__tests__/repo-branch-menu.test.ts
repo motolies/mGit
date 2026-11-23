@@ -128,7 +128,9 @@ function fakeSession(check: WorktreeRemoveCheck | null = null) {
     fetch: vi.fn(async () => {}),
     push: vi.fn(async () => true),
     deleteRemoteBranch: vi.fn(async () => {}),
-    deleteTag: vi.fn(async () => {}),
+    pushTags: vi.fn(async () => []),
+    deleteTagsScoped: vi.fn(async () => undefined),
+    checkRemoteTags: vi.fn(async () => {}),
     backupRestore: vi.fn(async () => {}),
     backupDelete: vi.fn(async () => {}),
     worktreeRemoveCheck: vi.fn(async () => check),
@@ -148,13 +150,16 @@ function setup(
     confirm?: boolean;
     prompt?: Record<string, string | boolean> | null;
     check?: WorktreeRemoveCheck | null;
+    choice?: 'confirm' | 'secondary' | 'cancel';
   } = {},
 ) {
   const session = fakeSession(answers.check ?? null);
   const confirm = vi.fn(async (_spec: unknown) => answers.confirm ?? true);
+  const confirmChoice = vi.fn(async (_spec: unknown) => answers.choice ?? 'cancel');
   const prompt = vi.fn(async (_spec: unknown) => answers.prompt ?? null);
   const openRepositoryAt = vi.fn(async () => 9);
   const copyText = vi.fn();
+  const openTagsDoc = vi.fn();
   const deps: RepoBranchDeps = {
     state: {
       id: 3,
@@ -165,14 +170,27 @@ function setup(
       isolatedBranch: null,
       graphQuery: GRAPH_QUERY,
       prunable: 0,
+      remotes: ['origin'],
+      tagReports: {},
+      tagChecking: false,
       ...state,
     },
     session,
-    dialogs: { confirm, prompt },
+    dialogs: { confirm, confirmChoice, prompt },
     openRepositoryAt,
     copyText,
+    openTagsDoc,
   };
-  return { deps, session, confirm, prompt, openRepositoryAt, copyText };
+  return {
+    deps,
+    session,
+    confirm,
+    confirmChoice,
+    prompt,
+    openRepositoryAt,
+    copyText,
+    openTagsDoc,
+  };
 }
 
 /**
@@ -293,15 +311,31 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     ]);
   });
 
-  it('태그 — 3개', () => {
+  it('태그 — 4개: checkout · ── push(원격 하나면 평면) · 삭제 · ── 이름 복사 (TG-01 ①)', () => {
     const items = repoBranchMenu(T.tag, setup().deps);
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     expect(shape(items)).toEqual([
       '이 commit 으로 checkout (detached)',
+      '---',
+      S.remote.pushTo('origin'),
       '삭제… [danger]',
       '---',
       '이름 복사',
     ]);
+  });
+
+  it('태그 push: 원격이 없으면 꺼진 항목, 둘 이상이면 원격 이름 하위 메뉴', () => {
+    expect(menu(T.tag, { remotes: [] })).toEqual([
+      '이 commit 으로 checkout (detached)',
+      '---',
+      `${S.tag.pushNoRemote} [off]`,
+      '삭제… [danger]',
+      '---',
+      '이름 복사',
+    ]);
+    expect(menu(T.tag, { remotes: ['origin', 'upstream'] })[2]).toBe(
+      `${S.tag.pushMenu}▸ {origin, upstream}`,
+    );
   });
 
   it('워크트리 — 4개: 이 탭(main)·다른 것·잠긴 것·폴더 없는 것', () => {
@@ -415,9 +449,16 @@ describe('꺼짐 조건 (옛 사이드바의 `disabled = busy || op !== null` �
     expect(off(T.originMain, { headBranch: null })).toEqual(writesR.slice(1));
   });
 
-  it('태그: 진행 중 작업이면 checkout 만, 실행 중이면 삭제까지 꺼진다', () => {
+  it('태그: 진행 중 작업이면 checkout 만, 실행 중이면 push·삭제까지 꺼진다 (push 는 busy 만 본다, D16)', () => {
     expect(off(T.tag, { inOp: true })).toEqual([S.menu.checkoutDetached]);
-    expect(off(T.tag, { busy: true })).toEqual([S.menu.checkoutDetached, S.menu.delete]);
+    expect(off(T.tag, { busy: true })).toEqual([
+      S.menu.checkoutDetached,
+      S.remote.pushTo('origin'),
+      S.menu.delete,
+    ]);
+    expect(
+      offLabels(repoBranchMenu(T.tag, setup({ busy: true, remotes: ['origin', 'upstream'] }).deps)),
+    ).toEqual([S.menu.checkoutDetached, S.tag.pushMenu, S.menu.delete]);
   });
 
   it('워크트리·백업: 실행 중이면 쓰기 항목이 모두 꺼진다 (진행 중 작업과는 무관)', () => {
@@ -588,21 +629,59 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     expect(copyText).toHaveBeenCalledWith('origin/main');
   });
 
-  it('태그: 그 커밋으로 분리 checkout, 삭제는 위험 확인(문구 없음) 뒤, 이름 복사', async () => {
-    const { deps, session, confirm, copyText } = setup();
+  it('태그: 그 커밋으로 분리 checkout, 원격으로 push, 이름 복사', async () => {
+    const { deps, session, copyText } = setup();
     const items = repoBranchMenu(T.tag, deps);
     await select(items, S.menu.checkoutDetached);
     expect(session.checkout).toHaveBeenCalledWith({ kind: 'commit', oid: OID });
-    await select(items, S.menu.delete);
+    await select(items, S.remote.pushTo('origin'));
+    expect(session.pushTags).toHaveBeenCalledWith('origin', ['v2.4.0']);
+    await select(items, S.menu.copyName);
+    expect(copyText).toHaveBeenCalledWith('v2.4.0');
+  });
+
+  it('태그 삭제: 원격이 없으면 위험 확인에 되돌리기 안내 뒤 로컬만 (TG-03 ⑤)', async () => {
+    const { deps, session, confirm } = setup({ remotes: [] });
+    await select(repoBranchMenu(T.tag, deps), S.menu.delete);
     expect(confirm).toHaveBeenCalledWith({
       title: S.dialog.deleteTag('v2.4.0'),
-      message: '',
+      message: S.tag.del.localUndo,
+      items: undefined,
       confirmLabel: S.dialog.delete,
       danger: true,
     });
-    expect(session.deleteTag).toHaveBeenCalledWith('v2.4.0');
-    await select(items, S.menu.copyName);
-    expect(copyText).toHaveBeenCalledWith('v2.4.0');
+    expect(session.deleteTagsScoped).toHaveBeenCalledWith(
+      ['v2.4.0'],
+      { local: true, remotes: [] },
+      { silent: undefined },
+    );
+  });
+
+  it('태그 삭제: 원격이 있으면 지울 곳 대화상자(위험, 로컬만 기본) 뒤 고른 곳으로 (TG-03 ①~③)', async () => {
+    const { deps, session, prompt } = setup(
+      { remotes: ['origin', 'upstream'] },
+      { prompt: { local: true, remote0: false, remote1: true } },
+    );
+    await select(repoBranchMenu(T.tag, deps), S.menu.delete);
+    const spec = prompt.mock.calls[0]?.[0] as {
+      title: string;
+      danger: boolean;
+      items?: readonly string[];
+      fields: { key: string; initial: boolean; group: string }[];
+    };
+    expect(spec.title).toBe(S.tag.del.title('v2.4.0'));
+    expect(spec.danger).toBe(true);
+    expect(spec.items).toBeUndefined();
+    expect(spec.fields.map((f) => [f.key, f.initial, f.group])).toEqual([
+      ['local', true, S.tag.del.scope],
+      ['remote0', false, S.tag.del.scope],
+      ['remote1', false, S.tag.del.scope],
+    ]);
+    expect(session.deleteTagsScoped).toHaveBeenCalledWith(
+      ['v2.4.0'],
+      { local: true, remotes: ['upstream'] },
+      expect.objectContaining({ onDiverged: expect.any(Function) }),
+    );
   });
 
   it('워크트리: 열기(탭으로), 잠금(이유 입력, 비우면 null)·잠금 해제, 정리', async () => {
@@ -726,6 +805,78 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
   });
 });
 
+describe('Tags 묶음의 tag 관리 열기·원격 tag 확인 (TG-09 ③, TG-10 ①)', () => {
+  it('행 끝 단추와 묶음 메뉴가 같은 일(문서 열기, 모든 원격 확인)을 한다. 확인은 원격이 없거나 확인 중이면 끄고, 실행 중(busy)과는 무관하다', async () => {
+    const { deps, session, openTagsDoc } = setup({ busy: true });
+    const buttons = repoBranchRowActions(REPO_GROUP_IDS.tags, deps);
+    expect(buttons.map((b) => [b.key, b.icon, b.label, b.disabled ?? false])).toEqual([
+      ['openTagsDoc', 'tagsDoc', S.tag.doc.open, false],
+      ['checkRemoteTags', 'rescan', S.tag.check.action, false],
+    ]);
+    for (const b of buttons) {
+      b.onSelect();
+    }
+    const items = repoBranchMenu({ kind: 'tagGroup' }, deps);
+    expect(shape(items)).toEqual([
+      S.tag.doc.open,
+      S.tag.pushAllTo('origin'),
+      '---',
+      S.tag.check.action,
+    ]);
+    await select(items, S.tag.doc.open);
+    await select(items, S.tag.check.action);
+    expect(openTagsDoc).toHaveBeenCalledTimes(2);
+    expect(session.checkRemoteTags).toHaveBeenCalledTimes(2);
+    expect(session.checkRemoteTags).toHaveBeenCalledWith();
+    for (const state of [{ remotes: [] }, { tagChecking: true }]) {
+      const off = repoBranchRowActions(REPO_GROUP_IDS.tags, setup(state).deps);
+      expect(off.map((b) => b.disabled ?? false)).toEqual([false, true]);
+      expect(offLabels(repoBranchMenu({ kind: 'tagGroup' }, setup(state).deps))).toEqual(
+        state.remotes ? [S.tag.pushAll, S.tag.check.action] : [S.tag.check.action],
+      );
+    }
+  });
+
+  it('모든 tag push…(TG-13): 원격 하나면 평면, 둘 이상이면 원격 하위 메뉴. 누르면 그 원격으로 문서를 연다', async () => {
+    const one = setup();
+    await select(repoBranchMenu({ kind: 'tagGroup' }, one.deps), S.tag.pushAllTo('origin'));
+    expect(one.openTagsDoc).toHaveBeenCalledWith({ kind: 'pushAll', remote: 'origin' });
+    const two = setup({ remotes: ['origin', 'upstream'] });
+    const items = repoBranchMenu({ kind: 'tagGroup' }, two.deps);
+    expect(shape(items)[1]).toBe(`${S.tag.pushAll}▸ {origin, upstream}`);
+    await select(items, 'upstream');
+    expect(two.openTagsDoc).toHaveBeenCalledWith({ kind: 'pushAll', remote: 'upstream' });
+  });
+
+  it('원격에만 있는 tag 보기 (N): 확인한 원격에 원격에만 있는 tag 가 있을 때만, 그 원격의 필터로 연다', async () => {
+    const report = (remote: string, names: string[]) => ({
+      remote,
+      checkedAt: 1,
+      stale: false,
+      lastError: null,
+      counts: { localOnly: 0, remoteOnly: names.length, same: 0, diverged: 0, unknown: 0 },
+      entries: names.map((name) => ({
+        name,
+        state: { kind: 'remoteOnly' as const },
+        localObject: null,
+        localCommit: null,
+        remoteObject: null,
+        remoteCommit: null,
+      })),
+      pushUrlDiffers: false,
+    });
+    expect(shape(repoBranchMenu({ kind: 'tagGroup' }, setup().deps))).not.toContain(
+      S.tag.showRemoteOnly(1),
+    );
+    const { deps, openTagsDoc } = setup({
+      remotes: ['origin', 'upstream'],
+      tagReports: { origin: report('origin', []), upstream: report('upstream', ['v9', 'v8']) },
+    });
+    await select(repoBranchMenu({ kind: 'tagGroup' }, deps), S.tag.showRemoteOnly(2));
+    expect(openTagsDoc).toHaveBeenCalledWith({ kind: 'remoteOnly', remote: 'upstream' });
+  });
+});
+
 describe('Worktrees 그룹 행의 머리 단추 (옛 섹션 머리: ⌫ 정리·+ 만들기)', () => {
   it('폴더가 사라진 워크트리가 있을 때만 정리 단추(툴팁은 그 수)를 만들기 앞에 둔다. 다른 노드에는 없다', () => {
     const none = repoBranchRowActions(REPO_GROUP_IDS.worktrees, setup({ prunable: 0 }).deps);
@@ -737,7 +888,7 @@ describe('Worktrees 그룹 행의 머리 단추 (옛 섹션 머리: ⌫ 정리·
       ['prune', 'prune', S.worktree.prune, S.safety.prunable(2)],
       ['create', 'add', S.worktree.create, undefined],
     ]);
-    for (const id of [REPO_GROUP_IDS.local, REPO_GROUP_IDS.tags, 'ref:refs/heads/main', 'head']) {
+    for (const id of [REPO_GROUP_IDS.local, 'ref:refs/heads/main', 'head']) {
       expect(repoBranchRowActions(id, setup({ prunable: 2 }).deps), id).toEqual([]);
     }
   });

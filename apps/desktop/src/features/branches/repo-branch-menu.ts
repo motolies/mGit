@@ -4,9 +4,12 @@
 
 import { type GraphQuery, remoteBranchName, type SessionId, type WorktreeInfo } from '@mgit/ipc';
 import { S } from '@mgit/ui';
+import type { TagsDocRequestInput } from '../../actions';
 import type { MenuItem } from '../../components/ContextMenu';
 import { bool, str, type useDialogs } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
+import { tagWriteItems } from '../tags/tag-flows';
+import { isChecked, type TagReports, tagGroupSync } from '../tags/tag-sync';
 import { createWorktreeFlow } from '../worktree/create-worktree';
 import type { BranchRowAction } from './BranchTree';
 import { REPO_GROUP_IDS, type RepoBranchTarget } from './repo-branch-tree';
@@ -28,6 +31,12 @@ export interface RepoBranchMenuState {
   graphQuery: GraphQuery;
   /** 폴더가 사라진 워크트리 수 (Worktrees 머리의 정리 단추) */
   prunable: number;
+  /** 등록된 원격 이름 (tag push 대상·지울 곳 칸) */
+  remotes: readonly string[];
+  /** 원격별 tag 상태 보고서 (지울 곳 칸의 해당 개수·경고, B5) */
+  tagReports: TagReports;
+  /** 원격 tag 를 확인하는 중인지 (확인 단추·메뉴를 끈다) */
+  tagChecking: boolean;
 }
 
 /** 메뉴가 부르는 세션 동작 (세션 스토어의 것을 그대로 받는다) */
@@ -47,7 +56,9 @@ export type RepoBranchSession = Pick<
   | 'fetch'
   | 'push'
   | 'deleteRemoteBranch'
-  | 'deleteTag'
+  | 'pushTags'
+  | 'deleteTagsScoped'
+  | 'checkRemoteTags'
   | 'backupRestore'
   | 'backupDelete'
   | 'worktreeRemoveCheck'
@@ -59,8 +70,11 @@ export type RepoBranchSession = Pick<
   | 'worktreeAdd'
 >;
 
-/** 확인·입력 대화상자 (`useDialogs` 의 것) */
-export type RepoBranchDialogs = Pick<ReturnType<typeof useDialogs>, 'confirm' | 'prompt'>;
+/** 확인·입력 대화상자 (`useDialogs` 의 것). 둘째 선택지는 tag 삭제의 "다를 때" 확인이 쓴다 */
+export type RepoBranchDialogs = Pick<
+  ReturnType<typeof useDialogs>,
+  'confirm' | 'confirmChoice' | 'prompt'
+>;
 
 /** 컨테이너가 주입하는 동작 묶음 */
 export interface RepoBranchDeps {
@@ -71,6 +85,8 @@ export interface RepoBranchDeps {
   openRepositoryAt: (path: string, parent?: SessionId | null) => Promise<SessionId | null>;
   /** 글자를 클립보드에 넣는다 (이름 복사) */
   copyText: (text: string) => void;
+  /** 이 저장소의 태그 문서를 연다 (C3a, `openTagsDoc`). 요청(C4: 모든 tag push·원격에만 보기)을 함께 줄 수 있다 */
+  openTagsDoc: (request?: TagsDocRequestInput) => void;
 }
 
 /** 쓰기를 막는 상태인지: 다른 작업 실행 중이거나 진행 중 작업이 있다 (옛 사이드바의 `disabled`) */
@@ -309,33 +325,96 @@ function remoteItems(
   ];
 }
 
-/** 태그 메뉴 3개 (옛 사이드바 그대로) */
+/**
+ * 태그 메뉴 (TG-01·03): 그 commit 으로 분리 checkout · ── push(원격 0 꺼짐 / 1 평면 / 2+ 하위 메뉴) · 삭제…(지울 곳) ·
+ * ── 이름 복사. push·삭제는 `tag-flows` 를 로그 행 메뉴와 같이 쓰고, 실행 중일 때만 꺼진다
+ */
 function tagItems(target: Extract<RepoBranchTarget, { kind: 'tag' }>, deps: RepoBranchDeps) {
-  const { state, session: s, dialogs } = deps;
+  const { state, session: s } = deps;
   const name = target.label.shortName;
+  const [first, ...rest] = tagWriteItems(name, {
+    session: s,
+    dialogs: deps.dialogs,
+    remotes: state.remotes,
+    busy: state.busy,
+    reports: state.tagReports,
+  });
   const items: MenuItem[] = [
     {
       label: S.menu.checkoutDetached,
       disabled: writeBlocked(state),
       onSelect: () => void s.checkout({ kind: 'commit', oid: target.label.target }),
     },
-    {
-      label: S.menu.delete,
-      danger: true,
-      disabled: state.busy,
-      onSelect: () =>
-        void dialogs
-          .confirm({
-            title: S.dialog.deleteTag(name),
-            message: '',
-            confirmLabel: S.dialog.delete,
-            danger: true,
-          })
-          .then((ok) => (ok ? s.deleteTag(name) : undefined)),
-    },
+    ...(first ? [{ ...first, separator: true }] : []),
+    ...rest,
     { label: S.menu.copyName, separator: true, onSelect: () => deps.copyText(name) },
   ];
   return items;
+}
+
+/** 원격 tag 확인을 지금 할 수 없는지: 원격이 없거나 이미 확인 중이다 (busy 와는 무관, D15) */
+function tagCheckBlocked(state: RepoBranchMenuState): boolean {
+  return state.remotes.length === 0 || state.tagChecking;
+}
+
+/**
+ * 모든 tag push 항목 (TG-13): 원격이 없으면 꺼진 항목, 하나면 평면 `origin 로 모든 tag push…`, 둘 이상이면 원격 이름
+ * 하위 메뉴. 누르면 문서를 열고 그 원격을 확인해 "로컬에만" 을 모두 골라 둔다 (보내기는 문서의 push 단추로)
+ */
+function pushAllItem(deps: RepoBranchDeps): MenuItem {
+  const { remotes } = deps.state;
+  const open = (remote: string) => () => deps.openTagsDoc({ kind: 'pushAll', remote });
+  const [only] = remotes;
+  if (only === undefined) {
+    return { label: S.tag.pushAll, disabled: true };
+  }
+  if (remotes.length === 1) {
+    return { label: S.tag.pushAllTo(only), onSelect: open(only) };
+  }
+  return {
+    label: S.tag.pushAll,
+    children: remotes.map((remote) => ({ label: remote, onSelect: open(remote) })),
+  };
+}
+
+/**
+ * 원격에만 있는 tag 보기 항목 (C4): 확인한 원격에 원격에만 있는 tag 가 있을 때만. 그런 tag 가 있는 첫 원격의 "원격에만"
+ * 필터로 문서를 연다. 개수는 원격들을 합친 것 (트리 요약과 같다)
+ */
+function remoteOnlyItems(deps: RepoBranchDeps): MenuItem[] {
+  const { remotes, tagReports } = deps.state;
+  const count = tagGroupSync(tagReports, remotes, [])?.remoteOnly ?? 0;
+  const remote = remotes.find((r) => {
+    const report = tagReports[r];
+    return isChecked(report) && report.entries.some((e) => e.state.kind === 'remoteOnly');
+  });
+  if (count === 0 || remote === undefined) {
+    return [];
+  }
+  return [
+    {
+      label: S.tag.showRemoteOnly(count),
+      onSelect: () => deps.openTagsDoc({ kind: 'remoteOnly', remote }),
+    },
+  ];
+}
+
+/**
+ * Tags 묶음 메뉴 (TG-09 ③, TG-10 ①, TG-13): tag 관리 열기 · 모든 tag push… · (원격에만 있는 tag 보기) · ── 원격 tag 확인
+ * (모든 원격). 행 끝 단추(열기·확인)와 같은 일이다 — 행 단추에는 Tab 정지가 없어 키보드로는 이 메뉴로 한다
+ */
+function tagGroupItems(deps: RepoBranchDeps): MenuItem[] {
+  return [
+    { label: S.tag.doc.open, onSelect: () => deps.openTagsDoc() },
+    pushAllItem(deps),
+    ...remoteOnlyItems(deps),
+    {
+      separator: true,
+      label: S.tag.check.action,
+      disabled: tagCheckBlocked(deps.state),
+      onSelect: () => void deps.session.checkRemoteTags(),
+    },
+  ];
 }
 
 /** 워크트리 메뉴 4개 (옛 사이드바 그대로): 열기, 삭제, 잠금·잠금 해제, 사라진 워크트리 정리 */
@@ -461,6 +540,8 @@ export function repoBranchMenu(target: RepoBranchTarget, deps: RepoBranchDeps): 
       return remoteItems(target, deps);
     case 'tag':
       return tagItems(target, deps);
+    case 'tagGroup':
+      return tagGroupItems(deps);
     case 'worktreeGroup':
       return worktreeGroupItems(deps);
     case 'worktree':
@@ -472,9 +553,27 @@ export function repoBranchMenu(target: RepoBranchTarget, deps: RepoBranchDeps): 
 
 /**
  * 그룹 행 끝의 단추 (옛 섹션 머리 단추): Worktrees 의 "사라진 워크트리 정리"(폴더가 사라진 워크트리가 있을 때만,
- * 툴팁은 그 수) · "워크트리 만들기…". 다른 노드에는 없다. 행마다 그릴 때 불리므로 노드 id 만 본다
+ * 툴팁은 그 수) · "워크트리 만들기…", Tags 의 "tag 관리 열기"(C3a) · "원격 tag 확인"(B5). 다른 노드에는 없다. 행마다 그릴 때 불리므로 노드 id
+ * 만 본다
  */
 export function repoBranchRowActions(nodeId: string, deps: RepoBranchDeps): BranchRowAction[] {
+  if (nodeId === REPO_GROUP_IDS.tags) {
+    return [
+      {
+        key: 'openTagsDoc',
+        icon: 'tagsDoc',
+        label: S.tag.doc.open,
+        onSelect: () => deps.openTagsDoc(),
+      },
+      {
+        key: 'checkRemoteTags',
+        icon: 'rescan',
+        label: S.tag.check.action,
+        disabled: tagCheckBlocked(deps.state),
+        onSelect: () => void deps.session.checkRemoteTags(),
+      },
+    ];
+  }
   if (nodeId !== REPO_GROUP_IDS.worktrees) {
     return [];
   }

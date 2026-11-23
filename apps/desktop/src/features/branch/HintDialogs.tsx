@@ -1,8 +1,11 @@
 import type { SessionId } from '@mgit/ipc';
 import { ConfirmDialog, PromptDialog, S } from '@mgit/ui';
+import { useState } from 'react';
 import { bool, str } from '../../components/use-dialogs';
 import { type SessionState, useAppStore, useSession, useSessionOf } from '../../store';
 import { folderHintMode } from '../../store/repo-sessions';
+import type { PendingHint } from '../../store/session-store';
+import { commitPairLine } from '../tags/tag-flows';
 
 /** 힌트 대화상자가 읽는 세션 상태와 동작 */
 function pickHint(st: SessionState) {
@@ -23,6 +26,7 @@ function pickHint(st: SessionState) {
     setCommitNoVerify: st.setCommitNoVerify,
     commit: st.commit,
     opContinue: st.opContinue,
+    replaceRemoteTags: st.replaceRemoteTags,
   };
 }
 
@@ -364,6 +368,8 @@ function HintDialogsBody({
           onCancel={s.dismiss}
         />
       );
+    case 'tagExists':
+      return <TagExistsDialog key={h.names.join('\u0000')} hint={h} s={s} title={title} />;
     case 'pushUpstreamMismatch':
       return (
         <PromptDialog
@@ -427,4 +433,75 @@ function HintDialogsBody({
       );
     }
   }
+}
+
+/**
+ * tag 이름 충돌 안내 (TG-02): 알리기만 한다 — branch 의 강제 push 대화상자처럼 덮어쓰기를 권하지 않는다. 단일 조회가
+ * 끝나면 두 commit 을 보이고(B5), 원격 객체를 알면 둘째 단추 "원격 tag 를 로컬 것으로 덮어쓰기…"(C5)가 생긴다. 그 단추는
+ * 위험 확인(두 commit, 되돌릴 수 없음)으로 이어지고, 확인하면 확인한 원격 객체로 lease 를 건 push 한 번으로 덮어쓴다
+ */
+function TagExistsDialog({
+  hint,
+  s,
+  title,
+}: {
+  hint: Extract<PendingHint, { kind: 'tagExists' }>;
+  s: ReturnType<typeof pickHint>;
+  title: (t: string) => string;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [only] = hint.names;
+  const commits = hint.commits ?? [];
+  const lines = hint.commits?.map((c) => commitPairLine(c.name, c.remote, c.local));
+  // 덮어쓰기는 모든 tag 의 원격 객체(lease 기준)를 알 때만 할 수 있다
+  const items = commits.flatMap((c) =>
+    c.remoteObject === null
+      ? []
+      : [
+          {
+            name: c.name,
+            expectedRemote: c.remoteObject,
+            remoteCommit: c.remote,
+            localCommit: c.local,
+          },
+        ],
+  );
+  const canReplace = items.length > 0 && items.length === hint.names.length;
+  if (confirming) {
+    return (
+      <ConfirmDialog
+        open
+        title={title(S.tag.align.toLocalTitle(items.length, hint.remote))}
+        message={S.tag.align.toLocalMessage}
+        items={items.map((i) => commitPairLine(i.name, i.remoteCommit, i.localCommit))}
+        confirmLabel={S.tag.align.toLocalConfirm}
+        danger
+        onConfirm={() => {
+          s.dismiss();
+          void s.replaceRemoteTags(
+            hint.remote,
+            items.map((i) => ({ name: i.name, expectedRemote: i.expectedRemote })),
+          );
+        }}
+        onCancel={s.dismiss}
+      />
+    );
+  }
+  return (
+    <ConfirmDialog
+      open
+      title={title(
+        hint.names.length === 1 && only
+          ? S.tag.exists.title(only, hint.remote)
+          : S.tag.exists.titleMany(hint.names.length, hint.remote),
+      )}
+      message={S.tag.exists.message}
+      items={lines ?? (hint.names.length > 1 ? hint.names : undefined)}
+      confirmLabel={S.confirm.ok}
+      secondaryLabel={canReplace ? S.tag.exists.replace : undefined}
+      onSecondary={() => setConfirming(true)}
+      onConfirm={s.dismiss}
+      onCancel={s.dismiss}
+    />
+  );
 }

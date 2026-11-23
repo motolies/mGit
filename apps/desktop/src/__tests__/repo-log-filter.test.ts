@@ -225,6 +225,9 @@ describe('branch 드롭다운 ↔ ref 범위 (옛 "표시할 ref", 대조)', () 
     backups: [],
     radar: [],
     path: '/r',
+    tagReports: {},
+    remoteNames: [],
+    tagChecking: false,
     isFavorite: () => false,
   });
 

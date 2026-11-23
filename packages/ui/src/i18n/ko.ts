@@ -688,6 +688,8 @@ export const ko = {
     squashIntoParentTitle: (hash: string) => `${hash} 를 부모 commit 에 합칠까요?`,
     squashIntoParentMessage:
       '이 commit 의 변경이 부모에 들어가고 메시지는 부모 것을 남깁니다. 그 뒤 commit 들은 다시 쓰입니다.',
+    /** 로그 범위 선택 안의 행 메뉴 (범위를 하나로 합치기, MRG-07) */
+    squashRange: (n: number) => `선택한 commit ${n}개를 하나로 합치기…`,
     cherryPick: 'cherry-pick',
     revert: 'revert',
     reset: 'reset',
@@ -898,6 +900,228 @@ export const ko = {
     removeMessage: '원격 추적 branch 도 함께 지워집니다.',
     pushUrl: (url: string) => `push: ${url}`,
     close: '닫기',
+  },
+  // tag 관리 (BR-06, TG-01~05): push 메뉴, 지울 곳 대화상자, 원격 tag 가 다를 때 확인, 결과 알림
+  tag: {
+    /** 원격이 둘 이상일 때 하위 메뉴 이름 (하나면 `S.remote.pushTo`) */
+    pushMenu: 'push',
+    pushNoRemote: 'push (원격 없음)',
+    /** 로그 행 메뉴의 tag 하위 메뉴 */
+    logItem: (name: string) => `tag ${name}`,
+    pushed: (name: string, remote: string) => `tag ${name} 을(를) ${remote} 로 push 했습니다`,
+    pushedMany: (n: number, remote: string) => `tag ${n}개를 ${remote} 로 push 했습니다`,
+    upToDate: (name: string, remote: string) =>
+      `${remote} 에 같은 tag ${name} 이(가) 이미 있습니다`,
+    pushFailed: (remote: string, details: string) => `${remote} 로 push 하지 못한 tag: ${details}`,
+    /** 결과 상태 한 줄 (성공이 아닌 것) */
+    status: {
+      diverged: '원격 것이 로컬과 다름',
+      rejectedExists: '원격에 이름이 같은 다른 tag 가 있음',
+      rejectedStale: '원격이 그사이 바뀜',
+      failed: '실패',
+      unknown: '결과를 알 수 없음 — 원격을 다시 확인하세요',
+      notProcessed: '처리되지 않음',
+      /** 같은 요청의 다른 tag 가 달라 확인을 기다리느라 실행하지 않음 (실패 아님) */
+      notRun: '확인 대기',
+    },
+    /** 가져오기 결과 (TG-11) */
+    fetched: (name: string, remote: string, overwrite: boolean) =>
+      overwrite
+        ? `tag ${name} 을(를) ${remote} 것으로 바꿨습니다`
+        : `tag ${name} 을(를) ${remote} 에서 가져왔습니다`,
+    fetchedMany: (n: number, remote: string) => `tag ${n}개를 ${remote} 에서 가져왔습니다`,
+    fetchFailed: (remote: string, details: string) =>
+      `${remote} 에서 가져오지 못한 tag: ${details}`,
+    fetchRecheck: (remote: string) =>
+      `${remote} 에 없는 tag 가 섞여 아무것도 가져오지 않았습니다. 원격 확인 뒤 다시 시도하세요.`,
+    /** push 이름 충돌 안내 (TG-02): 아무것도 바꾸지 않았다 */
+    exists: {
+      title: (name: string, remote: string) =>
+        `${remote} 에 이름이 같은 다른 tag ${name} 이(가) 있습니다`,
+      titleMany: (n: number, remote: string) =>
+        `${remote} 에 이름이 같은 다른 tag 가 ${n}개 있습니다`,
+      message:
+        '원격에 이름이 같은 다른 tag 가 있어 push 하지 않았습니다. 아무것도 바뀌지 않았습니다.',
+      /** 둘째 단추 (C5, TG-02): 위험 확인으로 이어진다 */
+      replace: '원격 tag 를 로컬 것으로 덮어쓰기…',
+    },
+    /** 다름 해소 (C5, TG-15): 원격 것으로 / 로컬 것으로 맞추기 */
+    align: {
+      toRemote: '원격 것으로 맞추기…',
+      toLocal: '로컬 것으로 맞추기…',
+      toRemoteTitle: (name: string, remote: string) =>
+        `로컬 tag ${name} 을(를) ${remote} 것으로 바꿀까요?`,
+      toRemoteMessage:
+        '로컬 tag 가 원격 tag 와 같은 객체를 가리키게 됩니다. ↶ 되돌리기로 되돌릴 수 있습니다.',
+      toRemoteConfirm: '원격 것으로 바꾸기',
+      toLocalTitle: (n: number, remote: string) =>
+        n === 1
+          ? `${remote} 의 tag 를 로컬 것으로 덮어쓸까요?`
+          : `${remote} 의 tag ${n}개를 로컬 것으로 덮어쓸까요?`,
+      toLocalMessage: '이미 받아 간 저장소에는 옛 tag 가 남습니다. 되돌릴 수 없습니다.',
+      toLocalConfirm: '로컬 것으로 덮어쓰기',
+    },
+    replaced: (name: string, remote: string) =>
+      `${remote} 의 tag ${name} 을(를) 로컬 것으로 덮어썼습니다`,
+    replacedMany: (n: number, remote: string) =>
+      `${remote} 의 tag ${n}개를 로컬 것으로 덮어썼습니다`,
+    replaceFailed: (remote: string, details: string) =>
+      `${remote} 에서 덮어쓰지 못한 tag: ${details}`,
+    /** 지울 곳 대화상자와 삭제 결과 (TG-03·05) */
+    del: {
+      title: (name: string) => `tag '${name}' 지우기`,
+      titleMany: (n: number) => `tag ${n}개 지우기`,
+      message:
+        '원격을 고르면 그 원격에서 먼저 지우고, 고른 원격에서 모두 지워진 tag 만 로컬에서 지웁니다.',
+      /** 원격 상태를 모를 때의 K2 안내 (원격 확인 뒤에는 `comeBack(n)` 이 대신한다) */
+      comeBackMaybe:
+        '로컬에서만 지우면 원격에 남아 있는 tag 는 다음 fetch 때 다시 생길 수 있습니다.',
+      scope: '지울 곳',
+      local: '로컬',
+      localNote: '↶ 되돌리기로 되살릴 수 있음',
+      remoteNote: '되돌릴 수 없음',
+      /** 칸의 보조 글자 (TG-03 ⑥): 해당 개수·확인 안 함·원격에 없음 */
+      applies: (n: number) => `해당 ${n}개`,
+      notChecked: '확인 안 함',
+      absent: '이 원격에 없음',
+      /** 고른 것이 모두 원격에만 있을 때 로컬 칸의 사유 (C4) */
+      notLocal: '로컬에 없음',
+      /** 고른 지울 곳에 따른 경고 (TG-03 ⑥) */
+      comeBack: (n: number) =>
+        `로컬에서만 지우는 tag ${n}개가 원격에 남아 있어 다음 fetch 때 다시 생길 수 있습니다.`,
+      unpushedWarn: (n: number) =>
+        `push 하지 않은 tag ${n}개는 원격 어디에도 없습니다. 지우면 ↶ 되돌리기로만 되살릴 수 있습니다.`,
+      none: '지울 곳을 하나 이상 고르세요',
+      /** 원격이 없을 때의 확인창 설명 */
+      localUndo: '↶ 되돌리기로 되살릴 수 있습니다.',
+      done: (name: string, places: string) => `tag ${name} 을(를) 지웠습니다 (${places})`,
+      doneMany: (n: number, places: string) => `tag ${n}개를 지웠습니다 (${places})`,
+      remoteFailed: (remote: string, details: string) => `${remote}: ${details}`,
+      cancelled: '확인창에서 취소해 나머지는 지우지 않았습니다',
+      localKept: (names: string) => `로컬에 남긴 tag: ${names}`,
+      localFailed: (reason: string) => `로컬 삭제 실패: ${reason}`,
+    },
+    /** 원격 tag 가 로컬과 다를 때의 확인 (TG-04 ③, 사용자 결정 2) */
+    differs: {
+      title: (remote: string, n: number) =>
+        n === 1
+          ? `${remote} 의 tag 가 로컬과 다릅니다`
+          : `${remote} 의 tag ${n}개가 로컬과 다릅니다`,
+      message: '원격 tag 가 로컬과 다른 객체를 가리킵니다. 원격에서 지우면 되돌릴 수 없습니다.',
+      item: (name: string, remote: string, local: string) =>
+        `${name} — 원격 ${remote} · 로컬 ${local}`,
+      itemSameCommit: (name: string, commit: string) =>
+        `${name} — 같은 commit ${commit}, tag 객체만 다름`,
+      skip: '다른 tag 는 건너뛰고 삭제',
+      deleteAnyway: '그래도 원격에서 삭제',
+    },
+    /** 원격 tag 확인 (TG-08·09): 묶음 행 끝 단추·묶음 메뉴·팔레트 */
+    check: {
+      action: '원격 tag 확인',
+      /** 확인 실패 종류 */
+      failed: {
+        auth: '인증 실패',
+        network: '연결 실패',
+        other: '확인 실패',
+      },
+    },
+    /** 원격 하나에서의 tag 상태 (툴팁·지울 곳) */
+    state: {
+      localOnly: 'push 안 됨',
+      remoteOnly: '원격에만',
+      same: '같음',
+      diverged: '다름',
+      divergedSameCommit: '다름 (같은 commit, tag 객체만 다름)',
+      unknown: '알 수 없음',
+      notChecked: '확인 안 함',
+      /** 툴팁 한 줄 */
+      line: (remote: string, state: string) => `${remote}: ${state}`,
+    },
+    /** 브랜치 칸 표시 (TG-09): 행 suffix·배지, 묶음 머리 요약 */
+    tree: {
+      unpushed: 'push 안 됨',
+      differs: '다름',
+      summaryUnpushed: (n: number) => `push 안 됨 ${n}`,
+      summaryRemoteOnly: (n: number) => `원격에만 ${n}`,
+      summaryDiffers: (n: number) => `다름 ${n}`,
+      summarySame: '원격과 같음',
+      stale: '오래됨',
+      checking: '확인 중…',
+    },
+    /** 에디터 공간의 태그 문서 (C3a, TG-10) */
+    doc: {
+      title: '태그',
+      /** 트리 묶음 행 끝 단추·묶음 메뉴 */
+      open: 'tag 관리 열기',
+      remote: '비교할 원격',
+      noRemote: '원격이 없어 비교할 수 없습니다',
+      check: '원격 확인',
+      checking: '확인 중…',
+      notChecked: '확인 전 — 원격 확인을 누르면 원격과 견줍니다',
+      checkedAt: (time: string) => `확인 ${time}`,
+      search: 'tag 이름 검색',
+      filters: '상태 필터',
+      filter: {
+        all: '전체',
+        localOnly: '로컬에만',
+        remoteOnly: '원격에만',
+        same: '같음',
+        diverged: '다름',
+      },
+      filterCount: (label: string, n: number) => `${label} ${n}`,
+      list: 'tag 목록',
+      columns: {
+        name: '이름',
+        kind: '종류',
+        localCommit: '로컬 commit',
+        remoteCommit: '원격 commit',
+        state: '상태',
+        date: '날짜',
+      },
+      /** 줄 툴팁의 tag 만든 이 (annotated) */
+      tagger: (who: string) => `만든 이: ${who}`,
+      fetch: '가져오기',
+      kind: {
+        annotated: 'annotated',
+        lightweight: '경량',
+      },
+      /** 상태 칸: 확인 전 */
+      stateNotChecked: '—',
+      empty: {
+        noTags: 'tag 가 없습니다',
+        noMatch: '조건에 맞는 tag 가 없습니다',
+      },
+      selected: (n: number) => `${n}개 고름`,
+      showInLog: '로그에서 보기',
+    },
+    /** 태그 문서의 일괄 단추 (C4, TG-12 ①): 고른 것 가운데 해당하는 개수 */
+    batch: {
+      label: 'tag 일괄 작업',
+      push: (remote: string, n: number) => `${remote} 로 push (${n})`,
+      fetch: (n: number) => `가져오기 (${n})`,
+      del: (n: number) => `삭제… (${n})`,
+      /** 원격에 보낼 tag 가 많을 때의 시간 안내 (막지 않음, B4 실측) */
+      slow: 'tag 가 많아 몇 분 걸릴 수 있습니다. 진행 중에 취소할 수 있습니다.',
+    },
+    /** 결과 칸 (C4, TG-12 ②): 요약과 실패만 남긴 목록 */
+    result: {
+      summary: (title: string, ok: number, failed: number) =>
+        failed === 0 ? `${title}: ${ok}개 완료` : `${title}: ${ok}개 완료, ${failed}개 남음`,
+      push: (remote: string) => `${remote} 로 push`,
+      fetch: (remote: string) => `${remote} 에서 가져오기`,
+      toRemote: (remote: string) => `${remote} 것으로 맞추기`,
+      toLocal: (remote: string) => `${remote} 을(를) 로컬 것으로 덮어쓰기`,
+      del: '삭제',
+      localKept: '로컬에 남김',
+      list: '남은 tag',
+      retry: '실패한 것 다시 시도',
+      close: '결과 닫기',
+    },
+    /** 모든 tag push (TG-13): 묶음 메뉴·팔레트 */
+    pushAll: '모든 tag push…',
+    pushAllTo: (remote: string) => `${remote} 로 모든 tag push…`,
+    /** 원격에만 있는 tag 를 문서에서 본다 (C4) */
+    showRemoteOnly: (n: number) => `원격에만 있는 tag 보기 (${n})`,
   },
   stash: {
     save: 'stash 저장…',
@@ -1241,6 +1465,12 @@ export const ko = {
     fetch: 'Fetch (모든 원격)',
     pull: 'Pull',
     push: 'Push',
+    /** 모든 원격의 tag 상태를 확인한다 (TG-09) */
+    checkRemoteTags: '원격 tag 확인',
+    /** 태그 문서를 연다 (TG-10) */
+    tagsDoc: 'tag 관리',
+    /** 태그 문서에서 로컬에만 있는 tag 를 모두 골라 push 를 준비한다 (TG-13) */
+    pushAllTags: '모든 tag push…',
     search: 'commit 검색',
     quickSwitch: 'branch 전환…',
     createBranch: 'branch 만들기…',
@@ -1382,6 +1612,17 @@ export const ko = {
     mergesFlattened: '이 구간에 머지 commit 이 있습니다. 실행하면 머지가 사라지고 평탄해집니다.',
     messageLoading: '메시지를 불러오는 중…',
     stopped: 'edit 에서 멈췄습니다. 수정 후 Continue 하세요',
+    /** 범위를 하나로 합치기 (MRG-07): 대화상자와 실행 전 검사의 사유 */
+    squashRangeTitle: (n: number) => `commit ${n}개를 하나로 합치기`,
+    squashRangeMessage: (older: string, newer: string) =>
+      `${older} 부터 ${newer} 까지를 아래 메시지의 commit 하나로 합칩니다. 작성자는 가장 오래된 commit 의 것을 남기고, 그 뒤 commit 들은 다시 쓰입니다.`,
+    squashRangeRun: '합치기',
+    squashRangeMerges:
+      '범위나 그 위(HEAD 까지)에 merge commit 이 있어 하나로 합칠 수 없습니다. 이력을 펼치지 않으려면 merge commit 위의 commit 만 고르세요',
+    squashRangeNotOnBranch:
+      '범위가 현재 branch 에 없습니다. 그 branch 로 전환한 뒤 다시 시도하세요',
+    squashRangeMixed:
+      '범위의 줄이 현재 branch 의 이어진 commit 과 맞지 않습니다(다른 branch 의 commit 이 끼었거나 필터로 가린 commit 이 있음). 현재 branch 의 연속된 commit 만 고르세요',
   },
   dnd: {
     title: (from: string, head: string) => `${from} → ${head}`,
@@ -1792,6 +2033,8 @@ export const ko = {
     sessionNotFound: '세션을 찾을 수 없습니다',
     gitFailed: (args: readonly string[], stderr: string) =>
       `git ${args.join(' ')} 실패${stderr ? `: ${stderr.trim()}` : ''}`,
+    /** push 를 서버가 거부했다 (`[remote rejected]`, hook 등). 강제 push 로 풀리지 않으니 사유만 보인다 (TG-02·07) */
+    remoteRejected: (reason: string) => `서버가 거부함: ${reason}`,
     cancelled: '취소됨',
     conflictMarkers: (files: readonly string[]) => `충돌 마커가 남아 있습니다: ${files.join(', ')}`,
     nestedRepos: (paths: readonly string[]) => `하위 저장소가 있습니다: ${paths.join(', ')}`,

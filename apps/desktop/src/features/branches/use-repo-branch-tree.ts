@@ -7,7 +7,8 @@
 
 import type { SessionId } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { type ReactNode, useCallback, useMemo } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { openTagsDoc } from '../../actions';
 import { useDialogs } from '../../components/use-dialogs';
 import type { GitLogSide } from '../../layout/GitLogSplit';
 import { headBranchOf, useAppStore, useSession, useWorkspace } from '../../store';
@@ -59,10 +60,18 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
   const s = useSession((st) => ({
     id: st.id,
     path: st.path,
+    name: st.name,
     labels: st.refs.labels,
     head: st.refs.head,
     worktrees: st.refs.worktrees,
     hasRemotes: st.refs.remotes.length > 0,
+    // 원격 목록은 참조 그대로 고른다 (선택자 안에서 이름 배열을 만들면 매번 새 배열이라 얕은 비교가 깨진다)
+    remotes: st.refs.remotes,
+    // 원격 tag 상태 (B5): 확인 중 여부는 불리언으로 고른다 (배열은 바뀔 때마다 새 값)
+    tagReports: st.tagReports,
+    tagChecking: st.tagChecking.length > 0,
+    checkRemoteTags: st.checkRemoteTags,
+    reloadRemoteTags: st.reloadRemoteTags,
     headBranch: headBranchOf(st.refs),
     backups: st.backups,
     radar: st.radar,
@@ -86,7 +95,8 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
     fetch: st.fetch,
     push: st.push,
     deleteRemoteBranch: st.deleteRemoteBranch,
-    deleteTag: st.deleteTag,
+    pushTags: st.pushTags,
+    deleteTagsScoped: st.deleteTagsScoped,
     backupRestore: st.backupRestore,
     backupDelete: st.backupDelete,
     worktreeRemoveCheck: st.worktreeRemoveCheck,
@@ -100,9 +110,19 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
   const openRepositoryAt = useAppStore((st) => st.openRepositoryAt);
   const view: BranchTreeViewState = useWorkspace((w) => w.branchTree) ?? INITIAL_BRANCH_TREE_VIEW;
   const setView = useWorkspace((w) => w.setBranchTree);
+  const openDoc = useWorkspace((w) => w.openDoc);
+  const setTagsView = useWorkspace((w) => w.setTagsView);
   const [favorites, setFavorites] = useBranchFavorites(s.path === '' ? null : s.path);
   const dialogs = useDialogs();
-  const { confirm, prompt } = dialogs;
+  const { confirm, confirmChoice, prompt } = dialogs;
+  const remoteNames = useMemo(() => s.remotes.map((r) => r.name), [s.remotes]);
+  // 트리가 보이면 이미 확인한 보고서를 네트워크 없이 읽는다 (같은 저장소의 다른 탭이 확인한 캐시 포함, TG-08 ②)
+  const reloadRemoteTags = s.reloadRemoteTags;
+  useEffect(() => {
+    if (remoteNames.length > 0) {
+      void reloadRemoteTags({ all: true });
+    }
+  }, [reloadRemoteTags, remoteNames]);
 
   const source = useMemo<RepoBranchSource>(
     () => ({
@@ -112,8 +132,21 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
       backups: s.backups,
       radar: s.radar,
       path: s.path,
+      tagReports: s.tagReports,
+      remoteNames,
+      tagChecking: s.tagChecking,
     }),
-    [s.labels, s.head, s.worktrees, s.backups, s.radar, s.path],
+    [
+      s.labels,
+      s.head,
+      s.worktrees,
+      s.backups,
+      s.radar,
+      s.path,
+      s.tagReports,
+      remoteNames,
+      s.tagChecking,
+    ],
   );
   const nodes = useMemo(
     () =>
@@ -136,13 +169,23 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
         isolatedBranch: s.isolatedBranch,
         graphQuery: s.graphQuery,
         prunable: s.worktrees.filter((w) => w.prunable !== null).length,
+        remotes: remoteNames,
+        tagReports: s.tagReports,
+        tagChecking: s.tagChecking,
       },
       session: s,
-      dialogs: { confirm, prompt },
+      dialogs: { confirm, confirmChoice, prompt },
       openRepositoryAt,
       copyText,
+      openTagsDoc: (request) =>
+        openTagsDoc(
+          openDoc && setTagsView ? { openDoc, setTagsView } : null,
+          s.path,
+          s.name,
+          request,
+        ),
     }),
-    [s, confirm, prompt, openRepositoryAt],
+    [s, confirm, confirmChoice, prompt, remoteNames, openRepositoryAt, openDoc, setTagsView],
   );
 
   const jumpToCommit = s.jumpToCommit;
@@ -168,7 +211,7 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
     },
     [source, deps],
   );
-  /** 우클릭 메뉴. 대상이 없는 노드(Local·Remote·Tags·Backups 그룹)는 빈 목록이라 메뉴를 열지 않는다 */
+  /** 우클릭 메뉴. 대상이 없는 노드(Local·Remote·Backups 그룹)는 빈 목록이라 메뉴를 열지 않는다 */
   const menu = useCallback(
     (node: BranchTreeNode) => {
       const target = repoBranchTarget(node.id, source);

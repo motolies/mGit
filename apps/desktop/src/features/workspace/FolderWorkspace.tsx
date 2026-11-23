@@ -60,6 +60,9 @@ function renderDoc(doc: EditorDoc, repoTools: (doc: EditorDoc) => FileViewRepoTo
     case 'historyDiff':
       // 저장소 탭만 파생한다 (W20). 폴더 탭은 커밋 diff 를 폴더 API 문서(`commitDiff`)로 연다
       return null;
+    case 'tags':
+      // 저장소 탭의 문서다 (C3a, 폴더 탭은 tag 관리를 하지 않는다)
+      return null;
   }
 }
 

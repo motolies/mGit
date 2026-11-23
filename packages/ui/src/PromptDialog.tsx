@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from './Button';
 import styles from './ConfirmDialog.module.css';
+import { DialogItems } from './DialogItems';
 import { isImeKey } from './keys';
 import { S } from './strings';
 import { useNativeDialog } from './use-native-dialog';
@@ -37,8 +38,15 @@ export interface PromptDialogProps {
   title: string;
   /** 제목 아래 설명 */
   message?: string;
+  /** 영향 범위 목록 (tag 이름 등). 설명 아래에 20개까지 보이고 나머지는 "외 N개" (`ConfirmDialog` 와 같은 모양) */
+  items?: readonly string[];
   fields: readonly PromptField[];
   confirmLabel?: string;
+  /**
+   * 되돌릴 수 없는 작업이면 확인 단추를 빨갛게 하고, 체크 칸에서 Enter 를 눌러도 제출하지 않는다 — 칸을 고르다 실수로
+   * 실행하지 않게. 기본은 false (지금까지의 동작)
+   */
+  danger?: boolean;
   /** 확인 외의 두 번째 선택지. 입력값 없이 바로 실행된다 */
   secondaryLabel?: string;
   onSecondary?: () => void;
@@ -46,6 +54,11 @@ export interface PromptDialogProps {
    * 필드를 넘는 검증 (W19, 예: 대상 저장소를 하나 이상 체크). 사유를 돌려주면 확인 단추를 끄고 단추 옆에 사유를 보인다
    */
   validate?: PromptValidate;
+  /**
+   * 지금 값에 따른 경고 한 줄 (막지 않는다 — 예: tag 지울 곳에서 "다시 생길 수 있습니다"). 단추 줄 위에 보인다. 없으면
+   * 그리지 않는다 (지금까지의 모양)
+   */
+  notice?: (values: Readonly<Record<string, string | boolean>>) => string | null;
   onConfirm: (values: Record<string, string | boolean>) => void;
   onCancel: () => void;
 }
@@ -101,11 +114,14 @@ export function PromptDialog({
   open,
   title,
   message,
+  items,
   fields,
   confirmLabel,
+  danger = false,
   secondaryLabel,
   onSecondary,
   validate,
+  notice,
   onConfirm,
   onCancel,
 }: PromptDialogProps) {
@@ -138,6 +154,7 @@ export function PromptDialog({
   });
   const invalid = validate ? validate(values) : null;
   const valid = filled && invalid === null;
+  const warning = notice ? notice(values) : null;
 
   /** 필드 하나 (`index` 는 전체 목록에서의 차례 — 첫 입력 칸이 포커스를 받는다) */
   const renderField = (f: PromptField, index: number) => {
@@ -159,6 +176,13 @@ export function PromptDialog({
               aria-describedby={f.note ? noteId : undefined}
               checked={!f.disabled && values[f.key] === true}
               onChange={(e) => setValues({ ...values, [f.key]: e.target.checked })}
+              onKeyDown={(e) => {
+                // 위험한 대화상자: 체크 칸의 Enter 는 폼 제출(암묵적 제출)로 가지 않는다. keydown 을 막으면 제출을
+                // 일으키는 keypress 가 나오지 않는다. 칸 토글은 Space, 실행은 확인 단추로만 한다
+                if (danger && e.key === 'Enter') {
+                  e.preventDefault();
+                }
+              }}
             />
             {f.label}
             {f.note ? (
@@ -243,6 +267,7 @@ export function PromptDialog({
             {message}
           </p>
         ) : null}
+        <DialogItems items={items} />
         {promptSegments(fields).flatMap((segment) =>
           segment.group === null
             ? segment.fields.map(({ field, index }) => renderField(field, index))
@@ -255,6 +280,11 @@ export function PromptDialog({
                 </fieldset>,
               ],
         )}
+        {warning ? (
+          <p className={styles.notice} role="status">
+            {warning}
+          </p>
+        ) : null}
         <div className={styles.actions}>
           {invalid !== null ? (
             <span className={styles.invalid} role="status">
@@ -269,7 +299,12 @@ export function PromptDialog({
               {secondaryLabel}
             </Button>
           ) : null}
-          <Button type="submit" variant="primary" disabled={!valid}>
+          <Button
+            type="submit"
+            variant="primary"
+            className={danger ? styles.danger : undefined}
+            disabled={!valid}
+          >
             {confirmLabel ?? S.confirm.ok}
           </Button>
         </div>

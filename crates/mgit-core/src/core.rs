@@ -114,6 +114,8 @@ pub struct CoreInner {
     next_auth_tag: AtomicU64,
     /// 세션마다 마지막 포함 브랜치 요청 (W18: 새 요청이 앞 요청의 git 을 끝낸다)
     pub(crate) containing: crate::inspect::LatestRequests,
+    /// 원격 tag 상태 캐시 (TG-08): 저장소(`common_dir`)·원격별, 메모리에만
+    pub(crate) tag_cache: crate::tag_cache::TagCache,
 }
 
 impl CoreInner {
@@ -242,6 +244,16 @@ impl CoreInner {
         session.stop_auto_fetch();
         session.stop_watch();
         session.abort_load();
+        // 같은 저장소(워크트리)를 쓰는 세션이 더 없으면 원격 tag 캐시를 지운다 (TG-08 ②)
+        let shared = self
+            .sessions
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .any(|s| s.id != session.id && s.info.common_dir == session.info.common_dir);
+        if !shared {
+            self.tag_cache.remove_repo(&session.info.common_dir);
+        }
     }
 
     /// 세션을 닫힘으로 바꾸고 목록에서 뺀다. `life` 를 쥔 쪽이 부른다 (잠금 순서 `life` → `sessions`)
@@ -367,6 +379,7 @@ impl Core {
             credential_outcome: RwLock::new(None),
             next_auth_tag: AtomicU64::new(1),
             containing: crate::inspect::LatestRequests::default(),
+            tag_cache: crate::tag_cache::TagCache::default(),
         });
         let hook: Weak<dyn CommandLogHook> = Arc::downgrade(&inner) as Weak<dyn CommandLogHook>;
         logged.set_hook(hook);
@@ -724,7 +737,7 @@ impl Core {
         });
     }
 
-    /// 자동 fetch (RM-02): 설정된 간격마다 `fetch --all` 을 조용히 돈다. 실패는 로그만 남긴다
+    /// 자동 fetch (RM-02): 설정된 간격마다 `fetch --all --prune --no-prune-tags` 를 조용히 돈다. 실패는 로그만 남긴다
     fn start_auto_fetch(&self, session: &Arc<RepoSession>) {
         let Some(interval) = self.inner.cfg.auto_fetch_interval else {
             return;
@@ -751,11 +764,18 @@ impl Core {
                 let before = mgit_git::cmd::remote_refs(core.runner(), &wt)
                     .await
                     .unwrap_or_default();
-                // 사용자 작업이 아니므로 undo 항목을 만들지 않는다 (태그를 받으면 ref 가 바뀐다)
-                let spec = crate::write::WriteSpec::new(["fetch", "--all", "--prune"])
-                    .network()
-                    .no_undo();
-                if let Err(e) = core.run_write(&session, spec).await {
+                // 사용자 작업이 아니므로 undo 항목을 만들지 않는다 (태그를 받으면 ref 가 바뀐다).
+                // `fetch.pruneTags=true` 여도 아직 push 하지 않은 로컬 tag 를 백그라운드에서 지우지 않는다
+                // (TG-16, 되돌릴 수 없으므로). 수동 fetch 는 사용자 설정을 따른다
+                let spec =
+                    crate::write::WriteSpec::new(["fetch", "--all", "--prune", "--no-prune-tags"])
+                        .network()
+                        .no_undo();
+                // 원격 tag 를 받아 왔으면 원격 tag 캐시를 오래됨으로 (TG-08 ④)
+                let tags_before = core.tag_marks(&session);
+                let fetched = core.run_write(&session, spec).await;
+                core.after_fetch(&session, tags_before);
+                if let Err(e) = fetched {
                     tracing::debug!(session = ?session.id, error = %e, "자동 fetch 실패");
                     continue;
                 }

@@ -97,7 +97,17 @@ export function ContextMenuArea<T>({
         </div>
       </RadixMenu.Trigger>
       <RadixMenu.Portal>
-        <RadixMenu.Content className={styles.content}>
+        <RadixMenu.Content
+          className={styles.content}
+          onCloseAutoFocus={(e) => {
+            // 메뉴가 닫히면 우클릭한 자리로 포커스를 돌린다. 다만 고른 항목이 포커스를 다른 곳(새로 연 문서의 목록 등)으로
+            // 이미 옮겼으면 되돌리지 않는다 — 되돌리면 그 이동을 덮는다. 아무 데도 없으면(body) 지금처럼 돌린다
+            const active = document.activeElement;
+            if (active && active !== document.body) {
+              e.preventDefault();
+            }
+          }}
+        >
           {target !== null ? renderItems(items(target)) : null}
         </RadixMenu.Content>
       </RadixMenu.Portal>

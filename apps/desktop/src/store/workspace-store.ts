@@ -104,11 +104,28 @@ export interface HistoryDiffTarget {
 export type SessionDocTarget = WorktreeDiffTarget | HistoryDiffTarget | ConflictTarget;
 
 /**
+ * 저장소 탭의 태그 문서 (C3a, TG-10). 저장소당 하나이고 늘 고정 탭으로 연다. 화면 상태(원격·필터·검색·정렬·선택)는
+ * 탭의 워크스페이스(`tagsView`)에 두고 저장하지 않는다
+ */
+export interface TagsDocTarget {
+  kind: 'tags';
+  /** 저장소 절대 경로 (저장소 탭의 작업 트리) */
+  repoPath: string;
+  /** 표시용 저장소 이름 (탭 보조 글자) */
+  repoName: string;
+}
+
+/**
  * 문서가 가리키는 대상. 종류마다 필요한 필드를 여기에 더한다.
  * 세션에 묶인 문서(작업 트리 diff, 커밋·범위 파일 diff, 충돌)는 `docs` 에 저장하지 않고 세션 상태에서 파생해
  * `sessionDocs` 로 받는다 (W14~W15, W20)
  */
-export type DocTarget = { kind: 'overview' } | CommitDiffTarget | FileViewTarget | SessionDocTarget;
+export type DocTarget =
+  | { kind: 'overview' }
+  | CommitDiffTarget
+  | FileViewTarget
+  | SessionDocTarget
+  | TagsDocTarget;
 
 /** 열려는 문서. `id` 가 같으면 같은 탭이다 */
 export type DocRequest = DocTarget & { id: string };
@@ -179,6 +196,16 @@ export function conflictDoc(target: Omit<ConflictTarget, 'kind'>): DocRequest {
   return { kind: 'conflict', ...target, id: conflictDocId(target.repoPath) };
 }
 
+/** 태그 문서의 id: 저장소로 정한다 (저장소당 하나) */
+export function tagsDocId(repoPath: string): string {
+  return `tags:${repoPath}`;
+}
+
+/** 태그 문서 요청을 만든다 */
+export function tagsDoc(target: Omit<TagsDocTarget, 'kind'>): DocRequest {
+  return { kind: 'tags', ...target, id: tagsDocId(target.repoPath) };
+}
+
 /** 문서가 속한 저장소의 절대 경로 (WS-07). 개요나 저장소 밖 파일은 null */
 export function docRepoPath(doc: DocTarget): string | null {
   switch (doc.kind) {
@@ -189,6 +216,7 @@ export function docRepoPath(doc: DocTarget): string | null {
     case 'worktreeDiff':
     case 'historyDiff':
     case 'conflict':
+    case 'tags':
       return doc.repoPath;
   }
 }
@@ -329,6 +357,7 @@ export function isSessionDoc(doc: DocTarget): doc is SessionDocTarget {
     case 'overview':
     case 'commitDiff':
     case 'file':
+    case 'tags':
       return false;
   }
 }
@@ -504,6 +533,50 @@ export const INITIAL_BRANCH_TREE_VIEW: BranchTreeViewState = {
   search: '',
 };
 
+/** 태그 문서의 상태 필터 (TG-10 ③): 전체 또는 고른 원격과 견준 상태 하나 */
+export type TagFilter = 'all' | 'localOnly' | 'remoteOnly' | 'same' | 'diverged';
+
+/** 태그 문서의 정렬 열: 이름·상태·날짜 (날짜는 `tag_list`, C3b) */
+export type TagSortKey = 'name' | 'state' | 'date';
+
+/**
+ * 태그 문서를 여는 쪽이 남기는 요청 (C4): 문서가 받아 처리하고 지운다. `seq` 가 바뀌어야 새 요청이다
+ * - `pushAll` (TG-13): 그 원격(null 이면 기본 원격)을 확인하고 "로컬에만" 을 모두 골라 push 단추에 포커스
+ * - `remoteOnly`: 그 원격의 "원격에만" 필터로 연다
+ */
+export type TagsDocRequest =
+  | { kind: 'pushAll'; remote: string | null; seq: number }
+  | { kind: 'remoteOnly'; remote: string; seq: number };
+
+/** 태그 문서의 화면 상태 (TG-10 ⑦): 탭의 워크스페이스에 두고 저장하지 않는다 */
+export interface TagsViewState {
+  /** 견줄 원격. null 이면 기본(업스트림의 원격 → origin → 첫 원격) */
+  remote: string | null;
+  filter: TagFilter;
+  search: string;
+  sort: { key: TagSortKey; desc: boolean };
+  /** 고른 tag 이름 (다중 선택, 필터로 숨어도 남는다) */
+  selected: readonly string[];
+  /** 키보드 커서가 있는 tag 이름 */
+  cursor: string | null;
+  /** 범위 선택(⇧)의 기준 tag 이름 */
+  anchor: string | null;
+  /** 여는 쪽의 요청 (처리하면 null) */
+  request: TagsDocRequest | null;
+}
+
+/** 태그 문서 화면 상태의 처음 값: 전체, 이름 역순 (새 버전이 위로) */
+export const INITIAL_TAGS_VIEW: TagsViewState = {
+  remote: null,
+  filter: 'all',
+  search: '',
+  sort: { key: 'name', desc: true },
+  selected: [],
+  cursor: null,
+  anchor: null,
+  request: null,
+};
+
 /** 앱 탭 하나의 워크스페이스 화면 상태 (탭 id 별로 하나, 저장하지 않는다 — diff 옵션만 앱 전역 설정) */
 export interface WorkspaceState extends EditorTabs {
   rootKind: RootKind;
@@ -532,6 +605,8 @@ export interface WorkspaceState extends EditorTabs {
   diffOptions: DiffViewOptions;
   /** 저장소 탭 브랜치 트리의 펼침·고른 행·검색어 (W22). 폴더 탭은 쓰지 않는다 */
   branchTree: BranchTreeViewState;
+  /** 저장소 탭 태그 문서의 원격·필터·검색·정렬·선택 (C3a). 폴더 탭은 쓰지 않는다 */
+  tagsView: TagsViewState;
 
   openDoc(doc: DocRequest, mode: OpenMode): void;
   activateDoc(id: string): void;
@@ -580,6 +655,8 @@ export interface WorkspaceState extends EditorTabs {
   setDiffOptions(patch: Partial<DiffViewOptions>): void;
   /** 브랜치 트리 화면 상태의 일부를 바꾼다 (W22) */
   setBranchTree(patch: Partial<BranchTreeViewState>): void;
+  /** 태그 문서 화면 상태의 일부를 바꾼다 (C3a) */
+  setTagsView(patch: Partial<TagsViewState>): void;
 }
 
 export type WorkspaceStore = StoreApi<WorkspaceState>;
@@ -672,6 +749,7 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     commitCollapsed: [],
     commitReveal: null,
     branchTree: INITIAL_BRANCH_TREE_VIEW,
+    tagsView: INITIAL_TAGS_VIEW,
 
     openDoc(doc, mode) {
       const current = get().activeRepo;
@@ -786,6 +864,10 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
       const next = { ...get().diffOptions, ...patch };
       set({ diffOptions: next });
       writePref(PREF_DIFF_OPTIONS, next);
+    },
+
+    setTagsView(patch) {
+      set({ tagsView: { ...get().tagsView, ...patch } });
     },
 
     setBranchTree(patch) {

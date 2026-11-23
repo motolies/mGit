@@ -16,12 +16,17 @@ import {
   docClosed,
   docOpened,
   docPinned,
+  docRepoPath,
   type EditorTabs,
   fileViewDoc,
   fileViewDocId,
+  INITIAL_TAGS_VIEW,
   initialTabs,
+  isSessionDoc,
   OVERVIEW_DOC,
   PREF_DIFF_OPTIONS,
+  tagsDoc,
+  tagsDocId,
 } from '../store/workspace-store';
 
 /** 문서 요청. 지금 문서 종류는 개요뿐이라 id 만 달리해 여러 문서를 만든다 */
@@ -524,5 +529,39 @@ describe('W21 에서 더한 것·고친 것', () => {
     expect(docDetail(opening)).toBe('api');
     const opened = { ...opening, path: 'src/a.ts', draft: true };
     expect(docTitle(opened)).toBe(S.workspace.conflictTitle('a.ts', true));
+  });
+});
+
+describe('태그 문서 (C3a, TG-10)', () => {
+  it('저장소당 하나(id = 저장소)이고 저장소 문서다. 세션 문서가 아니다. 탭 글자는 "태그"와 저장소 이름', () => {
+    const doc = tagsDoc({ repoPath: '/r/web', repoName: 'web' });
+    expect(doc).toEqual({
+      kind: 'tags',
+      repoPath: '/r/web',
+      repoName: 'web',
+      id: tagsDocId('/r/web'),
+    });
+    expect(tagsDocId('/r/web')).not.toBe(tagsDocId('/r/api'));
+    expect(docRepoPath(doc)).toBe('/r/web');
+    expect(isSessionDoc(doc)).toBe(false);
+    expect(docTitle(doc)).toBe(S.tag.doc.title);
+    expect(docDetail(doc)).toBe('web');
+    expect(docTooltip(doc)).toBeUndefined();
+  });
+
+  it('고정 탭으로 열리고 다시 열면 같은 탭이다. 화면 상태는 탭의 워크스페이스에 일부씩 바뀐다', () => {
+    const ws = createWorkspaceStore('repo');
+    const doc = tagsDoc({ repoPath: '/r/web', repoName: 'web' });
+    ws.getState().openDoc(doc, 'pinned');
+    ws.getState().openDoc(doc, 'pinned');
+    expect(ws.getState().docs.filter((d) => d.kind === 'tags')).toEqual([{ ...doc, pinned: true }]);
+    expect(ws.getState().activeDocId).toBe(doc.id);
+    expect(ws.getState().tagsView).toEqual(INITIAL_TAGS_VIEW);
+    ws.getState().setTagsView({ filter: 'localOnly', selected: ['v1'] });
+    expect(ws.getState().tagsView).toEqual({
+      ...INITIAL_TAGS_VIEW,
+      filter: 'localOnly',
+      selected: ['v1'],
+    });
   });
 });

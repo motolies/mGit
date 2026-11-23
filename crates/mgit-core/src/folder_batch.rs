@@ -22,6 +22,7 @@ use crate::error::CoreError;
 use crate::events::{CoreEvent, EventSink, SessionId};
 use crate::folder::{FolderSession, canonical_paths, repo_name};
 use crate::messages;
+use crate::refname::check_ref_name;
 
 /// 변경 보기의 동시 저장소 수
 const READ_CONCURRENCY: usize = 8;
@@ -165,21 +166,6 @@ impl BatchOp {
             _ => Ok(()),
         }
     }
-}
-
-/// 브랜치·ref 이름 검사 (옵션 오인·공백·제어 문자(NUL 포함)·`..` 방지)
-fn check_ref_name(name: &str) -> Result<(), CoreError> {
-    if name.is_empty()
-        || name.starts_with('-')
-        || name.contains("..")
-        || name.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err(CoreError::Invalid(tr!(
-            "잘못된 branch 이름: {name:?}",
-            "Invalid branch name: {name:?}"
-        )));
-    }
-    Ok(())
 }
 
 /// ref 전체 이름을 화면용 짧은 이름으로 (`refs/remotes/origin/x` → `origin/x`)
@@ -598,7 +584,18 @@ async fn run_batch_one(
             (a, false)
         }
     };
+    // fetch·pull 은 수동 fetch 경로다: 로컬 tag 집합이 바뀌면 열린 탭의 원격 tag 캐시를 오래됨으로 (TG-08 ④)
+    let fetches = matches!(&*op, BatchOp::Fetch { .. } | BatchOp::Pull);
+    let tags_before = if fetches {
+        inner.tag_marks_at(&d.common_dir, &d.work_tree).await
+    } else {
+        None
+    };
     let (ok, msg) = run_git(&inner, &d.work_tree, &args, network).await;
+    if tags_before.is_some() {
+        let tags_after = inner.tag_marks_at(&d.common_dir, &d.work_tree).await;
+        inner.stale_if_tags_changed(&d.common_dir, tags_before, tags_after);
+    }
     r.ok = ok;
     r.message = msg;
     r

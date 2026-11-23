@@ -668,6 +668,8 @@ pub enum GitHint {
     NothingToCommit,
     HookFailed,
     NoUpstream,
+    RemoteTagExists,
+    RemoteRejected { reason: String },
 }
 
 impl From<mgit_core::GitHint> for GitHint {
@@ -687,6 +689,8 @@ impl From<mgit_core::GitHint> for GitHint {
             H::NothingToCommit => GitHint::NothingToCommit,
             H::HookFailed => GitHint::HookFailed,
             H::NoUpstream => GitHint::NoUpstream,
+            H::RemoteTagExists => GitHint::RemoteTagExists,
+            H::RemoteRejected { reason } => GitHint::RemoteRejected { reason },
         }
     }
 }

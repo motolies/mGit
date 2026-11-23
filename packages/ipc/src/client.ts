@@ -52,6 +52,7 @@ import type {
   KeptResolution,
   LfsStatus,
   LineSelection,
+  LocalTag,
   MarkerHit,
   MergeMode,
   MergePreview,
@@ -74,6 +75,7 @@ import type {
   RecentEntry,
   ReflogEntry,
   RemoteProject,
+  RemoteTag,
   RenameConflict,
   RepoChanges,
   RepoOpened,
@@ -100,6 +102,10 @@ import type {
   SubmodulePointerLog,
   SubmoduleUnpushed,
   SyntaxCompare,
+  TagDeleteItem,
+  TagLeaseItem,
+  TagRefResult,
+  TagSyncReport,
   TimelineInfo,
   UndoOutcome,
   UndoState,
@@ -208,7 +214,53 @@ export interface IpcClient {
     message: string | null,
     sign?: boolean,
   ): Promise<void>;
-  deleteTag(session: SessionId, name: string): Promise<void>;
+  /**
+   * tag 관리 (BR-06): 고른 원격으로 tag 들을 push 한다 (TG-01). 요청 순서대로 tag 마다 결과 하나. operation 이벤트(kind
+   * `push`)가 붙는다. 첫 청크가 통째로 실패하면(인증·연결) `gitFailed` 로 거부된다
+   */
+  pushTags(session: SessionId, remote: string, names: string[]): Promise<TagRefResult[]>;
+  /**
+   * 고른 원격에서 tag 들을 지운다 (TG-04): 실행 직전에 조회하고 lease 로 지운다. 원격에 없으면 `alreadyAbsent`, 로컬과 다르면
+   * `diverged`(`remoteOid`·`remoteCommit`) — 확인한 뒤 그 `remoteOid` 를 `expectedRemote` 로 넘겨 다시 부른다
+   */
+  deleteRemoteTags(
+    session: SessionId,
+    remote: string,
+    items: TagDeleteItem[],
+  ): Promise<TagRefResult[]>;
+  /** 로컬 tag 들을 한 트랜잭션으로 지운다 (TG-06). undo 항목 하나 (`tag -d v1 v2 v3 (+N)`) */
+  deleteLocalTags(session: SessionId, names: string[]): Promise<void>;
+  /**
+   * 원격 tag 를 로컬 것으로 덮어쓴다 (TG-15 "로컬 것으로 맞추기"): 항목마다 확인한 원격 객체(`expectedRemote`)로 lease 를 건
+   * push 한 번. `pushed`(덮어씀)·`upToDate`·`rejectedStale`(그 사이 원격이 바뀜, 원격 그대로) 등. `--force` 단독 경로는 없고
+   * undo 항목도 없다. operation 이벤트(kind `push`)
+   */
+  replaceRemoteTags(
+    session: SessionId,
+    remote: string,
+    items: TagLeaseItem[],
+  ): Promise<TagRefResult[]>;
+  /**
+   * 원격 tag 상태 보고서 (TG-08). `remote` 가 null 이면 업스트림의 원격 → origin → 첫 원격. `refresh` 면 원격을 조회하고
+   * (operation 이벤트 kind `tagCheck` — 세션 busy 와 무관, 취소 가능), 아니면 네트워크 없이 캐시로 만든다. `checkedAt` 이
+   * null 이면 확인한 적이 없다. 조회 실패는 거부가 아니라 이전 값 + `lastError` 로 온다
+   */
+  remoteTags(session: SessionId, remote: string | null, refresh: boolean): Promise<TagSyncReport>;
+  /** 원격 tag 몇 개를 조회한다 (단일 조회, operation kind `tagCheck`). 원격에 있는 것만 요청 순서대로 */
+  lookupRemoteTags(session: SessionId, remote: string, names: string[]): Promise<RemoteTag[]>;
+  /**
+   * 원격 tag 를 받아 온다 (TG-11). `overwrite` 면 로컬의 다른 tag 를 원격 것으로 바꾼다 (TG-15). 결과는 tag 마다
+   * `fetched`·`upToDate`·`rejectedExists`(덮어쓰지 않음, `remoteOid` 는 원격 객체)·`unknown`. undo 항목 하나, operation
+   * 이벤트(kind `fetch`). 원격에 없는 이름이 섞이면 git 이 전체를 멈춰 `gitFailed` 로 거부된다 (다시 확인 후 재시도)
+   */
+  fetchTags(
+    session: SessionId,
+    remote: string,
+    names: string[],
+    overwrite: boolean,
+  ): Promise<TagRefResult[]>;
+  /** 로컬 tag 목록 (TG-10 열·툴팁): 종류·날짜(epoch 초)·commit 제목·tag 제목·tagger. 이름순 */
+  tagList(session: SessionId): Promise<LocalTag[]>;
   merge(session: SessionId, reference: string, mode: MergeMode): Promise<OpOutcome>;
   rebase(session: SessionId, onto: string, autostash: boolean): Promise<OpOutcome>;
   cherryPick(session: SessionId, oids: string[]): Promise<OpOutcome>;
@@ -743,7 +795,19 @@ export function createTauriClient(): IpcClient {
       voidCall(() => commands.setUpstream(session, branch, upstream)),
     createTag: (session, name, target, message, sign) =>
       voidCall(() => commands.createTag(session, name, target, message, sign ?? false)),
-    deleteTag: (session, name) => voidCall(() => commands.deleteTag(session, name)),
+    pushTags: (session, remote, names) => call(() => commands.pushTags(session, remote, names)),
+    deleteRemoteTags: (session, remote, items) =>
+      call(() => commands.deleteRemoteTags(session, remote, items)),
+    deleteLocalTags: (session, names) => voidCall(() => commands.deleteLocalTags(session, names)),
+    replaceRemoteTags: (session, remote, items) =>
+      call(() => commands.replaceRemoteTags(session, remote, items)),
+    remoteTags: (session, remote, refresh) =>
+      call(() => commands.remoteTags(session, remote, refresh)),
+    lookupRemoteTags: (session, remote, names) =>
+      call(() => commands.lookupRemoteTags(session, remote, names)),
+    fetchTags: (session, remote, names, overwrite) =>
+      call(() => commands.fetchTags(session, remote, names, overwrite)),
+    tagList: (session) => call(() => commands.tagList(session)),
     merge: (session, reference, mode) => call(() => commands.merge(session, reference, mode)),
     rebase: (session, onto, autostash) => call(() => commands.rebase(session, onto, autostash)),
     cherryPick: (session, oids) => call(() => commands.cherryPick(session, oids)),

@@ -5,11 +5,13 @@
 # - 원격 브랜치가 많은 저장소(W9): 합성 폴더의 저장소 하나를 복사해 원격 추적 ref 를 N개 더한다
 # - 큰 디렉터리·1 MiB 파일(W18): 파일 트리 나열·파일 읽기용 (git 저장소가 아니다)
 # - 변경 파일이 많은 저장소(W18): 폴더 stage·unstage 용 (추적 파일 N개가 모두 수정된 상태)
+# - tag 가 많은 저장소와 그 bare 원격(TG-17): 원격 상태가 같음·로컬에만·원격에만·다름으로 섞인 tag N개
 # 사용법: bench/setup.sh [git|rust|linux|<url>]
 #         bench/setup.sh folder [저장소 수=20] [저장소당 커밋 수=10000] [시각 배치=uniform|partial|clustered]
 #         bench/setup.sh remotes [원격 브랜치 수=300] [원본 저장소=repos/folder-20x10000/repo-01] [결과 이름=remotes-<수>]
 #         bench/setup.sh fs [항목 수=50000]
 #         bench/setup.sh stage [변경 파일 수=5000]
+#         bench/setup.sh tags [tag 이름 수=1000]
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p repos
@@ -231,6 +233,126 @@ make_stage() {
   echo "ready: $(pwd)/$root"
 }
 
+# tag 픽스처 한쪽(local|remote)의 fast-import 스트림을 표준 출력으로 낸다 (인자: 쪽, tag 이름 수 N).
+# 커밋 부분은 두 쪽이 바이트까지 같아 커밋 oid 가 같고, 같은 tag 는 annotated 객체 oid 까지 같다. 구성:
+# - main 한 줄기 커밋 N+1개 (1시간 간격). local 은 refs/remotes/origin/main 도 같은 끝을 가리킨다
+# - tag i(0부터)는 v<i/1000>.<i/100%10>.<i%100> 이고 i+1 번째 커밋을 가리킨다. i % 3 이 2 면 경량, 아니면 annotated
+# - 원격 상태(i % 20): 0·1 로컬에만, 2·3 원격에만, 4 다름(원격은 다음 커밋, 같은 종류),
+#   5 다름(같은 커밋, 원격은 종류가 반대 = diverged{sameCommit}), 나머지 같음
+tags_repo_stream() {
+  LC_ALL=C awk -v side="$1" -v n="$2" '
+    # tag 하나를 낸다. annotated 면 태그 객체, 아니면 ref 만. at 은 가리킬 커밋 표식, note 는 메시지 꼬리
+    function tag(name, at, annotated, note,    msg) {
+      if (annotated) {
+        msg = "Release " name note "\n"
+        printf "tag %s\nfrom :%d\n", name, at
+        printf "tagger Bench Tagger <tagger@example.invalid> %d +0000\n", ts[at] + 600
+        printf "data %d\n%s\n", length(msg), msg
+      } else {
+        printf "reset refs/tags/%s\nfrom :%d\n\n", name, at
+      }
+    }
+    BEGIN {
+      c = n + 1
+      for (seq = 1; seq <= c; seq++) {
+        ts[seq] = 1760000000 - (c - seq) * 3600
+        msg = "release " seq "\n"
+        body = seq "\n"
+        printf "commit refs/heads/main\nmark :%d\n", seq
+        printf "author Bench <bench@example.invalid> %d +0000\n", ts[seq] - 60
+        printf "committer Bench <bench@example.invalid> %d +0000\n", ts[seq]
+        printf "data %d\n%s", length(msg), msg
+        printf "M 100644 inline VERSION\ndata %d\n%s\n", length(body), body
+      }
+      if (side == "local") printf "reset refs/remotes/origin/main\nfrom :%d\n\n", c
+      for (i = 0; i < n; i++) {
+        name = sprintf("v%d.%d.%d", int(i / 1000), int(i / 100) % 10, i % 100)
+        annotated = (i % 3 != 2)
+        state = i % 20
+        if (state <= 1) {
+          if (side == "local") tag(name, i + 1, annotated, "")
+        } else if (state <= 3) {
+          if (side == "remote") tag(name, i + 1, annotated, "")
+        } else if (state == 4) {
+          if (side == "local") tag(name, i + 1, annotated, "")
+          else tag(name, i + 2, annotated, " (remote)")
+        } else if (state == 5) {
+          if (side == "local") tag(name, i + 1, annotated, "")
+          else tag(name, i + 1, !annotated, "")
+        } else {
+          tag(name, i + 1, annotated, "")
+        }
+      }
+    }'
+}
+
+# tag 가 많은 저장소와 그 bare 원격을 만든다 (인자: tag 이름 수 N = 로컬·원격의 합집합, TG-17). 결과는 repos/tags-<N>/:
+# - origin.git: bare 원격. repo-01: 작업 저장소이고 origin 의 URL 이 origin.git 의 절대 경로다 (로컬 경로라 네트워크 없음)
+# - 같음 70%·로컬에만 10%·원격에만 10%·다름 10%(그 절반이 같은 커밋). 구성은 tags_repo_stream 주석
+# - ref 는 pack-refs 로 묶는다 (clone·gc 뒤의 모양). repo-01 은 main 의 upstream 이 origin/main 이고 commit-graph 가 있다
+# 끝에 앱과 같은 ls-remote --tags(^{} 줄 포함)와 로컬 for-each-ref 를 객체 oid 로 견준 상태별 개수를 찍는다.
+# 이미 있으면 건너뛰고 개수만 찍는다 (다시 만들려면 폴더를 지운다)
+make_tags() {
+  local count=$1
+  if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt 20 ] || [ "$count" -gt 100000 ]; then
+    echo "usage: bench/setup.sh tags [tag 이름 수 20~100000]" >&2
+    exit 2
+  fi
+  local root="repos/tags-${count}"
+  local dir="$root/repo-01"
+  if [ ! -d "$root" ]; then
+    # 중간에 끊겨도 반쯤 만든 픽스처가 남지 않게 임시 폴더에 둘 다 만든 뒤 옮긴다
+    local tmp="repos/.tmp-tags-${count}"
+    rm -rf "$tmp"
+    mkdir -p "$tmp"
+    git init --quiet --bare --initial-branch=main "$tmp/origin.git"
+    tags_repo_stream remote "$count" | git -C "$tmp/origin.git" fast-import --quiet
+    git -C "$tmp/origin.git" pack-refs --all
+    git init --quiet --initial-branch=main "$tmp/repo-01"
+    tags_repo_stream local "$count" | git -C "$tmp/repo-01" fast-import --quiet
+    git -C "$tmp/repo-01" pack-refs --all
+    # fast-import 는 객체만 만든다. 작업 트리·인덱스를 main 으로 채워야 status 가 깨끗하다
+    git -C "$tmp/repo-01" reset --quiet --hard
+    # 원격 URL 은 옮긴 뒤의 bare 저장소 절대 경로다
+    git -C "$tmp/repo-01" config remote.origin.url "$(pwd)/$root/origin.git"
+    git -C "$tmp/repo-01" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+    git -C "$tmp/repo-01" config branch.main.remote origin
+    git -C "$tmp/repo-01" config branch.main.merge refs/heads/main
+    git -C "$tmp/repo-01" commit-graph write --reachable --changed-paths
+    mv "$tmp" "$root"
+  fi
+  # 원격 쪽은 앱이 부르는 것과 같은 조회다. 실패하면 set -e 로 멈추도록 변수에 먼저 받는다
+  local listing
+  listing=$(git -C "$dir" ls-remote --tags origin)
+  LC_ALL=C awk '
+    FILENAME != prev { file++; prev = FILENAME }
+    # 1: ls-remote "<oid>\t<ref>" 와 annotated 의 "<oid>\t<ref>^{}" (가리키는 커밋)
+    file == 1 {
+      lines++; bytes += length($0) + 1
+      name = $2
+      if (sub(/\^\{\}$/, "", name)) { rpeel[name] = $1; rann++ } else robj[name] = $1
+      next
+    }
+    # 2: for-each-ref "<ref> <객체> <가리키는 커밋, 경량이면 빈칸>"
+    {
+      lcount++
+      if ($3 != "") { lann++; lpeel = $3 } else lpeel = $2
+      if (!($1 in robj)) { lonly++; next }
+      seen[$1] = 1
+      if (robj[$1] == $2) { same++; next }
+      diverged++
+      if (lpeel == (($1 in rpeel) ? rpeel[$1] : robj[$1])) samecommit++
+    }
+    END {
+      for (name in robj) { rcount++; if (!(name in seen)) ronly++ }
+      printf "local tags: %d (annotated %d), remote tags: %d (annotated %d)\n", lcount, lann, rcount, rann
+      printf "same: %d, localOnly: %d, remoteOnly: %d, diverged: %d (sameCommit %d)\n", same, lonly, ronly, diverged, samecommit
+      printf "ls-remote --tags: %d lines, %d bytes\n", lines, bytes
+    }' <(printf '%s\n' "$listing") \
+    <(git -C "$dir" for-each-ref --format='%(refname) %(objectname) %(*objectname)' refs/tags)
+  echo "ready: $(pwd)/$root"
+}
+
 name=${1:-git}
 if [ "$name" = folder ]; then
   make_folder "${2:-20}" "${3:-10000}" "${4:-uniform}"
@@ -246,6 +368,10 @@ if [ "$name" = fs ]; then
 fi
 if [ "$name" = stage ]; then
   make_stage "${2:-5000}"
+  exit 0
+fi
+if [ "$name" = tags ]; then
+  make_tags "${2:-1000}"
   exit 0
 fi
 case "$name" in

@@ -13,6 +13,7 @@ export const enRepository: Pick<
   | 'quickSwitch'
   | 'commitGraph'
   | 'remote'
+  | 'tag'
   | 'stash'
   | 'worktree'
   | 'home'
@@ -99,6 +100,7 @@ export const enRepository: Pick<
     squashIntoParentTitle: (hash: string) => `Squash ${hash} into its parent commit?`,
     squashIntoParentMessage:
       "This commit's changes go into its parent, and the parent's message is kept. Later commits are rewritten.",
+    squashRange: (n: number) => `Squash ${n} selected commits into one…`,
     cherryPick: 'Cherry-pick',
     revert: 'Revert',
     reset: 'Reset',
@@ -310,6 +312,205 @@ export const enRepository: Pick<
     removeMessage: 'Its remote-tracking branches will be deleted too.',
     pushUrl: (url: string) => `push: ${url}`,
     close: 'Close',
+  },
+  tag: {
+    pushMenu: 'Push',
+    pushNoRemote: 'Push (no remotes)',
+    logItem: (name: string) => `Tag ${name}`,
+    pushed: (name: string, remote: string) => `Pushed tag ${name} to ${remote}`,
+    pushedMany: (n: number, remote: string) =>
+      `Pushed ${formatNumber(n)} ${plural(n, 'tag', 'tags')} to ${remote}`,
+    upToDate: (name: string, remote: string) => `Tag ${name} is already on ${remote}`,
+    pushFailed: (remote: string, details: string) =>
+      `Couldn't push these tags to ${remote}: ${details}`,
+    status: {
+      diverged: 'differs from the local tag',
+      rejectedExists: 'a different tag with this name exists on the remote',
+      rejectedStale: 'the remote changed in the meantime',
+      failed: 'failed',
+      unknown: 'result unknown — check the remote again',
+      notProcessed: 'not processed',
+      notRun: 'awaiting confirmation',
+    },
+    fetched: (name: string, remote: string, overwrite: boolean) =>
+      overwrite
+        ? `Replaced tag ${name} with the one on ${remote}`
+        : `Fetched tag ${name} from ${remote}`,
+    fetchedMany: (n: number, remote: string) =>
+      `Fetched ${formatNumber(n)} ${plural(n, 'tag', 'tags')} from ${remote}`,
+    fetchFailed: (remote: string, details: string) =>
+      `Couldn't fetch these tags from ${remote}: ${details}`,
+    fetchRecheck: (remote: string) =>
+      `Nothing was fetched because some tags aren't on ${remote}. Check the remote and try again.`,
+    exists: {
+      title: (name: string, remote: string) => `A different tag named ${name} exists on ${remote}`,
+      titleMany: (n: number, remote: string) =>
+        `${remote} has ${formatNumber(n)} different ${plural(n, 'tag', 'tags')} with the same ${plural(n, 'name', 'names')}`,
+      message:
+        "The local tag wasn't pushed because the remote has a different tag with the same name. Nothing was changed.",
+      replace: 'Overwrite remote tag with local…',
+    },
+    align: {
+      toRemote: 'Match remote…',
+      toLocal: 'Match local…',
+      toRemoteTitle: (name: string, remote: string) =>
+        `Replace local tag ${name} with the one on ${remote}?`,
+      toRemoteMessage:
+        'The local tag will point to the same object as the remote tag. You can undo this with ↶ Undo.',
+      toRemoteConfirm: 'Use remote tag',
+      toLocalTitle: (n: number, remote: string) =>
+        n === 1
+          ? `Overwrite the tag on ${remote} with the local one?`
+          : `Overwrite ${formatNumber(n)} tags on ${remote} with the local ones?`,
+      toLocalMessage:
+        "Repositories that already fetched the old tag keep it. This can't be undone.",
+      toLocalConfirm: 'Overwrite with local',
+    },
+    replaced: (name: string, remote: string) =>
+      `Overwrote tag ${name} on ${remote} with the local one`,
+    replacedMany: (n: number, remote: string) =>
+      `Overwrote ${formatNumber(n)} ${plural(n, 'tag', 'tags')} on ${remote} with the local ${plural(n, 'one', 'ones')}`,
+    replaceFailed: (remote: string, details: string) =>
+      `Couldn't overwrite these tags on ${remote}: ${details}`,
+    del: {
+      title: (name: string) => `Delete tag '${name}'`,
+      titleMany: (n: number) => `Delete ${formatNumber(n)} ${plural(n, 'tag', 'tags')}`,
+      message:
+        'Tags are deleted from the chosen remotes first. A local tag is deleted only if it was deleted from every chosen remote.',
+      comeBackMaybe:
+        "Tags deleted only locally may come back on the next fetch if they're still on a remote.",
+      scope: 'Delete from',
+      local: 'Local',
+      localNote: 'can be restored with ↶ Undo',
+      remoteNote: "can't be undone",
+      applies: (n: number) => `${formatNumber(n)} affected`,
+      notChecked: 'not checked',
+      absent: 'not on this remote',
+      notLocal: 'not local',
+      comeBack: (n: number) =>
+        `${formatNumber(n)} ${plural(n, 'tag', 'tags')} deleted only locally ${plural(n, 'is', 'are')} still on a remote and may come back on the next fetch.`,
+      unpushedWarn: (n: number) =>
+        `${formatNumber(n)} unpushed ${plural(n, 'tag is', 'tags are')} not on any remote. Once deleted, only ↶ Undo can restore ${plural(n, 'it', 'them')}.`,
+      none: 'Choose at least one place to delete from',
+      localUndo: 'You can restore it with ↶ Undo.',
+      done: (name: string, places: string) => `Deleted tag ${name} (${places})`,
+      doneMany: (n: number, places: string) =>
+        `Deleted ${formatNumber(n)} ${plural(n, 'tag', 'tags')} (${places})`,
+      remoteFailed: (remote: string, details: string) => `${remote}: ${details}`,
+      cancelled: 'Canceled in the confirmation, so the rest was not deleted',
+      localKept: (names: string) => `Kept locally: ${names}`,
+      localFailed: (reason: string) => `Local delete failed: ${reason}`,
+    },
+    differs: {
+      title: (remote: string, n: number) =>
+        n === 1
+          ? `The tag on ${remote} differs from the local one`
+          : `${formatNumber(n)} tags on ${remote} differ from the local ones`,
+      message:
+        "The remote tag points to a different object than the local one. Deleting it from the remote can't be undone.",
+      item: (name: string, remote: string, local: string) =>
+        `${name} — remote ${remote} · local ${local}`,
+      itemSameCommit: (name: string, commit: string) =>
+        `${name} — same commit ${commit}, different tag object`,
+      skip: 'Skip these and delete the rest',
+      deleteAnyway: 'Delete from remote anyway',
+    },
+    check: {
+      action: 'Check remote tags',
+      failed: {
+        auth: 'Authentication failed',
+        network: 'Connection failed',
+        other: 'Check failed',
+      },
+    },
+    state: {
+      localOnly: 'not pushed',
+      remoteOnly: 'remote only',
+      same: 'same',
+      diverged: 'differs',
+      divergedSameCommit: 'differs (same commit, different tag object)',
+      unknown: 'unknown',
+      notChecked: 'not checked',
+      line: (remote: string, state: string) => `${remote}: ${state}`,
+    },
+    tree: {
+      unpushed: 'not pushed',
+      differs: 'differs',
+      summaryUnpushed: (n: number) => `${formatNumber(n)} not pushed`,
+      summaryRemoteOnly: (n: number) => `${formatNumber(n)} remote only`,
+      summaryDiffers: (n: number) => `${formatNumber(n)} ${plural(n, 'differs', 'differ')}`,
+      summarySame: 'same as remote',
+      stale: 'outdated',
+      checking: 'Checking…',
+    },
+    doc: {
+      title: 'Tags',
+      open: 'Manage tags',
+      remote: 'Compare with remote',
+      noRemote: 'No remotes to compare with',
+      check: 'Check remote',
+      checking: 'Checking…',
+      notChecked: 'Not checked — click Check remote to compare',
+      checkedAt: (time: string) => `Checked ${time}`,
+      search: 'Search tags',
+      filters: 'State filters',
+      filter: {
+        all: 'All',
+        localOnly: 'Local only',
+        remoteOnly: 'Remote only',
+        same: 'Same',
+        diverged: 'Differs',
+      },
+      filterCount: (label: string, n: number) => `${label} ${formatNumber(n)}`,
+      list: 'Tags',
+      columns: {
+        name: 'Name',
+        kind: 'Kind',
+        localCommit: 'Local commit',
+        remoteCommit: 'Remote commit',
+        state: 'State',
+        date: 'Date',
+      },
+      tagger: (who: string) => `Tagger: ${who}`,
+      fetch: 'Fetch',
+      kind: {
+        annotated: 'Annotated',
+        lightweight: 'Lightweight',
+      },
+      stateNotChecked: '—',
+      empty: {
+        noTags: 'No tags',
+        noMatch: 'No tags match',
+      },
+      selected: (n: number) => `${formatNumber(n)} selected`,
+      showInLog: 'Show in log',
+    },
+    batch: {
+      label: 'Tag actions',
+      push: (remote: string, n: number) => `Push to ${remote} (${formatNumber(n)})`,
+      fetch: (n: number) => `Fetch (${formatNumber(n)})`,
+      del: (n: number) => `Delete… (${formatNumber(n)})`,
+      slow: 'With this many tags, this may take a few minutes. You can cancel while it runs.',
+    },
+    result: {
+      summary: (title: string, ok: number, failed: number) =>
+        failed === 0
+          ? `${title}: ${formatNumber(ok)} done`
+          : `${title}: ${formatNumber(ok)} done, ${formatNumber(failed)} left`,
+      push: (remote: string) => `Push to ${remote}`,
+      fetch: (remote: string) => `Fetch from ${remote}`,
+      toRemote: (remote: string) => `Match ${remote}`,
+      toLocal: (remote: string) => `Overwrite ${remote} with local`,
+      del: 'Delete',
+      localKept: 'kept locally',
+      list: 'Remaining tags',
+      retry: 'Retry failed',
+      close: 'Close results',
+    },
+    pushAll: 'Push all tags…',
+    pushAllTo: (remote: string) => `Push all tags to ${remote}…`,
+    showRemoteOnly: (n: number) =>
+      `Show ${formatNumber(n)} remote-only ${plural(n, 'tag', 'tags')}`,
   },
   stash: {
     save: 'Stash changes…',

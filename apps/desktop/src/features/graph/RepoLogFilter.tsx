@@ -74,6 +74,10 @@ export function RepoLogFilter() {
       backups: [],
       radar: [],
       path: s.path,
+      // branch 고르기 드롭다운은 tag 상태를 쓰지 않는다
+      tagReports: {},
+      remoteNames: [],
+      tagChecking: false,
       isFavorite: (fullName) => isFavorite(favorites, fullName),
     });
   }, [s.labels, s.head, s.path, favoritesEpoch]);

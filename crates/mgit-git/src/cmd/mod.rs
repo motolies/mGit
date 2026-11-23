@@ -48,7 +48,7 @@ pub use log::{
 };
 pub use merge_tree::{MergeTreeResult, merge_tree, parse_merge_tree};
 pub use op::in_progress_op;
-pub use refs::{REFS_FORMAT, list_refs};
+pub use refs::{REFS_FORMAT, list_refs, tag_list, tag_objects};
 pub use remote::{list_remotes, parse_remote_v};
 pub use safety::{commit_template, config_get, list_reflog, parse_reflog, ref_snapshot};
 pub use stash::{STASH_LIST_ARGS, list_stashes};

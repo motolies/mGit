@@ -1,4 +1,4 @@
-//! 벤치 하네스. 모드는 넷이다.
+//! 벤치 하네스. 모드는 다섯이다.
 //!
 //! - 저장소 모드(PoC-1): 대형 저장소에서 첫 청크·전체 로드 시간, 윈도 지연, 메모리를 잰다.
 //!   `--filters` 면 대신 해시 패스의 추가 시간을 잰다 (W18, `repo_filters` 모듈).
@@ -6,12 +6,14 @@
 //!   `--memory` 면 메모리 분해(`memory`), `--lanes` 면 화면당 레인 수 분포(`lanes`)만 잰다.
 //! - 파일 트리 모드(W18): 큰 디렉터리 나열·1 MiB 파일 읽기 (`fs` 모듈).
 //! - stage 모드(W18): 변경 파일이 많은 저장소의 폴더 stage·unstage (`stage` 모듈).
+//! - tags 모드(TG-17): 원격 tag 조회·비교·보고서 크기, `RefsChanged` 기준선, 일괄 push·원격 삭제 (`tags` 모듈).
 //!
 //! ```text
 //! cargo run --release -p mgit-bench -- --repo bench/repos/git [--no-commit-graph] [--window 500] [--runs 3] [--filters]
 //! cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x10000 [--no-commit-graph] [--runs 3] [--memory | --lanes]
 //! cargo run --release -p mgit-bench -- --fs bench/repos/fs-50000 [--runs 5]
 //! cargo run --release -p mgit-bench -- --stage bench/repos/stage-5000 [--runs 3]
+//! cargo run --release -p mgit-bench -- --tags bench/repos/tags-10000 [--runs 5] [--write-runs N] [--one-chunk-runs N] [--write-limit N]
 //! ```
 //! 통과 기준(명세 PoC-1): commit-graph 있음 기준 첫 화면 1초 이하, RSS 500MB 이하.
 
@@ -21,6 +23,7 @@ mod lanes;
 mod memory;
 mod repo_filters;
 mod stage;
+mod tags;
 mod w18;
 
 use std::path::PathBuf;
@@ -31,12 +34,14 @@ use mgit_core::{Core, CoreConfig, CoreEvent, EventSink};
 use mgit_git::{RunnerConfig, TokioGitRunner};
 use tokio::sync::mpsc;
 
-/// 명령줄 옵션. `repo`·`folder`·`fs`·`stage` 중 정확히 하나를 준다
+/// 명령줄 옵션. `repo`·`folder`·`fs`·`stage`·`tags` 중 정확히 하나를 준다
 struct Opts {
     repo: PathBuf,
     folder: Option<PathBuf>,
     fs: Option<PathBuf>,
     stage: Option<PathBuf>,
+    /// tags 모드: `bench/setup.sh tags N` 픽스처 폴더
+    tags: Option<PathBuf>,
     no_commit_graph: bool,
     window: u32,
     runs: u32,
@@ -48,6 +53,12 @@ struct Opts {
     memory_phase: Option<String>,
     /// 폴더 모드: 레인 수 분포만
     lanes: bool,
+    /// tags 모드: 일괄 push·삭제 반복 수 (없으면 `runs`, 0 이면 건너뜀)
+    write_runs: Option<u32>,
+    /// tags 모드: 청크 없는 비교 반복 수 (없으면 `write_runs`, 0 이면 건너뜀)
+    one_chunk_runs: Option<u32>,
+    /// tags 모드: 이보다 큰 일괄 묶음은 재지 않는다
+    write_limit: Option<usize>,
 }
 
 /// 인자를 파싱한다. 잘못되면 사용법을 출력하고 종료
@@ -57,6 +68,7 @@ fn parse_opts() -> Opts {
         folder: None,
         fs: None,
         stage: None,
+        tags: None,
         no_commit_graph: false,
         window: 500,
         runs: 3,
@@ -64,6 +76,9 @@ fn parse_opts() -> Opts {
         memory: false,
         memory_phase: None,
         lanes: false,
+        write_runs: None,
+        one_chunk_runs: None,
+        write_limit: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -72,6 +87,7 @@ fn parse_opts() -> Opts {
             "--folder" => opts.folder = args.next().map(PathBuf::from),
             "--fs" => opts.fs = args.next().map(PathBuf::from),
             "--stage" => opts.stage = args.next().map(PathBuf::from),
+            "--tags" => opts.tags = args.next().map(PathBuf::from),
             "--no-commit-graph" => opts.no_commit_graph = true,
             "--window" => opts.window = args.next().and_then(|v| v.parse().ok()).unwrap_or(500),
             "--runs" => opts.runs = args.next().and_then(|v| v.parse().ok()).unwrap_or(3),
@@ -79,6 +95,9 @@ fn parse_opts() -> Opts {
             "--memory" => opts.memory = true,
             "--memory-phase" => opts.memory_phase = args.next(),
             "--lanes" => opts.lanes = true,
+            "--write-runs" => opts.write_runs = args.next().and_then(|v| v.parse().ok()),
+            "--one-chunk-runs" => opts.one_chunk_runs = args.next().and_then(|v| v.parse().ok()),
+            "--write-limit" => opts.write_limit = args.next().and_then(|v| v.parse().ok()),
             _ => usage(),
         }
     }
@@ -87,6 +106,7 @@ fn parse_opts() -> Opts {
         opts.folder.is_some(),
         opts.fs.is_some(),
         opts.stage.is_some(),
+        opts.tags.is_some(),
     ];
     if modes.iter().filter(|&&m| m).count() != 1 {
         usage();
@@ -97,7 +117,7 @@ fn parse_opts() -> Opts {
 /// 사용법 출력 후 종료
 fn usage() -> ! {
     eprintln!(
-        "usage: mgit-bench (--repo <path> [--window N] [--filters] | --folder <path> [--memory | --lanes] | --fs <path> | --stage <path>) [--no-commit-graph] [--runs N]"
+        "usage: mgit-bench (--repo <path> [--window N] [--filters] | --folder <path> [--memory | --lanes] | --fs <path> | --stage <path> | --tags <path> [--write-runs N] [--one-chunk-runs N] [--write-limit N]) [--no-commit-graph] [--runs N]"
     );
     std::process::exit(2)
 }
@@ -244,6 +264,8 @@ async fn main() {
         fs::run(&opts, root).await;
     } else if let Some(folder) = &opts.stage {
         stage::run(&opts, folder).await;
+    } else if let Some(fixture) = &opts.tags {
+        tags::run(&opts, fixture).await;
     } else if opts.filters {
         repo_filters::report(&opts, &opts.repo).await;
     } else {

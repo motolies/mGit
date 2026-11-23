@@ -25,6 +25,7 @@ mod commands_repo;
 mod commands_safety;
 mod commands_settings;
 mod commands_submodule;
+mod commands_tags;
 mod commands_verify;
 mod dto;
 mod dto_diff;
@@ -80,7 +81,14 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_refs::delete_remote_branch,
             commands_refs::set_upstream,
             commands_refs::create_tag,
-            commands_refs::delete_tag,
+            commands_tags::push_tags,
+            commands_tags::delete_remote_tags,
+            commands_tags::replace_remote_tags,
+            commands_tags::delete_local_tags,
+            commands_tags::remote_tags,
+            commands_tags::lookup_remote_tags,
+            commands_tags::fetch_tags,
+            commands_tags::tag_list,
             commands_refs::merge,
             commands_refs::rebase,
             commands_refs::cherry_pick,

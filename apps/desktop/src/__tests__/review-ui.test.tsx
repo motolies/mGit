@@ -2,7 +2,7 @@ import { DEFAULT_GRAPH_COLUMNS } from '@mgit/graph-view';
 import type { ConflictPayload, GraphRow, RepoRefs, TimelineInfo } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { type ReactElement, useEffect, useRef } from 'react';
+import { type ReactElement, useEffect, useRef, useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionErrorBar } from '../components/ActionErrorBar';
 import { ContextMenuArea } from '../components/ContextMenu';
@@ -184,6 +184,92 @@ describe('연속 대화상자', () => {
   });
 });
 
+/** 단추로 두 갈래(`confirm`)·세 갈래(`confirmChoice`) 확인을 열고 결과를 글자로 남긴다 */
+function ConfirmHarness() {
+  const d = useDialogs();
+  const [result, setResult] = useState('none');
+  return (
+    <>
+      <output data-testid="result">{result}</output>
+      <button
+        type="button"
+        onClick={() =>
+          void d
+            .confirmChoice({
+              title: 'diverged',
+              message: 'm',
+              danger: true,
+              confirmLabel: '그래도 삭제',
+              secondaryLabel: '건너뛰고 삭제',
+            })
+            .then(setResult)
+        }
+      >
+        choice
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void d
+            .confirm({ title: 'plain', message: 'm', confirmLabel: '그래도 삭제' })
+            .then((ok) => setResult(String(ok)))
+        }
+      >
+        plain
+      </button>
+      {d.element}
+    </>
+  );
+}
+
+describe('확인 대화상자의 둘째 선택지 (A5)', () => {
+  const result = () => screen.getByTestId('result').textContent;
+  const open = async (which: 'choice' | 'plain') => {
+    fireEvent.click(screen.getByText(which));
+    await tick();
+  };
+  const buttons = () =>
+    [...document.querySelectorAll('dialog[open] button')].map((b) => b.textContent);
+  /** 열린 대화상자의 단추를 누른다 (닫혀 있는 입력 대화상자에도 같은 이름의 취소 단추가 있다) */
+  const press = async (label: string) => {
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByText(label));
+    await tick();
+  };
+
+  it('confirmChoice 는 취소·둘째·확인 세 단추를 두고 고른 단추를 돌려준다 (danger 면 취소에 포커스)', async () => {
+    render(<ConfirmHarness />);
+    await open('choice');
+    expect(buttons()).toEqual([S.confirm.cancel, '건너뛰고 삭제', '그래도 삭제']);
+    expect(document.activeElement?.textContent).toBe(S.confirm.cancel);
+    await press('건너뛰고 삭제');
+    expect(result()).toBe('secondary');
+    expect(document.querySelector('dialog[open]')).toBeNull();
+
+    await open('choice');
+    await press(S.confirm.cancel);
+    expect(result()).toBe('cancel');
+
+    await open('choice');
+    fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
+    await tick();
+    expect(result()).toBe('confirm');
+  });
+
+  it('confirm 은 지금처럼 두 단추에 true/false 이고, 앞의 둘째 선택지가 남지 않는다', async () => {
+    render(<ConfirmHarness />);
+    await open('choice');
+    await press('건너뛰고 삭제');
+    await open('plain');
+    expect(buttons()).toEqual([S.confirm.cancel, '그래도 삭제']);
+    await press(S.confirm.cancel);
+    expect(result()).toBe('false');
+    await open('plain');
+    fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
+    await tick();
+    expect(result()).toBe('true');
+  });
+});
+
 describe('입력이 사라지던 폼', () => {
   it('커밋 본문의 끝 공백·줄바꿈이 입력 중 사라지지 않는다', () => {
     const typed = 'hello world\nsecond line\n\n';
@@ -333,6 +419,57 @@ describe('힌트 대화상자의 push 경로', () => {
     expect(s.push).toHaveBeenCalledWith(spec, { skipSubmoduleCheck: true });
   });
 
+  it('tag 이름 충돌은 안내만 한다: 강제 push·pull 단추 없이 확인 하나, 아무것도 다시 하지 않는다 (TG-02)', async () => {
+    const s = session({ kind: 'tagExists', remote: 'origin', names: ['v2.3.1'] });
+    render(<HintDialogs />);
+    expect(document.querySelector('dialog h2')?.textContent).toBe(
+      S.tag.exists.title('v2.3.1', 'origin'),
+    );
+    expect([...document.querySelectorAll('dialog button')].map((b) => b.textContent)).toEqual([
+      S.confirm.cancel,
+      S.confirm.ok,
+    ]);
+    expect(screen.queryByText(S.dialog.forcePush)).toBeNull();
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    await tick();
+    expect(s.dismissHint).toHaveBeenCalled();
+    expect(s.push).not.toHaveBeenCalled();
+    expect(s.pull).not.toHaveBeenCalled();
+  });
+
+  it('tag 이름 충돌: 원격 객체를 알면 둘째 단추가 위험 확인으로 이어지고, 확인하면 lease 덮어쓰기 (C5)', async () => {
+    const commits = [
+      { name: 'v1', local: 'a'.repeat(40), remote: 'b'.repeat(40), remoteObject: 'c'.repeat(40) },
+    ];
+    const s = session(
+      { kind: 'tagExists', remote: 'origin', names: ['v1'], commits },
+      { replaceRemoteTags: vi.fn(async () => []) },
+    );
+    render(<HintDialogs />);
+    fireEvent.click(screen.getByText(S.tag.exists.replace));
+    await tick();
+    expect(document.querySelector('dialog[open] h2')?.textContent).toBe(
+      S.tag.align.toLocalTitle(1, 'origin'),
+    );
+    expect(document.querySelector('dialog[open] p')?.textContent).toBe(S.tag.align.toLocalMessage);
+    fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
+    await tick();
+    expect(s.dismissHint).toHaveBeenCalled();
+    expect(s.replaceRemoteTags).toHaveBeenCalledWith('origin', [
+      { name: 'v1', expectedRemote: 'c'.repeat(40) },
+    ]);
+    cleanup();
+    // 원격 객체를 모르면(조회 전·실패) 둘째 단추가 없다
+    session({
+      kind: 'tagExists',
+      remote: 'origin',
+      names: ['v1'],
+      commits: [{ ...commits[0], remoteObject: null }],
+    });
+    render(<HintDialogs />);
+    expect(screen.queryByText(S.tag.exists.replace)).toBeNull();
+  });
+
   it('pull 이 실패하면 push 하지 않는다', async () => {
     const s = session({ kind: 'nonFastForward', spec }, { pull: vi.fn(async () => false) });
     render(<HintDialogs />);
@@ -451,10 +588,16 @@ describe('그래프 메뉴 reword', () => {
   /** 라벨로 항목 찾기 */
   const find = (list: ReturnType<typeof graphMenuItems>, label: string) =>
     list.find((i) => i.label === label);
+  /** 둘째 선택지 확인 (tag 삭제 흐름만 쓴다) */
+  const confirmChoice = async () => 'cancel' as const;
 
   it('입력란을 커밋 메시지 전체로 채운다', async () => {
     const prompt = vi.fn(async () => null);
-    const items = graphMenuItems(row, actions(), { prompt, confirm: async () => false });
+    const items = graphMenuItems(row, actions(), {
+      prompt,
+      confirm: async () => false,
+      confirmChoice,
+    });
     find(items, S.menu.reword)?.onSelect?.();
     await tick();
     expect(prompt.mock.calls[0]?.[0 as never]).toMatchObject({
@@ -467,6 +610,7 @@ describe('그래프 메뉴 reword', () => {
     const items = graphMenuItems(row, actions({ commitMessageOf: vi.fn(async () => null) }), {
       prompt,
       confirm: async () => false,
+      confirmChoice,
     });
     find(items, S.menu.reword)?.onSelect?.();
     await tick();
@@ -477,9 +621,44 @@ describe('그래프 메뉴 reword', () => {
     const items = graphMenuItems({ ...row, inHead: false }, actions(), {
       prompt: async () => null,
       confirm: async () => false,
+      confirmChoice,
     });
     expect(find(items, S.menu.reword)?.disabled).toBe(true);
     expect(find(items, S.menu.squashIntoParent)?.disabled).toBe(true);
+  });
+
+  it('행의 tag 마다 `tag <n> ▸` 하위 메뉴: push(원격 하나면 평면, 둘이면 하위 메뉴)·삭제 (TG-01 ①)', async () => {
+    const tagLabel = (name: string) => ({
+      fullName: `refs/tags/${name}`,
+      shortName: name,
+      kind: { kind: 'tag', annotated: true },
+      target: row.oid,
+      isCurrent: false,
+      upstreamGone: false,
+    });
+    const tagged = { ...row, refs: [tagLabel('v1'), tagLabel('v2')] } as unknown as GraphRow;
+    const pushTags = vi.fn(async () => []);
+    const dialogs = { prompt: async () => null, confirm: async () => false, confirmChoice };
+    const one = graphMenuItems(tagged, actions({ remoteNames: ['origin'], pushTags }), dialogs);
+    expect(one.filter((i) => i.children && i.label.startsWith(S.tag.logItem(''))).length).toBe(2);
+    const v1 = find(one, S.tag.logItem('v1'));
+    expect(v1?.separator).toBe(true);
+    expect(find(one, S.tag.logItem('v2'))?.separator).toBe(false);
+    expect(v1?.children?.map((c) => c.label)).toEqual([S.remote.pushTo('origin'), S.menu.delete]);
+    v1?.children?.[0]?.onSelect?.();
+    expect(pushTags).toHaveBeenCalledWith('origin', ['v1']);
+    // 원격이 둘이면 push 가 원격 이름 하위 메뉴이고, 실행 중이면 꺼진다
+    const two = graphMenuItems(
+      tagged,
+      actions({ remoteNames: ['origin', 'upstream'], busy: true }),
+      dialogs,
+    );
+    const sub = find(two, S.tag.logItem('v2'))?.children ?? [];
+    expect(sub.map((c) => [c.label, c.disabled])).toEqual([
+      [S.tag.pushMenu, true],
+      [S.menu.delete, true],
+    ]);
+    expect(sub[0]?.children?.map((c) => c.label)).toEqual(['origin', 'upstream']);
   });
 });
 

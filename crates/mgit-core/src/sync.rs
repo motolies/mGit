@@ -113,8 +113,20 @@ impl Core {
         if let Some(op) = op {
             spec = spec.with_op(op).progress();
         }
-        self.run_write(session, spec).await?;
-        Ok(())
+        self.run_write_tracking_tags(session, spec).await
+    }
+
+    /// fetch·pull 을 돌리고, 로컬 tag 집합이 바뀌었으면 원격 tag 캐시를 오래됨으로 둔다 (실패해도 일부 받았을 수 있다)
+    async fn run_write_tracking_tags(
+        &self,
+        session: SessionId,
+        spec: WriteSpec,
+    ) -> Result<(), CoreError> {
+        let s = self.inner().get(session)?;
+        let before = self.inner().tag_marks(&s);
+        let res = self.run_write(session, spec).await;
+        self.inner().after_fetch(&s, before);
+        res.map(|_| ())
     }
 
     /// pull (RM-03). `Default` 는 플래그 없이 git 설정을 따른다. 충돌은 `CommandFailed{hint: Conflicts}`
@@ -135,8 +147,7 @@ impl Core {
         if let Some(op) = op {
             spec = spec.with_op(op).progress();
         }
-        self.run_write(session, spec).await?;
-        Ok(())
+        self.run_write_tracking_tags(session, spec).await
     }
 
     /// push (RM-04). 원격은 `spec.remote` → 업스트림의 원격 → 기본 원격 순으로 고른다.
@@ -180,6 +191,8 @@ impl Core {
             write = write.with_op(op).progress();
         }
         self.run_write(session, write).await?;
+        self.after_branch_push(session, &target.remote, spec.tags)
+            .await;
         if spec.remember_upstream_mismatch && target.branch != target.dst {
             let s = self.inner().get(session)?;
             let key = upstream_ok_key(&s.info.common_dir, &target.branch);
@@ -266,13 +279,7 @@ struct PushTarget {
 /// 원격을 고르지 않았고 업스트림도 없을 때의 대상: 하나뿐이면 그것, 여럿이면 `origin`
 fn default_remote(remotes: &[&str]) -> Result<String, CoreError> {
     match remotes {
-        [] => Err(CoreError::Invalid(
-            pick(
-                "원격이 없습니다. 먼저 원격을 추가하세요",
-                "No remotes. Add a remote first",
-            )
-            .into(),
-        )),
+        [] => Err(CoreError::Invalid(messages::no_remotes().into())),
         [only] => Ok((*only).to_string()),
         many if many.contains(&"origin") => Ok("origin".to_string()),
         _ => Err(CoreError::Invalid(
@@ -292,7 +299,7 @@ fn upstream_ok_key(common_dir: &Path, branch: &str) -> String {
 
 /// 업스트림 ref `refs/remotes/<원격>/<브랜치>` 를 (원격, 브랜치) 로 나눈다. 원격 이름에 `/` 가
 /// 있을 수 있으므로 등록된 원격 중 가장 긴 접두를 고르고, 맞는 것이 없으면 첫 `/` 에서 나눈다
-fn split_upstream<'a>(
+pub(crate) fn split_upstream<'a>(
     upstream: &str,
     remotes: impl IntoIterator<Item = &'a str>,
 ) -> Option<(String, String)> {

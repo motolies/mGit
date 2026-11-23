@@ -2,7 +2,14 @@ import { S } from '@mgit/ui';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import styles from './App.module.css';
-import { type Action, type ActionApp, type ActionSession, buildActions } from './actions';
+import {
+  type Action,
+  type ActionApp,
+  type ActionSession,
+  buildActions,
+  openTagsDoc,
+  type TagsDocRequestInput,
+} from './actions';
 import { ActionErrorBar } from './components/ActionErrorBar';
 import { Toasts } from './components/Toasts';
 import { useDialogs } from './components/use-dialogs';
@@ -49,6 +56,7 @@ import { ToolStripe } from './layout/ToolStripe';
 import {
   getSessionStore,
   getWorkspaceStore,
+  repoNameOf,
   useActivePrKind,
   useActiveTab,
   useAppStore,
@@ -112,6 +120,7 @@ function pickSession(s: SessionState): ActionSession {
     setReflogOpen: s.setReflogOpen,
     openFileBackups: s.openFileBackups,
     remoteProject: s.remoteProject,
+    checkRemoteTags: s.checkRemoteTags,
   };
 }
 
@@ -177,6 +186,20 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
     ws.closeDoc(ws.activeDocId);
     return true;
   }, [activeId]);
+  /** 저장소 탭의 태그 문서를 연다 (팔레트 "tag 관리", C3a) */
+  const openTagsDocAction = useCallback(
+    (request?: TagsDocRequestInput) => {
+      if (activeId !== null && session) {
+        openTagsDoc(
+          getWorkspaceStore(activeId)?.getState(),
+          session.path,
+          repoNameOf(session.path),
+          request,
+        );
+      }
+    },
+    [activeId, session],
+  );
   const actions = useMemo(
     () =>
       buildActions({
@@ -190,6 +213,7 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
         promptCompare,
         promptColumns,
         closeEditorDoc,
+        openTagsDoc: isRepoTab ? openTagsDocAction : undefined,
       }),
     [
       app,
@@ -203,6 +227,7 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
       promptCompare,
       promptColumns,
       closeEditorDoc,
+      openTagsDocAction,
     ],
   );
   return { actions, dialogElement: dialogs.element };

@@ -200,6 +200,11 @@
   color: var(--status-conflict);
 }
 
+/* tag 가 원격과 다름 (B5): 경고 색 — 충돌(빨강)과 구분한다 */
+.badge[data-icon="tagDiffers"] {
+  color: var(--status-untracked);
+}
+
 /* 행 끝의 단추 (저장소 탭 Worktrees 그룹의 정리·만들기): 늘 보이고 오른쪽 끝에 붙는다 */
 .rowAction {
   all: unset;

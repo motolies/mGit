@@ -29,6 +29,7 @@ import type {
   KeptResolution,
   LfsStatus,
   LineSelection,
+  LocalTag,
   MergeMode,
   MergePreview,
   Module,
@@ -64,6 +65,8 @@ import type {
   SubmodulePointerLog,
   SubmoduleUnpushed,
   SyntaxCompare,
+  TagRefResult,
+  TagSyncReport,
   UndoState,
   UnresolveMode,
   WorkTreeStatus,
@@ -82,6 +85,32 @@ import { createFileTree, type FileTreeStore } from './file-tree';
 import type { TimelineAuthors } from './folder-store';
 import { notifyHub } from './notify';
 import { readPref, writePref } from './prefs';
+import {
+  buildSquashRangePlan,
+  checkSquashRange,
+  rangeRowCount,
+  type SquashRangePrep,
+  type SquashRangeTarget,
+  squashRangeDraft,
+  squashRangeOnto,
+} from './squash-range';
+import {
+  type DivergedAsk,
+  isMissingRemoteRef,
+  isTagSuccess,
+  runTagDelete,
+  sameTagReport,
+  type TagBatchOp,
+  type TagBatchOutcome,
+  type TagCommitPair,
+  type TagDeleteScope,
+  type TagDeleteSummary,
+  tagDeleteChangedAnything,
+  tagDeleteComplete,
+  tagDeletePlaces,
+  tagDeleteProblems,
+  tagFailureList,
+} from './tag-ops';
 
 export type LoadState = 'opening' | 'streaming' | 'complete' | 'error';
 export type DiffMode = 'unified' | 'split';
@@ -273,6 +302,11 @@ export type PendingHint =
   | { kind: 'nonFastForward'; spec: PushSpec }
   /** 강제 push 가 lease 로 거부됐다 */
   | { kind: 'staleInfo'; spec: PushSpec }
+  /**
+   * tag push 가 이름 충돌로 거부됐다 (TG-02): 원격에 이름이 같은 다른 tag 가 있다. 아무것도 바뀌지 않았다.
+   * `commits` 는 단일 조회로 받은 두 commit (B5) — 받기 전·실패면 없다
+   */
+  | { kind: 'tagExists'; remote: string; names: string[]; commits?: TagCommitPair[] }
   | { kind: 'indexLock' }
   | { kind: 'detachedHead' }
   | { kind: 'noUpstream'; spec?: PushSpec }
@@ -381,6 +415,15 @@ export interface SessionState {
   pendingHint: PendingHint | null;
   /** 쓰기 명령이 진행 중 (버튼 비활성) */
   busy: boolean;
+  /**
+   * 원격별 tag 상태 보고서 (B5, TG-08·09). 확인했거나 확인에 실패한 원격만 있다. 쓰기의 busy 와 무관하다 — 확인은 busy 를
+   * 켜지 않고 취소할 수 있는 op(kind `tagCheck`)만 붙는다
+   */
+  tagReports: Record<string, TagSyncReport>;
+  /** 지금 원격 tag 를 확인(네트워크) 중인 원격 */
+  tagChecking: string[];
+  /** 로컬 tag 목록 (C3b, 태그 문서의 종류·날짜·제목 열). 읽은 적이 없으면 null */
+  tagList: LocalTag[] | null;
   lastOutcome: OpOutcome | null;
   /// S5
   nestedRepos: string[];
@@ -628,7 +671,35 @@ export interface SessionState {
     message: string | null,
     sign?: boolean,
   ): Promise<void>;
-  deleteTag(name: string): Promise<void>;
+  /**
+   * tag 들을 고른 원격으로 push 한다 (TG-01·02). 결과를 직접 알린다: 이름 충돌은 안내(`tagExists`), 그 밖의 실패는 오류
+   * 줄, 모두 성공이면 토스트. 이 작업의 op 끝 토스트는 띄우지 않는다. 결과(요청 순서), 명령 전체가 실패하면 undefined
+   */
+  pushTags(remote: string, names: string[]): Promise<TagRefResult[] | undefined>;
+  /**
+   * 지울 곳(로컬·원격들)에서 tag 들을 지운다 (TG-03~06). 원격들 → (원격 것이 다르면 `onDiverged` 로 묻고) → 로컬 순서이고
+   * busy 는 한 번만, 묻는 동안에도 켜 둔다. 결과를 직접 알린다 (다 지움 = 토스트, 아니면 오류 줄. 취소하고 바뀐 것이
+   * 없으면 알리지 않는다). 요약을 돌려준다
+   */
+  deleteTagsScoped(
+    names: string[],
+    scope: TagDeleteScope,
+    opts?: { onDiverged?: DivergedAsk; silent?: boolean },
+  ): Promise<TagDeleteSummary | undefined>;
+  /**
+   * 태그 문서의 일괄 작업 (C4·C5): push · 가져오기 · 로컬 것으로 덮어쓰기를 busy 한 번으로 돌리고 결과를 알리지 않고
+   * 돌려준다 (문서 안 작업은 토스트를 띄우지 않고 결과 칸이 보인다, TG-12 ③). 명령 전체가 실패하면 결과 없이 그 안내
+   */
+  runTagBatch(op: TagBatchOp): Promise<TagBatchOutcome>;
+  /**
+   * 원격 tag 를 로컬 것으로 덮어쓴다 (C5, TG-15 "로컬 것으로 맞추기"): 확인한 원격 객체로 lease 를 건 push 한 번
+   * (`--force` 없음, undo 없음). 결과를 직접 알린다 (모두 성공이면 토스트, 아니면 오류 줄 — 그 사이 원격이 바뀌었으면
+   * 원격은 그대로다). 결과, 명령 전체가 실패하면 undefined
+   */
+  replaceRemoteTags(
+    remote: string,
+    items: { name: string; expectedRemote: string }[],
+  ): Promise<TagRefResult[] | undefined>;
   merge(reference: string, mode: MergeMode): Promise<void>;
   rebase(onto: string, autostash: boolean): Promise<void>;
   cherryPick(oids: string[]): Promise<void>;
@@ -640,6 +711,28 @@ export interface SessionState {
   commitGraphWrite(): Promise<void>;
   dismissCommitGraph(): void;
   dismissHint(): void;
+  /**
+   * 원격 tag 를 확인한다 (TG-08, 네트워크): 원격마다 `ls-remote` 로 보고서를 새로 받는다. 주지 않으면 모든 원격. busy 를
+   * 켜지 않고, 한 원격의 실패(보고서의 `lastError`)가 다른 원격의 결과를 지우지 않는다
+   */
+  checkRemoteTags(remotes?: string[]): Promise<void>;
+  /**
+   * 네트워크 없이 보고서를 다시 받는다 (앱의 push·삭제·조회 뒤, ref 변경 뒤 — 코어 캐시가 고친 값). 기본은 받은 적이 있는
+   * 원격만, `all` 이면 모든 원격(다른 탭이 이미 확인한 같은 저장소의 캐시를 읽는다). 사라진 원격·비워진 캐시는 지운다
+   */
+  reloadRemoteTags(opts?: { all?: boolean }): Promise<void>;
+  /** 로컬 tag 목록을 (다시) 읽는다 (태그 문서가 보일 때, ref 가 바뀐 뒤). 실패하면 이전 값을 둔다 */
+  loadTagList(): Promise<void>;
+  /**
+   * 원격 tag 를 받아 온다 (TG-11, `overwrite` 면 로컬의 다른 tag 를 원격 것으로 바꾼다 — TG-15). 결과를 직접 알린다:
+   * 모두 성공이면 토스트, 아니면 오류 줄. 원격에 없는 이름이 섞여 전체가 멈췄으면 "다시 확인 후 다시 시도" 안내.
+   * 이 작업의 op 끝 토스트는 띄우지 않는다. 결과, 명령 전체가 실패하면 undefined
+   */
+  fetchTags(
+    remote: string,
+    names: string[],
+    overwrite: boolean,
+  ): Promise<TagRefResult[] | undefined>;
 
   // 원격·동기화 (RM-01~06)
   setPullMode(mode: PullMode): void;
@@ -798,6 +891,13 @@ export interface SessionState {
   runRebasePlan(plan: RebasePlan): Promise<boolean>;
   rewordCommit(oid: string, message: string): Promise<void>;
   squashIntoParent(oid: string): Promise<void>;
+  /**
+   * 로그 범위를 하나로 합칠 준비 (MRG-07): 범위를 현재 branch 의 이력(`older^..HEAD`)과 맞춰 보고 메시지 초안을 만든다.
+   * 합칠 수 없으면 사유를 오류 줄(`actionError`)에 두고 null
+   */
+  prepareSquashRange(): Promise<SquashRangePrep | null>;
+  /** 준비한 범위를 메시지 하나의 commit 으로 합친다. 실행하면 범위를 풀고, 깨끗이 끝나면 로그를 새 commit 으로 옮긴다 */
+  squashRange(target: SquashRangeTarget, message: string): Promise<boolean>;
 }
 
 export type SessionStore = StoreApi<SessionState>;
@@ -1245,6 +1345,114 @@ export function createSessionStore(
      */
     let ownOp: { cmd: OwnOpCommand; seen: boolean; done: boolean } | null = null;
 
+    /**
+     * 결과를 스스로 알리는 tag 원격 작업(push·원격 삭제·덮어쓰기·가져오기)이 도는 중인 수 (`quietly`). 그동안 시작된 kind
+     * `push`·`fetch` op 는 끝 토스트(오래 걸림·실패)를 띄우지 않는다 — 같은 결과를 두 번 알리지 않게. 이벤트 통로가 명령
+     * 응답과 달라 op 의 끝 이벤트는 응답보다 늦게 올 수 있으므로, 시작 때 op 번호를 기억해 끝 이벤트에서 지운다
+     */
+    let quietDepth = 0;
+    const quietOps = new Set<number>();
+    /** 결과를 스스로 알리는 원격 명령을 돌린다 (`quietDepth`) */
+    const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+      quietDepth += 1;
+      try {
+        return await fn();
+      } finally {
+        quietDepth -= 1;
+      }
+    };
+
+    /**
+     * 원격 tag 보고서의 차례 (B5). 늦게 끝난 옛 요청이 새 값을 덮지 않게, 원격마다 마지막으로 반영한 차례보다 뒤에 시작한
+     * 다시 받기만 반영한다. 확인(네트워크)은 끝난 시점에 차례를 받아 늘 반영한다 — 그 전에 시작한 다시 받기는 옛 캐시다
+     */
+    let tagSeq = 0;
+    const tagApplied: Record<string, number> = {};
+
+    /**
+     * 보고서 하나를 반영한다. 확인한 적도 실패한 적도 없는 빈 보고서면 그 원격을 지운다 (캐시가 비워졌다). 바뀐 것이 없으면
+     * (값이 같은 보고서, 없던 원격을 지우기) 상태를 그대로 둔다 — `tagReports` 참조가 같아 트리·문서가 다시 그리지 않는다
+     */
+    const applyTagReport = (remote: string, report: TagSyncReport | null) => {
+      const reports = get().tagReports;
+      const old = reports[remote];
+      const keep =
+        report !== null &&
+        ((report.checkedAt !== null && report.checkedAt !== undefined) || !!report.lastError);
+      if (keep && report) {
+        if (old === undefined || !sameTagReport(old, report)) {
+          set({ tagReports: { ...reports, [remote]: report } });
+        }
+      } else if (old !== undefined) {
+        const { [remote]: _old, ...rest } = reports;
+        set({ tagReports: rest });
+      }
+    };
+
+    // ref 가 바뀌면 보고서를 네트워크 없이 다시 받는다 (연속 변경은 한 번으로, 받은 보고서가 있을 때만)
+    let tagReloadTimer: ReturnType<typeof setTimeout> | null = null;
+    /** ref 변경 뒤 보고서 다시 받기를 미룬다 (TG-08 무효화가 코어 캐시에 반영된 값을 읽는다) */
+    const scheduleTagReload = () => {
+      if (Object.keys(get().tagReports).length === 0) {
+        return;
+      }
+      if (tagReloadTimer) {
+        clearTimeout(tagReloadTimer);
+      }
+      tagReloadTimer = setTimeout(() => {
+        tagReloadTimer = null;
+        void get().reloadRemoteTags();
+      }, 300);
+    };
+
+    /**
+     * 이름 충돌 안내에 두 commit 을 채운다 (TG-02 B): 단일 조회로 원격 commit 을 받아, 안내가 아직 그대로면 바꾼다. 조회가
+     * 실패하면 commit 없이 안내만 남는다
+     */
+    const fillTagExists = async (hint: Extract<PendingHint, { kind: 'tagExists' }>) => {
+      try {
+        const found = await client.lookupRemoteTags(id, hint.remote, hint.names);
+        const labels = get().refs.labels;
+        const commits = hint.names.map((name): TagCommitPair => {
+          const remote = found.find((t) => t.name === name);
+          return {
+            name,
+            local: labels.find((l) => l.fullName === `refs/tags/${name}`)?.target ?? null,
+            remote: remote ? (remote.peeled ?? remote.object) : null,
+            remoteObject: remote?.object ?? null,
+          };
+        });
+        if (get().pendingHint === hint) {
+          set({ pendingHint: { ...hint, commits } });
+        }
+        void get().reloadRemoteTags();
+      } catch {
+        // 조회 실패: 안내는 commit 없이 그대로 둔다
+      }
+    };
+
+    // 로컬 tag 목록 읽기의 차례 (늦게 온 옛 응답이 새 목록을 덮지 않게)
+    let tagListSeq = 0;
+
+    /**
+     * 결과를 스스로 알리는 tag 원격 명령을 busy 한 번으로 돌린다 (가져오기·일괄 작업): 명령 전체가 실패해도 `run` 의 오류 줄로
+     * 보내지 않고 그 오류를 돌려준다 — 부른 쪽이 알맞은 안내를 고른다
+     */
+    const runTagCommand = async (
+      fn: () => Promise<TagRefResult[]>,
+    ): Promise<{ results: TagRefResult[] | null; error: unknown }> => {
+      let error: unknown = null;
+      const results = await run(async () => {
+        try {
+          return await quietly(fn);
+        } catch (e) {
+          error = e;
+          return null;
+        }
+      });
+      return { results: results ?? null, error };
+    };
+
     /** 작업 명령을 돌린다 (`ownOp` 를 세우고 끝나면 정리한다) */
     const runOwnOp = async (cmd: OwnOpCommand, fn: () => Promise<unknown>) => {
       const mark = { cmd, seen: false, done: false };
@@ -1378,6 +1586,9 @@ export function createSessionStore(
       pendingJump: null,
       pendingHint: null,
       busy: false,
+      tagReports: {},
+      tagChecking: [],
+      tagList: null,
       lastOutcome: null,
       pullMode: 'default',
       stashes: [],
@@ -1584,8 +1795,12 @@ export function createSessionStore(
             void get().loadWorktreeWips();
             // checkout·pull·merge·reset 처럼 ref 를 옮기는 작업은 작업 트리 파일도 바꾼다 (W21 Project 도구 창)
             void reloadFiles();
+            scheduleTagReload();
             return;
           case 'operationStarted':
+            if ((event.kind === 'push' || event.kind === 'fetch') && quietDepth > 0) {
+              quietOps.add(event.opId);
+            }
             set({
               operations: {
                 ...s.operations,
@@ -1636,11 +1851,15 @@ export function createSessionStore(
               message: event.message,
               lockLeft: event.lockLeft,
             });
-            // 오래 걸린 작업·실패는 알린다 (UX-09)
+            // 오래 걸린 작업·실패는 알린다 (UX-09). 결과를 스스로 알리는 tag 작업의 op(`quietOps`)와 원격 tag 확인
+            // (kind `tagCheck` — 결과는 보고서의 `lastError`·안내가 보인다, D15)는 뺀다
             {
               const op = s.operations[event.opId];
+              const quiet = quietOps.delete(event.opId);
               if (
                 op &&
+                !quiet &&
+                op.kind !== 'tagCheck' &&
                 !event.cancelled &&
                 (!event.ok || Date.now() - op.startedAt >= LONG_OP_MS)
               ) {
@@ -2492,8 +2711,227 @@ export function createSessionStore(
         return run(() => client.createTag(id, name, target, message, sign)).then(() => {});
       },
 
-      deleteTag(name) {
-        return run(() => client.deleteTag(id, name)).then(() => {});
+      async pushTags(remote, names) {
+        const results = await run(
+          () => quietly(() => client.pushTags(id, remote, names)),
+          // 명령 전체가 이름 충돌로 거부된 경우의 대비책 (보통은 tag 별 결과로 온다)
+          (hint) => (hint.kind === 'remoteTagExists' ? { kind: 'tagExists', remote, names } : null),
+        );
+        if (results === undefined) {
+          return undefined;
+        }
+        const exists = results.filter((r) => r.status === 'rejectedExists').map((r) => r.name);
+        const others = results.filter(
+          (r) => !isTagSuccess(r.status) && r.status !== 'rejectedExists',
+        );
+        if (exists.length > 0) {
+          const hint = { kind: 'tagExists' as const, remote, names: exists };
+          set({ pendingHint: hint });
+          void fillTagExists(hint);
+        }
+        if (others.length > 0) {
+          set({ actionError: S.tag.pushFailed(remote, tagFailureList(others)) });
+        }
+        const [only] = results;
+        if (exists.length === 0 && others.length === 0 && only) {
+          notifyHub.notify(
+            results.length > 1
+              ? { kind: 'success', title: S.tag.pushedMany(results.length, remote) }
+              : only.status === 'upToDate'
+                ? { kind: 'info', title: S.tag.upToDate(only.name, remote) }
+                : { kind: 'success', title: S.tag.pushed(only.name, remote) },
+          );
+        }
+        // 코어가 push 결과로 캐시를 고쳤다 — 네트워크 없이 표시를 바꾼다 (TG-09 ⑤)
+        void get().reloadRemoteTags();
+        return results;
+      },
+
+      async deleteTagsScoped(names, scope, opts) {
+        if (names.length === 0 || (!scope.local && scope.remotes.length === 0)) {
+          return undefined;
+        }
+        const localLabel = (name: string) =>
+          get().refs.labels.find((l) => l.fullName === `refs/tags/${name}`);
+        const summary = await run(() =>
+          runTagDelete(names, scope, {
+            deleteRemote: (remote, items) =>
+              quietly(() => client.deleteRemoteTags(id, remote, items)),
+            deleteLocal: (list) => client.deleteLocalTags(id, list),
+            localCommit: (name) => localLabel(name)?.target ?? null,
+            onDiverged: opts?.onDiverged,
+            isLocal: (name) => localLabel(name) !== undefined,
+            describe: describeError,
+          }),
+        );
+        if (summary === undefined) {
+          return undefined;
+        }
+        if (opts?.silent) {
+          // 문서 안 작업: 결과 칸이 보인다 (TG-12 ③)
+          void get().reloadRemoteTags();
+          return summary;
+        }
+        if (tagDeleteComplete(summary)) {
+          const places = tagDeletePlaces(scope);
+          const [only] = summary.names;
+          notifyHub.notify({
+            kind: 'success',
+            title:
+              summary.names.length === 1 && only
+                ? S.tag.del.done(only, places)
+                : S.tag.del.doneMany(summary.names.length, places),
+          });
+        } else if (!summary.cancelled || tagDeleteChangedAnything(summary)) {
+          set({ actionError: tagDeleteProblems(summary) });
+        }
+        void get().reloadRemoteTags();
+        return summary;
+      },
+
+      async checkRemoteTags(remotes) {
+        const known = get().refs.remotes.map((r) => r.name);
+        const list = (remotes ?? known).filter(
+          (r) => known.includes(r) && !get().tagChecking.includes(r),
+        );
+        if (list.length === 0) {
+          return;
+        }
+        set({ tagChecking: [...get().tagChecking, ...list] });
+        await Promise.all(
+          list.map(async (remote) => {
+            try {
+              const report = await client.remoteTags(id, remote, true);
+              // 끝난 시점의 차례: 그 전에 시작한 다시 받기(옛 캐시)가 늦게 와도 덮지 않는다
+              tagApplied[remote] = ++tagSeq;
+              applyTagReport(remote, report);
+            } catch (e) {
+              // 조회 실패는 거부가 아니라 보고서의 lastError 로 온다. 거부는 취소(조용히)와 원격 문제(오류 줄)뿐이다
+              if (toIpcError(e).kind !== 'cancelled') {
+                set({ actionError: describeError(e) });
+              }
+            } finally {
+              set({ tagChecking: get().tagChecking.filter((r) => r !== remote) });
+            }
+          }),
+        );
+      },
+
+      async loadTagList() {
+        const seq = ++tagListSeq;
+        try {
+          const list = await client.tagList(id);
+          if (seq === tagListSeq) {
+            set({ tagList: list });
+          }
+        } catch {
+          // 목록은 보조 정보다 (종류·날짜·제목 열) — 실패하면 이전 값을 둔다
+        }
+      },
+
+      async fetchTags(remote, names, overwrite) {
+        const { results, error } = await runTagCommand(() =>
+          client.fetchTags(id, remote, names, overwrite),
+        );
+        void get().reloadRemoteTags();
+        if (results === null) {
+          // 원격에 없는 이름이 섞이면 git 이 전체를 멈춘다 (아무것도 받지 않음) — 다시 확인 후 다시 시도 (TG-11 ④)
+          set({
+            actionError: isMissingRemoteRef(error)
+              ? S.tag.fetchRecheck(remote)
+              : describeError(error),
+          });
+          return undefined;
+        }
+        const failed = results.filter((r) => !isTagSuccess(r.status));
+        if (failed.length > 0) {
+          set({ actionError: S.tag.fetchFailed(remote, tagFailureList(failed)) });
+        } else {
+          const [only] = results;
+          notifyHub.notify({
+            kind: 'success',
+            title:
+              results.length === 1 && only
+                ? S.tag.fetched(only.name, remote, overwrite)
+                : S.tag.fetchedMany(results.length, remote),
+          });
+        }
+        return results;
+      },
+
+      async replaceRemoteTags(remote, items) {
+        const { results, error } = await runTagCommand(() =>
+          client.replaceRemoteTags(id, remote, items),
+        );
+        void get().reloadRemoteTags();
+        if (results === null) {
+          set({ actionError: describeError(error) });
+          return undefined;
+        }
+        const failed = results.filter((r) => !isTagSuccess(r.status));
+        if (failed.length > 0) {
+          set({ actionError: S.tag.replaceFailed(remote, tagFailureList(failed)) });
+        } else {
+          const [only] = results;
+          notifyHub.notify({
+            kind: 'success',
+            title:
+              results.length === 1 && only
+                ? S.tag.replaced(only.name, remote)
+                : S.tag.replacedMany(results.length, remote),
+          });
+        }
+        return results;
+      },
+
+      async runTagBatch(op) {
+        const call = (): Promise<TagRefResult[]> => {
+          switch (op.kind) {
+            case 'push':
+              return client.pushTags(id, op.remote, op.names);
+            case 'fetch':
+              return client.fetchTags(id, op.remote, op.names, op.overwrite);
+            case 'replace':
+              return client.replaceRemoteTags(id, op.remote, op.items);
+          }
+        };
+        const { results, error } = await runTagCommand(call);
+        void get().reloadRemoteTags();
+        if (results !== null) {
+          return { results, error: null };
+        }
+        return {
+          results: [],
+          error:
+            op.kind === 'fetch' && isMissingRemoteRef(error)
+              ? S.tag.fetchRecheck(op.remote)
+              : describeError(error),
+        };
+      },
+
+      async reloadRemoteTags(opts) {
+        const known = get().refs.remotes.map((r) => r.name);
+        // 사라진 원격의 보고서는 버린다
+        for (const remote of Object.keys(get().tagReports)) {
+          if (!known.includes(remote)) {
+            applyTagReport(remote, null);
+          }
+        }
+        const list = opts?.all ? known : Object.keys(get().tagReports);
+        await Promise.all(
+          list.map(async (remote) => {
+            const seq = ++tagSeq;
+            try {
+              const report = await client.remoteTags(id, remote, false);
+              if (seq > (tagApplied[remote] ?? 0)) {
+                tagApplied[remote] = seq;
+                applyTagReport(remote, report);
+              }
+            } catch {
+              // 다시 받기는 네트워크가 없다 — 실패는 원격이 사라진 경우뿐이고 다음 ref 변경이 정리한다
+            }
+          }),
+        );
       },
 
       merge(reference, mode) {
@@ -2594,6 +3032,8 @@ export function createSessionStore(
               case 'staleInfo':
               case 'noUpstream':
                 return { kind: hint.kind, spec: full };
+              // 서버 거부(`remoteRejected`, hook 등)는 강제 push 로 풀리지 않는다 — 대화상자 없이 오류 줄에 서버 사유를
+              // 보인다 (`describeError`, TG-07)
               default:
                 return null;
             }
@@ -3555,6 +3995,72 @@ export function createSessionStore(
 
       async squashIntoParent(oid) {
         await outcome(() => client.squashIntoParent(id, oid));
+      },
+
+      /**
+       * 범위 합치기 준비: 범위 기준(`older^`, 첫 commit 이면 `--root`)에서 HEAD 까지의 plan 목록을 읽어 검사하고, 범위
+       * commit 의 메시지 전체를 읽어 초안을 만든다. 범위 diff 를 읽는 중이면 기준을 아직 몰라 하지 않는다 (메뉴도 꺼져 있다)
+       */
+      async prepareSquashRange() {
+        const r = get().range;
+        if (!r || r.loading) {
+          return null;
+        }
+        set({ actionError: null });
+        try {
+          const onto = squashRangeOnto(r.base);
+          const info = await client.rebasePlanCommits(id, onto);
+          const check = checkSquashRange(info, onto, r.older, r.newer, rangeRowCount(r));
+          if (!check.ok) {
+            set({ actionError: check.reason });
+            return null;
+          }
+          const messages = await Promise.all(
+            check.target.range.map((c) => client.commitMessage(id, c.oid)),
+          );
+          // 읽는 사이 범위를 풀거나 바꿨으면 이 준비는 버린다
+          const now = get().range;
+          if (!now || now.older !== r.older || now.newer !== r.newer) {
+            return null;
+          }
+          return { ...check.target, draft: squashRangeDraft(messages) };
+        } catch (e) {
+          set({ actionError: describeError(e) });
+          return null;
+        }
+      },
+
+      /**
+       * 범위 합치기 실행: 기존 인터랙티브 rebase 경로(실행 전 branch 백업·Undo 항목, 충돌·멈춤은 진행 띠)로 돈다. 실행하면
+       * 범위(와 그 diff)를 푼다. 깨끗이 끝나면 새 commit(기준 위의 첫 commit)으로 로그를 옮긴다 — 그래프 재로드가 아직이면
+       * 재로드가 끝날 때(`pendingJump`), 이미 끝났으면 바로
+       */
+      async squashRange(target, message) {
+        const result = await run(() =>
+          client.rebaseInteractive(id, buildSquashRangePlan(target, message)),
+        );
+        if (result === undefined) {
+          return false;
+        }
+        rangeSeq += 1;
+        set({ lastOutcome: result, ...rangeCleared() });
+        if (result !== 'clean') {
+          return true;
+        }
+        try {
+          const after = await client.rebasePlanCommits(id, target.onto);
+          const oid = after.commits[0]?.oid;
+          if (oid) {
+            set({ pendingJump: oid });
+            if ((await get().resolveRow(oid)) !== null && get().pendingJump === oid) {
+              set({ pendingJump: null });
+              await get().jumpToCommit(oid);
+            }
+          }
+        } catch {
+          // 새 commit 으로 옮기는 것은 덤이다 — 합치기는 이미 끝났다
+        }
+        return true;
       },
     };
   });

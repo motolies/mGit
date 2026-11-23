@@ -35,6 +35,15 @@ pub struct WriteSpec {
     pub no_undo: bool,
     /// 요청 환경 변수 덮어쓰기
     pub env: Vec<(String, String)>,
+    /// 0 이 아닌 코드로 끝나도 오류 대신 stdout·stderr·`status` 를 돌려준다 (`push --porcelain` 처럼
+    /// 실패해도 결과 표가 stdout 에 있는 명령). 기본은 꺼짐 — 기존처럼 `CommandFailed`
+    pub keep_failed_output: bool,
+    /// 명령이 끝나도 `op` 를 닫지 않는다 (`OperationFinished` 를 보내지 않음). 한 op 로 여러 명령(청크)을
+    /// 잇는 호출자가 마지막에 직접 닫는다. 기본은 꺼짐 — 기존처럼 명령마다 닫는다
+    pub keep_op_open: bool,
+    /// op 가 있어도 출력 줄을 `OperationOutput` 으로 흘리지 않는다 (큰 stdout 을 내는 조회). 취소는 그대로 붙는다.
+    /// 기본은 꺼짐
+    pub quiet: bool,
 }
 
 impl WriteSpec {
@@ -50,7 +59,28 @@ impl WriteSpec {
             label: None,
             no_undo: false,
             env: Vec::new(),
+            keep_failed_output: false,
+            keep_op_open: false,
+            quiet: false,
         }
+    }
+
+    /// op 출력 이벤트를 보내지 않는다 (취소는 유지)
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
+        self
+    }
+
+    /// 실패해도 출력을 오류 대신 결과로 돌려받는다
+    pub fn keep_failed_output(mut self) -> Self {
+        self.keep_failed_output = true;
+        self
+    }
+
+    /// 명령이 끝나도 op 를 닫지 않는다 (호출자가 닫는다)
+    pub fn keep_op_open(mut self) -> Self {
+        self.keep_op_open = true;
+        self
     }
 
     /// 환경 변수 덮어쓰기
@@ -69,6 +99,28 @@ impl WriteSpec {
     pub fn no_undo(mut self) -> Self {
         self.no_undo = true;
         self
+    }
+
+    /// `keep_failed_output` 으로 받은 실패 결과를 기존과 같은 `CommandFailed`(힌트 포함)로 바꾼다
+    pub(crate) fn failure(&self, result: &WriteResult) -> CoreError {
+        let args: Vec<String> = self
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let stdout_text = result.stdout_lossy();
+        let hint = classify_stderr(&result.stderr).or_else(|| classify_stderr(&stdout_text));
+        let text = redact_text(if result.stderr.trim().is_empty() {
+            &stdout_text
+        } else {
+            &result.stderr
+        });
+        CoreError::CommandFailed {
+            args: redact_args(&args),
+            status: result.status,
+            stderr: text,
+            hint,
+        }
     }
 
     /// 기본 라벨: 서브커맨드 + 첫 옵션
@@ -112,17 +164,24 @@ impl WriteSpec {
     }
 }
 
-/// 쓰기 명령 결과 (종료 코드 0)
+/// 쓰기 명령 결과. `keep_failed_output` 이 아니면 늘 종료 코드 0 이다
 #[derive(Clone, Debug)]
 pub struct WriteResult {
     pub stdout: Vec<u8>,
     pub stderr: String,
+    /// 종료 코드 (시그널로 죽었으면 `None`)
+    pub status: Option<i32>,
 }
 
 impl WriteResult {
     /// stdout 을 lossy 문자열로
     pub fn stdout_lossy(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    /// 종료 코드 0 인지
+    pub fn success(&self) -> bool {
+        self.status == Some(0)
     }
 }
 
@@ -182,6 +241,15 @@ impl CoreInner {
         outcome
     }
 
+    /// 쓰기 뒤 재조회 (`run_write` 의 끝과 같다): 이 세션과, 같은 `common_dir` 를 쓰는 다른 세션(워크트리). 여러 명령을
+    /// `skip_refresh` 로 이은 호출자가 마지막에 한 번 부른다
+    pub(crate) async fn refresh_after_write(self: &Arc<Self>, session: &Arc<RepoSession>) {
+        self.refresh_session(session, RefreshScope::all(true)).await;
+        for other in self.sessions_sharing(&session.info.common_dir, session.id) {
+            self.refresh_session(&other, RefreshScope::all(true)).await;
+        }
+    }
+
     /// 같은 `common_dir` 를 공유하는 다른 세션들
     fn sessions_sharing(
         &self,
@@ -210,6 +278,18 @@ impl CoreInner {
         self.run_write_in(work_tree, None, spec).await
     }
 
+    /// 네트워크 읽기 명령(`ls-remote`)을 쓰기 잠금 없이 돈다. 저장소를 바꾸지 않으므로 undo 스냅샷·감시 억제·재조회가
+    /// 없고 다른 쓰기를 기다리게 하지 않는다. askpass·설정 덮어쓰기·명령 로그·`op` 출력·취소는 쓰기와 같다
+    pub(crate) async fn run_network_read(
+        &self,
+        session: &Arc<RepoSession>,
+        spec: &WriteSpec,
+    ) -> Result<WriteResult, CoreError> {
+        debug_assert!(spec.network);
+        self.run_write_in(&session.info.work_tree, Some(session), spec)
+            .await
+    }
+
     /// 큐 락을 쥔 채로 실행한다 (`index.lock` 재시도 포함)
     async fn run_write_locked(
         &self,
@@ -233,17 +313,25 @@ impl CoreInner {
         } else {
             EnvProfile::Write
         };
-        let line_sink = spec.op.as_ref().zip(session).map(|(op, session)| {
-            Arc::new(LineEventSink::new(
-                Arc::clone(&session.sink),
-                session.id,
-                op.id,
-                spec.progress,
-            ))
-        });
-        // 장시간 명령이면 끝 이벤트를 세션으로 보낸다 (세션 없는 쓰기에는 등록된 명령이 없다)
+        let line_sink =
+            spec.op
+                .as_ref()
+                .zip(session)
+                .filter(|_| !spec.quiet)
+                .map(|(op, session)| {
+                    Arc::new(LineEventSink::new(
+                        Arc::clone(&session.sink),
+                        session.id,
+                        op.id,
+                        spec.progress,
+                    ))
+                });
+        // 장시간 명령이면 끝 이벤트를 세션으로 보낸다 (세션 없는 쓰기에는 등록된 명령이 없다).
+        // `keep_op_open` 이면 호출자가 여러 명령 뒤에 닫는다
         let finish = |ok: bool, cancelled: bool, message: &str| {
-            if let Some(session) = session {
+            if let Some(session) = session
+                && !spec.keep_op_open
+            {
                 self.finish_op(session, spec, ok, cancelled, message);
             }
         };
@@ -301,6 +389,7 @@ impl CoreInner {
                 return Ok(WriteResult {
                     stdout: out.stdout,
                     stderr: out.exit.stderr,
+                    status: out.exit.status,
                 });
             }
             if is_index_lock_error(&out.exit.stderr) && attempt < self.cfg.index_lock_retries {
@@ -320,6 +409,13 @@ impl CoreInner {
                 &out.exit.stderr
             });
             finish(false, false, &text);
+            if spec.keep_failed_output {
+                return Ok(WriteResult {
+                    stdout: out.stdout,
+                    stderr: out.exit.stderr,
+                    status: out.exit.status,
+                });
+            }
             return Err(CoreError::CommandFailed {
                 args,
                 status: out.exit.status,
@@ -338,9 +434,20 @@ impl CoreInner {
         cancelled: bool,
         message: &str,
     ) {
-        let Some(op) = &spec.op else {
-            return;
-        };
+        if let Some(op) = &spec.op {
+            self.end_op(session, op, ok, cancelled, message);
+        }
+    }
+
+    /// op 를 닫는다: 등록을 지우고 `OperationFinished` 를 보낸다. `keep_op_open` 으로 명령을 이은 호출자가 마지막에 부른다
+    pub(crate) fn end_op(
+        &self,
+        session: &RepoSession,
+        op: &OpHandle,
+        ok: bool,
+        cancelled: bool,
+        message: &str,
+    ) {
         self.ops.end(op.id);
         let lock_left = cancelled && session.info.git_dir.join("index.lock").exists();
         session.sink.emit(CoreEvent::OperationFinished {

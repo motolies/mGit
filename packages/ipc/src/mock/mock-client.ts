@@ -10,6 +10,7 @@ import type {
   InProgressOp,
   ModuleOverrides,
   OpOutcome,
+  RefLabel,
   RepoOpened,
   RepoSessionRelease,
   RepoState,
@@ -17,6 +18,7 @@ import type {
   SessionId,
   SessionProfile,
   StatusEntry,
+  TagRefResult,
 } from '../types';
 import {
   createMockRecorder,
@@ -32,6 +34,27 @@ import {
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
 import { pick } from './mock-l10n';
+import {
+  MockGitFailure,
+  type MockTagFail,
+  mockDefaultTagRemote,
+  mockDeleteLocalTags,
+  mockDeleteRemoteTags,
+  mockFetchLabel,
+  mockFetchTags,
+  mockLookupError,
+  mockLookupRemoteTags,
+  mockPushTags,
+  mockReplaceRemoteTags,
+  mockTagList,
+  mockTagNameError,
+  mockTagNamesLabel,
+  mockTagOpMessage,
+  mockTagReport,
+  mockUnknownRemote,
+  readMockTagFail,
+  recordMockTagCheck,
+} from './mock-tags';
 import {
   abandonMockOp,
   applyMockIndexWrite,
@@ -62,6 +85,7 @@ import {
   mockStatusWith,
   mockWorkTreeDiff,
   parseMockHosting,
+  relabelGraph,
   resolveMockConflict,
   setMockFolderEntries,
   setMockFolderOp,
@@ -143,6 +167,12 @@ export interface MockClientOptions {
    * (바꾼 뒤에는 페이지를 다시 읽는다). 기본은 꺼짐
    */
   superproject?: boolean;
+  /**
+   * 저장소마다 더할 합성 tag 수 (tag 수천 개 화면 측정, B3). 주지 않으면 `VITE_MGIT_MOCK_TAGS`, 그것도 없으면
+   * `localStorage['mgit.mock.tags']` 를 본다 (장면은 클라이언트를 만들 때 한 번 만들므로 바꾼 뒤에는 페이지를 다시 읽는다).
+   * 기본 0
+   */
+  tags?: number;
 }
 
 /** 목 전용 조절값을 두는 저장 키 */
@@ -152,6 +182,8 @@ const CONTAINING_TIMEOUT_KEY = 'mgit.mock.containingTimeout';
 const FOLDER_OPS_KEY = 'mgit.mock.folderOps';
 const HOSTING_KEY = 'mgit.mock.hosting';
 const SUPERPROJECT_KEY = 'mgit.mock.superproject';
+/** 합성 tag 수 (`MockClientOptions.tags`) */
+const TAGS_KEY = 'mgit.mock.tags';
 /** 상태 바에 보일 git 버전 글자 (매뉴얼 그림용). 없으면 `DEFAULT_GIT_VERSION` */
 const GIT_VERSION_KEY = 'mgit.mock.gitVersion';
 const DEFAULT_GIT_VERSION = '2.54.0 (mock)';
@@ -179,6 +211,15 @@ function storedValue(key: string): string | null {
 function storedNumber(key: string): number {
   const n = Number(storedValue(key) ?? 0);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** 합성 tag 수: 옵션 → `VITE_MGIT_MOCK_TAGS` → 저장 키 (숫자가 아니거나 0 이하면 0) */
+function mockTagCount(option: number | undefined): number {
+  if (option !== undefined) {
+    return Math.max(0, Math.floor(option));
+  }
+  const env = Number(import.meta.env?.VITE_MGIT_MOCK_TAGS ?? 0);
+  return Number.isFinite(env) && env > 0 ? Math.floor(env) : storedNumber(TAGS_KEY);
 }
 
 /** 저장해 둔 크기 조절값 (켠 것만) */
@@ -321,6 +362,7 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
     ? createMockScene(opts.scene, opts.seed, {
         folderOps: opts.folderOps ?? storedNumber(FOLDER_OPS_KEY),
         scale: opts.scale ?? storedScale(),
+        tags: mockTagCount(opts.tags),
       })
     : null;
   /** 저장소 경로 → 해결한 충돌의 원래 항목 (W15 `unresolve` 가 되돌린다) */
@@ -792,6 +834,104 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
     return result;
   };
 
+  /**
+   * tag 원격 작업(push·원격 삭제) 흉내의 공통 차례 (코어·셸과 같다): `operationStarted`(kind `push`) → 검사(원격 등록·tag
+   * 이름) → 인증 실패 주입이면 명령 기록(코드 128)·`operationFinished`(실패) 뒤 `gitFailed`(hint `authFailed`) 거부 → 아니면
+   * `run` 의 결과로 명령 기록(모두 성공이면 0, 아니면 1)·`operationFinished`(모두 성공이면 ok, 아니면 요약 문구)
+   */
+  const runTagOp = (
+    session: SessionId,
+    remote: string,
+    names: readonly string[],
+    label: string,
+    args: string[],
+    run: (fail: MockTagFail) => TagRefResult[],
+    options: { lookupFirst?: boolean; kind?: 'push' | 'fetch' } = {},
+  ): TagRefResult[] => {
+    const lookupFirst = options.lookupFirst ?? false;
+    const entry = entryOf(session);
+    const data = dataOf(session);
+    const opId = nextOpId++;
+    entry.emit({ type: 'operationStarted', session, opId, kind: options.kind ?? 'push', label });
+    const finish = (ok: boolean, message: string) =>
+      entry.emit({
+        type: 'operationFinished',
+        session,
+        opId,
+        ok,
+        cancelled: false,
+        message,
+        lockLeft: false,
+      });
+    const invalid =
+      (data.repoState.refs.remotes.some((r) => r.name === remote)
+        ? null
+        : mockUnknownRemote(remote)) ??
+      names.map(mockTagNameError).find((e) => e !== null) ??
+      null;
+    if (invalid !== null) {
+      finish(false, invalid);
+      throw new IpcClientError({ kind: 'internal', message: invalid });
+    }
+    const fail = readMockTagFail();
+    // 인증 실패는 모든 원격 명령, 연결 실패(오프라인)는 실행 직전 조회가 있는 원격 삭제만 통째로 거부된다
+    const lookupError = mockLookupError(fail, remote);
+    if (lookupError && (lookupError.kind === 'auth' || lookupFirst)) {
+      const stderr = lookupError.message;
+      logCommand(entry.path, { args, status: 128, stderr, elapsedMs: 120 });
+      finish(false, stderr);
+      throw new IpcClientError({
+        kind: 'gitFailed',
+        args,
+        status: 128,
+        stderr,
+        hint: lookupError.kind === 'auth' ? { kind: 'authFailed' } : null,
+      });
+    }
+    let results: TagRefResult[];
+    try {
+      results = run(fail);
+    } catch (e) {
+      // 명령 전체 실패 흉내 (가져오기에서 원격에 없는 이름): 코어처럼 op 를 실패로 닫고 gitFailed
+      if (!(e instanceof MockGitFailure)) {
+        throw e;
+      }
+      logCommand(entry.path, { args, status: 128, stderr: e.message, elapsedMs: 120 });
+      finish(false, e.message);
+      throw new IpcClientError({
+        kind: 'gitFailed',
+        args,
+        status: 128,
+        stderr: e.message,
+        hint: null,
+      });
+    }
+    const message = mockTagOpMessage(results);
+    logCommand(entry.path, { args, status: message === '' ? 0 : 1, stderr: '', elapsedMs: 300 });
+    finish(message === '', message);
+    return results;
+  };
+
+  /**
+   * tag 쓰기가 바꾼 라벨을 세션에 넣는다: 상태의 라벨·그래프 행 라벨을 바꾸고 코어처럼 `refsChanged`·`graphReloaded` 를
+   * 보낸다 (로컬 삭제·가져오기 공용)
+   */
+  const applyMockLabels = (session: SessionId, labels: RefLabel[]) => {
+    const entry = entryOf(session);
+    const data = dataOf(session);
+    data.repoState = { ...data.repoState, refs: { ...data.repoState.refs, labels } };
+    relabelGraph(entry.source.graph, labels);
+    entry.source.generation += 1;
+    entry.emit({ type: 'refsChanged', session, refs: data.repoState.refs });
+    entry.emit({
+      type: 'graphReloaded',
+      session,
+      generation: entry.source.generation,
+      rows: entry.source.shown.rows.length,
+      laneCount: entry.source.shown.laneCount,
+    });
+  };
+
   /** 장면이 채우는 메서드. 아래에서 널 스텁 위에 덮어쓴다 (장면이 없으면 비어 있다) */
   const sceneMethods: Partial<IpcClient> = scene
     ? {
@@ -818,6 +958,261 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         // 충돌 레이더·백업 ref (W22 브랜치 트리의 배지·Backups). 목은 계산하지 않고 장면 값을 준다
         conflictRadar: async (session) => dataOf(session).conflictRadar,
         backups: async (session) => dataOf(session).backups,
+        // tag 관리 (BR-06): 장면의 tag 표(`MockRepoData.tags`)를 실제로 바꾼다 — 원격 표는 그 세션이 닫힐 때까지 남는다.
+        // 실패 주입은 `globalThis.__mgitMockTagFail` (`MockTagFail`), 호출 인자는 `__mgitMockBatches` 에 `{method, …}` 로 남는다
+        async pushTags(session, remote, names) {
+          countMockCall('pushTags');
+          recordMockWrite({ method: 'pushTags', session, remote, names: [...names] });
+          return runTagOp(
+            session,
+            remote,
+            names,
+            `push ${remote} ${mockTagNamesLabel(names)}`,
+            [
+              'push',
+              '--porcelain',
+              '--progress',
+              '--no-follow-tags',
+              '--end-of-options',
+              remote,
+              ...names.map((n) => `refs/tags/${n}:refs/tags/${n}`),
+            ],
+            (fail) => {
+              const data = dataOf(session);
+              return mockPushTags(data.tags, data.repoState.refs.labels, remote, names, fail);
+            },
+          );
+        },
+        async deleteRemoteTags(session, remote, items) {
+          countMockCall('deleteRemoteTags');
+          recordMockWrite({ method: 'deleteRemoteTags', session, remote, items: [...items] });
+          const names = items.map((i) => i.name);
+          return runTagOp(
+            session,
+            remote,
+            names,
+            `push ${remote} --delete ${mockTagNamesLabel(names)}`,
+            [
+              'push',
+              '--porcelain',
+              '--no-follow-tags',
+              '--delete',
+              '--end-of-options',
+              remote,
+              ...names.map((n) => `refs/tags/${n}`),
+            ],
+            (fail) => mockDeleteRemoteTags(dataOf(session).tags, remote, items, fail),
+            { lookupFirst: true },
+          );
+        },
+        /**
+         * 가져오기 (C2): 원격 표의 tag 를 로컬 라벨·객체 표에 넣고(덮어쓰기면 바꾸고) 코어처럼 `refsChanged`·`graphReloaded`
+         * 를 보낸다. kind `fetch` op. 원격에 없는 이름이 섞이면 전체가 멈춘다(`gitFailed`). 연결 실패 주입(`lookup`·`auth`)이면
+         * 거부. 목에는 undo 가 없다
+         */
+        async fetchTags(session, remote, names, overwrite) {
+          countMockCall('fetchTags');
+          recordMockWrite({ method: 'fetchTags', session, remote, names: [...names], overwrite });
+          const plus = overwrite ? '+' : '';
+          return runTagOp(
+            session,
+            remote,
+            names,
+            mockFetchLabel(remote, names, overwrite),
+            [
+              'fetch',
+              '--porcelain',
+              '--verbose',
+              '--progress',
+              '--no-tags',
+              '--no-prune',
+              '--no-write-fetch-head',
+              '--end-of-options',
+              remote,
+              ...names.map((n) => `${plus}refs/tags/${n}:refs/tags/${n}`),
+            ],
+            () => {
+              const data = dataOf(session);
+              const { results, labels } = mockFetchTags(
+                data.tags,
+                data.repoState.refs.labels,
+                remote,
+                names,
+                overwrite,
+              );
+              if (labels) {
+                applyMockLabels(session, labels);
+              }
+              return results;
+            },
+            { lookupFirst: true, kind: 'fetch' },
+          );
+        },
+        /** 로컬 tag 목록 (C2): 라벨과 그래프 행으로 만든다 (`mockTagList`) */
+        async tagList(session) {
+          countMockCall('tagList');
+          const data = dataOf(session);
+          return mockTagList(
+            data.tags,
+            data.repoState.refs.labels,
+            entryOf(session).source.graph.rows,
+          );
+        },
+        /**
+         * 원격 tag 상태 보고서 (B3): 확인(`refresh`)이면 kind `tagCheck` op 를 열고 닫는다 — 조회 실패 주입(`lookup`·`auth`)이면
+         * 이전 값을 두고 `lastError` 를 남긴다(거부하지 않는다). 확인 전이면 `checkedAt: null` 인 빈 보고서
+         */
+        async remoteTags(session, remote, refresh) {
+          countMockCall('remoteTags');
+          const entry = entryOf(session);
+          const data = dataOf(session);
+          const { remotes, labels } = data.repoState.refs;
+          const name = remote ?? mockDefaultTagRemote(labels, remotes);
+          const info = remotes.find((r) => r.name === name);
+          if (!info) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message:
+                name === null
+                  ? pick(
+                      '원격이 없습니다. 먼저 원격을 추가하세요',
+                      'No remotes. Add a remote first',
+                    )
+                  : mockUnknownRemote(name),
+            });
+          }
+          const fail = readMockTagFail();
+          if (refresh) {
+            const opId = nextOpId++;
+            entry.emit({
+              type: 'operationStarted',
+              session,
+              opId,
+              kind: 'tagCheck',
+              label: `ls-remote --tags ${info.name}`,
+            });
+            const error = mockLookupError(fail, info.name);
+            recordMockTagCheck(data.tags, info.name, error);
+            logCommand(entry.path, {
+              args: ['ls-remote', '--tags', '--end-of-options', info.name],
+              status: error ? 128 : 0,
+              stderr: error?.message ?? '',
+              elapsedMs: 180,
+            });
+            entry.emit({
+              type: 'operationFinished',
+              session,
+              opId,
+              ok: error === null,
+              cancelled: false,
+              message: error?.message ?? '',
+              lockLeft: false,
+            });
+          }
+          return mockTagReport(data.tags, labels, info, fail);
+        },
+        /** 단일 조회 (B3): kind `tagCheck` op. 조회 실패 주입이면 `gitFailed` 로 거부한다 */
+        async lookupRemoteTags(session, remote, names) {
+          countMockCall('lookupRemoteTags');
+          const entry = entryOf(session);
+          const data = dataOf(session);
+          const opId = nextOpId++;
+          entry.emit({
+            type: 'operationStarted',
+            session,
+            opId,
+            kind: 'tagCheck',
+            label: `ls-remote --tags ${remote} ${mockTagNamesLabel(names)}`,
+          });
+          const finish = (ok: boolean, message: string) =>
+            entry.emit({
+              type: 'operationFinished',
+              session,
+              opId,
+              ok,
+              cancelled: false,
+              message,
+              lockLeft: false,
+            });
+          const invalid = data.repoState.refs.remotes.some((r) => r.name === remote)
+            ? (names.map(mockTagNameError).find((e) => e !== null) ?? null)
+            : mockUnknownRemote(remote);
+          if (invalid !== null) {
+            finish(false, invalid);
+            throw new IpcClientError({ kind: 'internal', message: invalid });
+          }
+          const error = mockLookupError(readMockTagFail(), remote);
+          if (error) {
+            finish(false, error.message);
+            throw new IpcClientError({
+              kind: 'gitFailed',
+              args: ['ls-remote', '--tags', '--end-of-options', remote],
+              status: 128,
+              stderr: error.message,
+              hint: error.kind === 'auth' ? { kind: 'authFailed' } : null,
+            });
+          }
+          finish(true, '');
+          return mockLookupRemoteTags(data.tags, remote, names);
+        },
+        /**
+         * 로컬 것으로 덮어쓰기 (C2b, lease push 한 번): 지금 원격이 기대값이면 로컬 것으로 바꾼다. 아니면 `rejectedStale`.
+         * kind `push` op
+         */
+        async replaceRemoteTags(session, remote, items) {
+          countMockCall('replaceRemoteTags');
+          recordMockWrite({ method: 'replaceRemoteTags', session, remote, items: [...items] });
+          const names = items.map((i) => i.name);
+          return runTagOp(
+            session,
+            remote,
+            names,
+            `push ${remote} --force-with-lease ${mockTagNamesLabel(names)}`,
+            [
+              'push',
+              '--porcelain',
+              '--progress',
+              '--no-follow-tags',
+              ...items.map((i) => `--force-with-lease=refs/tags/${i.name}:${i.expectedRemote}`),
+              '--end-of-options',
+              remote,
+              ...names.map((n) => `refs/tags/${n}:refs/tags/${n}`),
+            ],
+            () => {
+              const data = dataOf(session);
+              return mockReplaceRemoteTags(data.tags, data.repoState.refs.labels, remote, items);
+            },
+          );
+        },
+        /**
+         * 로컬 tag 일괄 삭제 (한 트랜잭션): 라벨·그래프 라벨에서 빼고 코어처럼 `refsChanged`·`graphReloaded` 를 보낸다. 없는
+         * 이름이 섞이면 아무것도 지우지 않고 거부한다 (목에는 undo 가 없다)
+         */
+        async deleteLocalTags(session, names) {
+          countMockCall('deleteLocalTags');
+          recordMockWrite({ method: 'deleteLocalTags', session, names: [...names] });
+          const entry = entryOf(session);
+          const data = dataOf(session);
+          let labels: RefLabel[];
+          try {
+            labels = mockDeleteLocalTags(data.tags, data.repoState.refs.labels, names);
+          } catch (e) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: e instanceof Error ? e.message : String(e),
+            });
+          }
+          if (names.length === 0) {
+            return;
+          }
+          logCommand(entry.path, {
+            args: ['update-ref', '--stdin'],
+            status: 0,
+            stderr: '',
+            elapsedMs: 15,
+          });
+          applyMockLabels(session, labels);
+        },
         // 호스팅 (W24 Pull Requests 도구 창): 장면 값을 조절값(`hosting`)에 맞춰 준다. 만들기·체크아웃은 상태를 바꾸지
         // 않고 인자만 남긴다 (`__mgitMockBatches` 의 `{method, session, …}`)
         hostingRemoteProject: async (session) => mockRemoteProject(dataOf(session), hostingMode()),

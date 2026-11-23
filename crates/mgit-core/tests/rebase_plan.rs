@@ -502,6 +502,210 @@ async fn plan_with_squash_after_leading_drops_is_refused() {
     }
 }
 
+/// 범위 합치기 plan (프런트 `buildSquashRangePlan` 과 같은 조합, MRG-07): `commits` 는 `onto..HEAD` (todo 순서) 이고
+/// 앞의 `range` 개가 범위다. 가장 오래된 commit 은 Reword, 범위의 나머지는 Fixup, 범위 뒤에서 HEAD 까지는 Pick
+fn squash_range_plan(
+    onto: Option<String>,
+    commits: &[mgit_core::PlanCommit],
+    range: usize,
+    message: &str,
+) -> RebasePlan {
+    RebasePlan {
+        onto,
+        steps: commits
+            .iter()
+            .enumerate()
+            .map(|(i, c)| RebaseStep {
+                oid: c.oid,
+                action: if i == 0 {
+                    RebaseAction::Reword {
+                        message: message.into(),
+                    }
+                } else if i < range {
+                    RebaseAction::Fixup
+                } else {
+                    RebaseAction::Pick
+                },
+            })
+            .collect(),
+        autostash: true,
+        update_refs: false,
+        exec: None,
+    }
+}
+
+/// 범위 합치기 관문 (MRG-07): 3개 범위가 사용자 메시지의 commit 하나가 되고, 트리는 범위 끝과 같고, 범위 뒤 commit 은
+/// 내용·메시지가 보존되고, 백업과 Undo 항목이 남아 Undo 로 돌아온다
+#[tokio::test]
+async fn squash_range_folds_commits_into_one_with_user_message() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.checkout_new("topic");
+    let a = repo.commit("A\n\nbody of A");
+    repo.commit("B");
+    let c = repo.commit("C");
+    let d = repo.commit("D\n\nbody of D");
+    let tree = |repo: &mut mgit_testkit::TestRepo, rev: &str| {
+        repo.git_ok(["rev-parse", &format!("{rev}^{{tree}}")])
+    };
+    let tree_c = tree(&mut repo, &c.to_hex());
+    let tree_d = tree(&mut repo, &d.to_hex());
+    let author_a = repo.git_ok(["log", "-1", "--format=%an <%ae> %at", &a.to_hex()]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    // 프런트와 같은 순서: 범위 기준(older^)으로 plan 목록을 읽고, 머지가 없는지 본 뒤 plan 을 만든다
+    let onto = repo.git_ok(["rev-parse", &format!("{}^", a.to_hex())]);
+    let onto = onto.trim().to_string();
+    let info = core
+        .rebase_plan_info(opened.session, Some(&onto))
+        .await
+        .unwrap();
+    assert!(!info.has_merges);
+    assert_eq!(
+        info.commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B", "C", "D"]
+    );
+    let message = "합친 제목\n\n합친 본문";
+    let plan = squash_range_plan(Some(onto), &info.commits, 3, message);
+    assert_eq!(
+        core.rebase_interactive(opened.session, &plan)
+            .await
+            .unwrap(),
+        OpOutcome::Clean
+    );
+
+    // 3개 → 1개, 메시지는 사용자 것 그대로
+    assert_eq!(subjects(&mut repo), ["D", "합친 제목", "commit 1"]);
+    assert_eq!(
+        repo.git_ok(["log", "-1", "--format=%B", "HEAD~1"])
+            .trim_end(),
+        message
+    );
+    // 트리는 범위 끝(C)과 같고, 범위 뒤 commit(D)은 트리·메시지가 그대로다
+    assert_eq!(tree(&mut repo, "HEAD~1"), tree_c);
+    assert_eq!(tree(&mut repo, "HEAD"), tree_d);
+    assert_eq!(
+        repo.git_ok(["log", "-1", "--format=%B", "HEAD"]).trim_end(),
+        "D\n\nbody of D"
+    );
+    // 작성자는 가장 오래된 commit 의 것 (git 기본)
+    assert_eq!(
+        repo.git_ok(["log", "-1", "--format=%an <%ae> %at", "HEAD~1"]),
+        author_a
+    );
+    assert!(core.repo_state(opened.session).unwrap().op.is_none());
+    // 실행 전 branch 백업과 Undo 항목
+    assert!(
+        core.backup_refs(opened.session)
+            .await
+            .unwrap()
+            .iter()
+            .any(|b| b.branch == "topic" && b.oid == d)
+    );
+    let (entries, _) = core.undo_entries(opened.session).unwrap();
+    assert_eq!(entries.first().map(|e| e.label.as_str()), Some("rebase -i"));
+    // Undo 로 합치기 전 이력으로 돌아온다
+    let undone = core.undo(opened.session).await.unwrap().unwrap();
+    assert!(undone.skipped.is_empty(), "{undone:?}");
+    assert_eq!(repo.head(), d);
+    assert_eq!(subjects(&mut repo), ["D", "C", "B", "A", "commit 1"]);
+}
+
+/// 범위가 HEAD 까지면 Pick 없이 합치고, 첫 commit(root)이 들어가면 `--root` 로 합친다
+#[tokio::test]
+async fn squash_range_up_to_head_and_from_root() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.commit("A");
+    repo.commit("B");
+    let tree_head = repo.git_ok(["rev-parse", "HEAD^{tree}"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    // 범위 A..B (HEAD 까지): 범위 뒤 commit 이 없다
+    let onto = repo.git_ok(["rev-parse", "HEAD~2"]).trim().to_string();
+    let info = core
+        .rebase_plan_info(opened.session, Some(&onto))
+        .await
+        .unwrap();
+    let plan = squash_range_plan(Some(onto), &info.commits, 2, "AB");
+    core.rebase_interactive(opened.session, &plan)
+        .await
+        .unwrap();
+    assert_eq!(subjects(&mut repo), ["AB", "commit 1"]);
+    assert_eq!(repo.git_ok(["rev-parse", "HEAD^{tree}"]), tree_head);
+
+    // 범위 root..AB: 기준이 없으니 `--root` 로 전부 하나가 된다
+    let info = core.rebase_plan_info(opened.session, None).await.unwrap();
+    assert_eq!(info.commits.len(), 2);
+    let plan = squash_range_plan(None, &info.commits, 2, "all in one");
+    assert_eq!(
+        core.rebase_interactive(opened.session, &plan)
+            .await
+            .unwrap(),
+        OpOutcome::Clean
+    );
+    assert_eq!(subjects(&mut repo), ["all in one"]);
+    assert_eq!(repo.git_ok(["rev-parse", "HEAD^{tree}"]), tree_head);
+    assert!(core.repo_state(opened.session).unwrap().op.is_none());
+}
+
+/// 머지가 범위 안에 있거나 범위 위(HEAD 까지)에 있으면 plan 조회가 `has_merges` 로 알린다. 프런트는 이 값으로 합치기를
+/// 거부한다 (실행하면 머지가 평탄화되므로)
+#[tokio::test]
+async fn squash_range_sees_merges_inside_or_above_the_range() {
+    let core = core().await;
+    // commit 1 - x1 - x2 - target - merge(topic) - top (topic 은 x2 에서 갈라진 t1)
+    let mut repo = build(Scenario::Linear(1));
+    let x1 = repo.commit("x1");
+    repo.commit("x2");
+    let target = repo.commit("target");
+    repo.git_ok(["checkout", "-q", "-b", "topic", "HEAD~1"]);
+    repo.commit("t1");
+    repo.checkout("main");
+    let merge = repo.merge(&["topic"], "merge topic");
+    repo.commit("top");
+    let head = repo.head();
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    // 범위 x1..x2: 범위 안은 선형이지만 위(HEAD 까지)에 머지가 있다
+    let below = repo
+        .git_ok(["rev-parse", &format!("{}^", x1.to_hex())])
+        .trim()
+        .to_string();
+    let info = core
+        .rebase_plan_info(opened.session, Some(&below))
+        .await
+        .unwrap();
+    assert!(info.has_merges, "범위 위의 머지: {info:?}");
+    // 범위 target..top: 머지가 범위 안에 있다
+    let parent = repo
+        .git_ok(["rev-parse", &format!("{}^", target.to_hex())])
+        .trim()
+        .to_string();
+    let info = core
+        .rebase_plan_info(opened.session, Some(&parent))
+        .await
+        .unwrap();
+    assert!(info.has_merges, "범위 안의 머지: {info:?}");
+    assert!(info.commits.iter().all(|c| c.oid != merge));
+    // 머지 위의 선형 범위만이면 머지가 없다
+    let info = core
+        .rebase_plan_info(opened.session, Some(&merge.to_hex()))
+        .await
+        .unwrap();
+    assert!(!info.has_merges);
+    assert_eq!(repo.head(), head, "조회는 이력을 건드리지 않는다");
+}
+
 #[tokio::test]
 async fn worktree_wips_lists_dirty_worktrees() {
     let core = core().await;

@@ -333,17 +333,6 @@ impl Core {
         self.run_write(session, spec).await?;
         Ok(())
     }
-
-    /// 태그를 지운다
-    pub async fn delete_tag(&self, session: SessionId, name: &str) -> Result<(), CoreError> {
-        check_name(name)?;
-        self.run_write(
-            session,
-            WriteSpec::new(["tag", "-d", "--end-of-options", name]),
-        )
-        .await?;
-        Ok(())
-    }
 }
 
 /// 삭제 거부가 "병합되지 않음" 때문인지

@@ -175,3 +175,82 @@ fn gitignore_template_label_is_english() {
         .unwrap();
     assert_eq!(empty.label, "Empty file");
 }
+
+/// tag push 의 검사 오류와 op 끝 요약이 영어다 (등록되지 않은 원격, 잘못된 tag 이름, 일부 거부)
+#[tokio::test]
+async fn tag_push_errors_and_summary_are_english() {
+    english();
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.add_bare_remote();
+    repo.git_ok(["push", "-q", "origin", "main"]);
+    repo.tag("v1", false);
+    repo.git_ok(["push", "-q", "origin", "refs/tags/v1"]);
+    repo.commit("moved");
+    repo.git_ok(["tag", "-f", "v1"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let session = opened.session;
+
+    let err = core
+        .push_tags(session, "nope", &["v1".into()], None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "No such remote: nope");
+    let err = core
+        .push_tags(session, "origin", &["v*".into()], None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Invalid tag name: \"v*\"");
+
+    let err = core
+        .delete_local_tags(session, &["nope".into()])
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "No such tag: nope");
+
+    // 확인한 뒤 원격이 또 바뀐 원격 삭제 (expected_remote 불일치)
+    let head = repo.head();
+    let stale = core
+        .delete_remote_tags(
+            session,
+            "origin",
+            &[mgit_core::TagDeleteItem {
+                name: "v1".into(),
+                expected_remote: Some(head),
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale[0].status, mgit_core::TagRefStatus::RejectedStale);
+    assert_eq!(
+        stale[0].message.as_deref(),
+        Some("The remote tag changed after it was checked. Check again")
+    );
+
+    let op = core.begin_operation(session, "push", "push tags").unwrap();
+    let op_id = op.id;
+    let results = core
+        .push_tags(session, "origin", &["v1".into()], Some(op))
+        .await
+        .unwrap();
+    assert_eq!(results[0].status, mgit_core::TagRefStatus::RejectedExists);
+    let events = wait_for(
+        &mut rx,
+        Duration::from_secs(5),
+        |e| matches!(e, CoreEvent::OperationFinished { op_id: id, .. } if *id == op_id),
+    )
+    .await;
+    let message = events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::OperationFinished {
+                op_id: id, message, ..
+            } if *id == op_id => Some(message.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(message, "Tags not processed: 1 of 1");
+}

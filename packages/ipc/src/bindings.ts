@@ -84,8 +84,45 @@ export const commands = {
 	setUpstream: (session: number, branch: string, upstream: string | null) => __TAURI_INVOKE<null>("set_upstream", { session, branch, upstream }),
 	/**  태그 생성 (message 가 있으면 annotated) */
 	createTag: (session: number, name: string, target: string | null, message: string | null, sign: boolean) => __TAURI_INVOKE<null>("create_tag", { session, name, target, message, sign }),
-	/**  태그 삭제 */
-	deleteTag: (session: number, name: string) => __TAURI_INVOKE<null>("delete_tag", { session, name }),
+	/**
+	 *  고른 원격으로 tag 들을 push 한다 (TG-01). 진행률·출력은 operation 이벤트(kind `push`)로 온다.
+	 *  결과는 요청 순서대로 tag 마다 하나다. 첫 청크가 통째로 실패하면(인증·연결) `gitFailed`
+	 */
+	pushTags: (session: number, remote: string, names: string[]) => __TAURI_INVOKE<TagRefResultDto_Serialize[]>("push_tags", { session, remote, names }),
+	/**
+	 *  고른 원격에서 tag 들을 지운다 (TG-04). 실행 직전에 모두 조회하고, `expectedRemote` 없이 로컬과 다른 것(`diverged`,
+	 *  `remoteOid`·`remoteCommit`)이 하나라도 있으면 아무것도 지우지 않고 나머지는 `notRun` 이다. 아니면 조회값으로 lease 를
+	 *  걸어 지운다(원격에 없으면 `alreadyAbsent`, `expectedRemote` 가 조회값과 다르면 `rejectedStale`).
+	 *  operation 이벤트(kind `push`)가 붙는다
+	 */
+	deleteRemoteTags: (session: number, remote: string, items: TagDeleteItemDto_Deserialize[]) => __TAURI_INVOKE<TagRefResultDto_Serialize[]>("delete_remote_tags", { session, remote, items }),
+	/**
+	 *  원격 tag 를 로컬 것으로 덮어쓴다 (TG-15 "로컬 것으로 맞추기"): 항목마다 `expectedRemote` 로 lease 를 건 push 한 번.
+	 *  결과는 `pushed`(덮어씀)·`upToDate`·`rejectedStale`(그 사이 원격이 바뀜, 원격 그대로)·`rejectedRemote`·`failed`·
+	 *  `unknown`. `--force` 단독 경로는 없다. undo 항목 없음. operation 이벤트(kind `push`)
+	 */
+	replaceRemoteTags: (session: number, remote: string, items: TagLeaseItemDto[]) => __TAURI_INVOKE<TagRefResultDto_Serialize[]>("replace_remote_tags", { session, remote, items }),
+	/**  로컬 tag 들을 한 트랜잭션으로 지운다 (TG-06). undo 항목 하나 (`tag -d v1 v2 v3 (+N)`) */
+	deleteLocalTags: (session: number, names: string[]) => __TAURI_INVOKE<null>("delete_local_tags", { session, names }),
+	/**
+	 *  원격 tag 상태 보고서 (TG-08). `remote` 가 null 이면 업스트림의 원격 → origin → 첫 원격. `refresh` 면 원격을 조회하고
+	 *  (op kind `tagCheck`, 세션 busy 와 무관, 취소 가능), 아니면 네트워크 없이 캐시로 만든다. 조회 실패는 거부가 아니라
+	 *  `lastError` 가 붙은 보고서로 온다. 취소하면 `cancelled`
+	 */
+	remoteTags: (session: number, remote: string | null, refresh: boolean) => __TAURI_INVOKE<TagSyncReportDto_Serialize>("remote_tags", { session, remote, refresh }),
+	/**
+	 *  원격 tag 몇 개를 조회한다 (단일 조회). 원격에 있는 것만 요청 순서대로 온다. 확인한 원격 상태가 있으면 그 이름들을
+	 *  고친다. op kind `tagCheck`
+	 */
+	lookupRemoteTags: (session: number, remote: string, names: string[]) => __TAURI_INVOKE<RemoteTagDto_Serialize[]>("lookup_remote_tags", { session, remote, names }),
+	/**
+	 *  원격 tag 를 받아 온다 (TG-11). `overwrite` 면 로컬의 다른 tag 를 원격 것으로 바꾼다(TG-15 원격 것으로 맞추기).
+	 *  결과는 tag 마다 `fetched`·`upToDate`·`rejectedExists`(덮어쓰지 않음, `remoteOid` 는 원격 객체)·`unknown`. undo 항목
+	 *  하나. operation 이벤트(kind `fetch`)가 붙는다. 원격에 없는 이름이 섞이면 git 이 전체를 멈춰 `gitFailed`
+	 */
+	fetchTags: (session: number, remote: string, names: string[], overwrite: boolean) => __TAURI_INVOKE<TagRefResultDto_Serialize[]>("fetch_tags", { session, remote, names, overwrite }),
+	/**  로컬 tag 목록 (TG-10): `for-each-ref` 한 번으로 종류·날짜·commit 제목·tag 제목·tagger. 이름순 */
+	tagList: (session: number) => __TAURI_INVOKE<LocalTagDto_Serialize[]>("tag_list", { session }),
 	/**  merge (MRG-01) */
 	merge: (session: number, reference: string, mode: MergeModeDto) => __TAURI_INVOKE<OpOutcome>("merge", { session, reference, mode }),
 	/**  rebase (MRG-02) */
@@ -1390,7 +1427,7 @@ export type FsFileDto =
 { kind: "denied" };
 
 /**  실패한 쓰기 명령의 힌트 */
-export type GitHint = { kind: "dirtyWorkTree"; files: string[] } | { kind: "branchCheckedOutElsewhere"; path: string } | { kind: "notFullyMerged" } | { kind: "conflicts" } | { kind: "indexLock" } | { kind: "nonFastForward" } | { kind: "authFailed" } | { kind: "staleInfo" } | { kind: "detachedHead" } | { kind: "nothingToCommit" } | { kind: "hookFailed" } | { kind: "noUpstream" };
+export type GitHint = { kind: "dirtyWorkTree"; files: string[] } | { kind: "branchCheckedOutElsewhere"; path: string } | { kind: "notFullyMerged" } | { kind: "conflicts" } | { kind: "indexLock" } | { kind: "nonFastForward" } | { kind: "authFailed" } | { kind: "staleInfo" } | { kind: "detachedHead" } | { kind: "nothingToCommit" } | { kind: "hookFailed" } | { kind: "noUpstream" } | { kind: "remoteTagExists" } | { kind: "remoteRejected"; reason: string };
 
 /**  상태 바에 표시할 git 버전 정보 */
 export type GitVersionInfo = {
@@ -1765,6 +1802,42 @@ export type LineSelection = {
 	lines: number[],
 };
 
+/**
+ *  로컬 tag 목록의 한 줄 (TG-10 열·툴팁). `date` 는 epoch 초(annotated 는 tagger 날짜, 경량은 commit 날짜), oid 는 hex.
+ *  경량이면 `tagSubject`·`tagger` 가 null 이고 `commit` 이 `object` 와 같다
+ */
+export type LocalTagDto = LocalTagDto_Serialize | LocalTagDto_Deserialize;
+
+/**
+ *  로컬 tag 목록의 한 줄 (TG-10 열·툴팁). `date` 는 epoch 초(annotated 는 tagger 날짜, 경량은 commit 날짜), oid 는 hex.
+ *  경량이면 `tagSubject`·`tagger` 가 null 이고 `commit` 이 `object` 와 같다
+ */
+export type LocalTagDto_Deserialize = {
+	name: string,
+	annotated: boolean,
+	object: string,
+	commit: string,
+	date?: number | null,
+	commitSubject: string,
+	tagSubject?: string | null,
+	tagger?: string | null,
+};
+
+/**
+ *  로컬 tag 목록의 한 줄 (TG-10 열·툴팁). `date` 는 epoch 초(annotated 는 tagger 날짜, 경량은 commit 날짜), oid 는 hex.
+ *  경량이면 `tagSubject`·`tagger` 가 null 이고 `commit` 이 `object` 와 같다
+ */
+export type LocalTagDto_Serialize = {
+	name: string,
+	annotated: boolean,
+	object: string,
+	commit: string,
+	date: number | null,
+	commitSubject: string,
+	tagSubject: string | null,
+	tagger: string | null,
+};
+
 /**  충돌 마커 위치 */
 export type MarkerHit = {
 	path: string,
@@ -2134,6 +2207,23 @@ export type RemoteProjectDto_Serialize = {
 	host: string,
 	project: string,
 	remote: string,
+};
+
+/**  원격 tag 하나 (단일 조회 결과). `peeled` 는 annotated 면 벗긴 commit */
+export type RemoteTagDto = RemoteTagDto_Serialize | RemoteTagDto_Deserialize;
+
+/**  원격 tag 하나 (단일 조회 결과). `peeled` 는 annotated 면 벗긴 commit */
+export type RemoteTagDto_Deserialize = {
+	name: string,
+	object: string,
+	peeled?: string | null,
+};
+
+/**  원격 tag 하나 (단일 조회 결과). `peeled` 는 annotated 면 벗긴 commit */
+export type RemoteTagDto_Serialize = {
+	name: string,
+	object: string,
+	peeled: string | null,
 };
 
 /**  이름 변경 충돌 묶음 */
@@ -2777,6 +2867,148 @@ export type SyntaxCompareDto_Serialize = {
 	firstErrorLine: number | null,
 	newErrors: boolean,
 };
+
+/**  원격 삭제 요청 하나. `expectedRemote` 는 `diverged` 를 확인한 뒤 다시 부를 때 그때 받은 `remoteOid` */
+export type TagDeleteItemDto = TagDeleteItemDto_Serialize | TagDeleteItemDto_Deserialize;
+
+/**  원격 삭제 요청 하나. `expectedRemote` 는 `diverged` 를 확인한 뒤 다시 부를 때 그때 받은 `remoteOid` */
+export type TagDeleteItemDto_Deserialize = {
+	name: string,
+	expectedRemote?: string | null,
+};
+
+/**  원격 삭제 요청 하나. `expectedRemote` 는 `diverged` 를 확인한 뒤 다시 부를 때 그때 받은 `remoteOid` */
+export type TagDeleteItemDto_Serialize = {
+	name: string,
+	expectedRemote: string | null,
+};
+
+/**
+ *  원격 tag 를 로컬 것으로 덮어쓰는 요청 하나. `expectedRemote` 는 확인한 원격 객체(`remoteOid`) — 지금 원격이 이 값일
+ *  때만 덮어쓴다
+ */
+export type TagLeaseItemDto = {
+	name: string,
+	expectedRemote: string,
+};
+
+/**  마지막 원격 조회 실패. `at` 은 epoch 밀리초 */
+export type TagLookupErrorDto = {
+	kind: TagLookupErrorKindDto,
+	at: number,
+	message: string,
+};
+
+/**  원격 조회 실패 종류 */
+export type TagLookupErrorKindDto = "auth" | "network" | "other";
+
+/**
+ *  tag 하나의 작업 결과. `remoteOid` 는 원격 ref 가 가리키는 객체(annotated 면 tag 객체)이고, `diverged` 면 이 값을
+ *  `expectedRemote` 로 넘겨 다시 요청한다. `remoteCommit` 은 그것을 벗긴 commit (확인창의 두 commit 중 원격 쪽)
+ */
+export type TagRefResultDto = TagRefResultDto_Serialize | TagRefResultDto_Deserialize;
+
+/**
+ *  tag 하나의 작업 결과. `remoteOid` 는 원격 ref 가 가리키는 객체(annotated 면 tag 객체)이고, `diverged` 면 이 값을
+ *  `expectedRemote` 로 넘겨 다시 요청한다. `remoteCommit` 은 그것을 벗긴 commit (확인창의 두 commit 중 원격 쪽)
+ */
+export type TagRefResultDto_Deserialize = {
+	name: string,
+	status: TagRefStatusDto,
+	/**  서버·git 이 준 사유나 실패 원문 */
+	message?: string | null,
+	remoteOid?: string | null,
+	remoteCommit?: string | null,
+};
+
+/**
+ *  tag 하나의 작업 결과. `remoteOid` 는 원격 ref 가 가리키는 객체(annotated 면 tag 객체)이고, `diverged` 면 이 값을
+ *  `expectedRemote` 로 넘겨 다시 요청한다. `remoteCommit` 은 그것을 벗긴 commit (확인창의 두 commit 중 원격 쪽)
+ */
+export type TagRefResultDto_Serialize = {
+	name: string,
+	status: TagRefStatusDto,
+	/**  서버·git 이 준 사유나 실패 원문 */
+	message: string | null,
+	remoteOid: string | null,
+	remoteCommit: string | null,
+};
+
+/**  tag 하나의 작업 결과 상태 (코어 `TagRefStatus` 와 1:1) */
+export type TagRefStatusDto = "pushed" | "upToDate" | "deleted" | "alreadyAbsent" | "fetched" | "diverged" | "rejectedExists" | "rejectedStale" | "rejectedRemote" | "failed" | "unknown" | 
+/**  확인 대기로 실행하지 않음 (원격 삭제에서 같은 호출의 다른 tag 가 diverged). 성공도 실패도 아니다 */
+"notRun";
+
+/**  상태별 개수 */
+export type TagSyncCountsDto = {
+	localOnly: number,
+	remoteOnly: number,
+	same: number,
+	diverged: number,
+	unknown: number,
+};
+
+/**  비교 결과 한 줄 ("같음"이 아닌 것만 온다). oid 는 hex */
+export type TagSyncEntryDto = TagSyncEntryDto_Serialize | TagSyncEntryDto_Deserialize;
+
+/**  비교 결과 한 줄 ("같음"이 아닌 것만 온다). oid 는 hex */
+export type TagSyncEntryDto_Deserialize = {
+	name: string,
+	state: TagSyncStateDto,
+	localObject?: string | null,
+	localCommit?: string | null,
+	remoteObject?: string | null,
+	remoteCommit?: string | null,
+};
+
+/**  비교 결과 한 줄 ("같음"이 아닌 것만 온다). oid 는 hex */
+export type TagSyncEntryDto_Serialize = {
+	name: string,
+	state: TagSyncStateDto,
+	localObject: string | null,
+	localCommit: string | null,
+	remoteObject: string | null,
+	remoteCommit: string | null,
+};
+
+/**
+ *  원격 하나의 tag 비교 보고서 (TG-08). `checkedAt`(epoch 밀리초)이 null 이면 확인한 적이 없고 개수·항목이 비어 있다.
+ *  개수는 전부를 세고 항목은 "같음"이 아닌 것만 이름순으로 온다. 조회가 실패해도 이전 값은 남고 `lastError` 가 붙는다
+ */
+export type TagSyncReportDto = TagSyncReportDto_Serialize | TagSyncReportDto_Deserialize;
+
+/**
+ *  원격 하나의 tag 비교 보고서 (TG-08). `checkedAt`(epoch 밀리초)이 null 이면 확인한 적이 없고 개수·항목이 비어 있다.
+ *  개수는 전부를 세고 항목은 "같음"이 아닌 것만 이름순으로 온다. 조회가 실패해도 이전 값은 남고 `lastError` 가 붙는다
+ */
+export type TagSyncReportDto_Deserialize = {
+	remote: string,
+	checkedAt?: number | null,
+	stale: boolean,
+	lastError?: TagLookupErrorDto | null,
+	counts: TagSyncCountsDto,
+	entries: TagSyncEntryDto_Deserialize[],
+	pushUrlDiffers: boolean,
+};
+
+/**
+ *  원격 하나의 tag 비교 보고서 (TG-08). `checkedAt`(epoch 밀리초)이 null 이면 확인한 적이 없고 개수·항목이 비어 있다.
+ *  개수는 전부를 세고 항목은 "같음"이 아닌 것만 이름순으로 온다. 조회가 실패해도 이전 값은 남고 `lastError` 가 붙는다
+ */
+export type TagSyncReportDto_Serialize = {
+	remote: string,
+	checkedAt: number | null,
+	stale: boolean,
+	lastError: TagLookupErrorDto | null,
+	counts: TagSyncCountsDto,
+	entries: TagSyncEntryDto_Serialize[],
+	pushUrlDiffers: boolean,
+};
+
+/**  원격 하나에 대한 tag 하나의 상태 (코어 `TagSyncState` 와 1:1) */
+export type TagSyncStateDto = { kind: "localOnly" } | { kind: "remoteOnly" } | { kind: "same" } | 
+/**  `sameCommit` 이면 벗긴 commit 은 같다 (예: 원격 경량, 로컬 annotated) */
+{ kind: "diverged"; sameCommit: boolean } | { kind: "unknown" };
 
 /**  커밋 메시지 텍스트 필터. `pattern` 이 비면 텍스트 조건이 없다. 7~64자 hex 로 보이면 그 해시의 커밋도 든다 */
 export type TextFilterDto = TextFilterDto_Serialize | TextFilterDto_Deserialize;

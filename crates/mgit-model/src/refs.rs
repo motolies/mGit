@@ -27,6 +27,10 @@ pub struct RefLabel {
     pub upstream_gone: bool,
     /// 이 브랜치가 체크아웃된 워크트리 경로 (BR-01·WT-05)
     pub worktree_path: Option<PathBuf>,
+    /// annotated tag 면 ref 가 가리키는 tag 객체 (`target` 은 벗긴 commit). 원격 tag 와의 비교에만 쓰고(TG-08) 화면으로는
+    /// 보내지 않는다. 경량 tag·브랜치는 `None`
+    #[serde(skip)]
+    pub tag_object: Option<Oid>,
 }
 
 /// ref 종류

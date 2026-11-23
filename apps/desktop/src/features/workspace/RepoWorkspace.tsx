@@ -25,9 +25,10 @@ import { buildStatusLookup } from '../project/file-status';
 import { type ProjectOpenMode, ProjectTree } from '../project/ProjectTree';
 import { type RowDecoration, repoDecoration } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
+import { TagsDoc } from '../tags/TagsDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
 import { EditorArea, EditorEmptyState } from './EditorArea';
-import { editorHints } from './editor-hints';
+import { editorHints, tagsDocLink } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
@@ -113,7 +114,7 @@ export interface RepoWorkspaceProps {
  *   옛 오른쪽 칸의 변경 사항 `ChangesPanel` + 커밋 입력 그대로 | Stash = 옛 사이드바·상세 칸의 스태시. 원격 프로젝트가
  *   있으면 Pull Requests 도구 창(`PullRequestsTool`, W24 — 옛 사이드바의 PR 섹션)도 같은 자리에 뜬다
  * - 가운데 = 에디터 공간: 세션에서 파생한 문서(작업 트리·커밋·범위 파일 diff, 충돌 머지 편집기) + 파일 보기 탭. 문서가
- *   없으면 단축키 안내 (ED-11 — 개요 탭은 없다). 옛 "← 그래프로"·"← 목록으로" 는 탭 닫기가 대신한다 (폴더 탭과 같다)
+ *   없으면 단축키 안내와 "tag 관리 열기" 링크 (ED-11 — 개요 탭은 없다). 옛 "← 그래프로"·"← 목록으로" 는 탭 닫기가 대신한다 (폴더 탭과 같다)
  * - 파일 트리는 그 탭 세션 스토어의 것이다. Project 도구 창이 처음 보일 때 루트를 읽고, 창 포커스·새로고침·ref 변경(세션
  *   스토어) 때 펼친 디렉터리를 다시 읽는다.
  * - 모듈·서브모듈·하위 저장소·상위 저장소 (W25 — 옛 사이드바의 남은 네 덩이, `useRepoStructure`): 디렉터리 행 장식과 행 메뉴,
@@ -234,6 +235,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     [storedDocs, sessionDocs],
   );
   const hints = useMemo(() => editorHints(actions), [actions]);
+  const emptyAction = useMemo(() => tagsDocLink(actions), [actions]);
 
   if (!ws || !tree || tabId === null) {
     return null;
@@ -343,6 +345,8 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
             </div>
           </div>
         );
+      case 'tags':
+        return <TagsDoc key={doc.id} />;
       case 'overview':
       case 'commitDiff':
         // 폴더 탭의 문서다 (저장소 탭은 커밋 diff 를 세션 문서 `historyDiff` 로 연다)
@@ -418,7 +422,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
           onActivate={ws.activateDoc}
           onClose={ws.closeDoc}
           onPin={ws.pinDoc}
-          empty={<EditorEmptyState hints={hints} />}
+          empty={<EditorEmptyState hints={hints} action={emptyAction} />}
         />
       }
     />

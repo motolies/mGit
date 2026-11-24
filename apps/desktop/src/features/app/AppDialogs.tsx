@@ -325,6 +325,7 @@ function SettingsForm({
         <div
           role="tabpanel"
           id={shortcutsId}
+          className={styles.pagePanel}
           aria-labelledby={`${shortcutsId}-tab`}
           hidden={page !== 'shortcuts'}
         >

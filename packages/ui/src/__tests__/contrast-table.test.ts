@@ -39,6 +39,10 @@ const STATUS = [
 ] as const;
 
 const CONTRAST_PAIRS: readonly Pair[] = [
+  ...on('--fg', ['--bg-group'], 'text', '섹션 제목'),
+  ...on('--control-border', PLAIN, 'ui', '입력·일반 버튼 경계'),
+  ...on('--accent-text', ['--bg-selected'], 'ui', '활성 도구 버튼 내부 강조선'),
+  ...on('--danger', ['--bg-group'], 'text', '충돌 그룹 제목'),
   // 본문 글자: 모든 면
   ...on(
     '--fg',

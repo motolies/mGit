@@ -2,14 +2,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: var(--control-h);
   padding: 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -40,4 +40,9 @@
 /* 채운 단추의 포커스 링은 채움과 같은 색이라 안쪽에 그리면 보이지 않는다 — 바깥에 띄운다 (W19 ③) */
 .primary:focus-visible {
   outline-offset: 2px;
+}
+
+.compact {
+  height: var(--control-h-compact);
+  font-size: var(--font-size-small);
 }

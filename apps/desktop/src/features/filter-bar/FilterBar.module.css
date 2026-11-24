@@ -62,9 +62,9 @@
   min-width: 0;
   gap: var(--space-1);
   box-sizing: border-box;
-  height: 24px;
+  height: var(--control-h-compact);
   padding: 0 var(--space-1) 0 var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg-panel);
   color: var(--fg-muted);
@@ -108,7 +108,7 @@
 .pending {
   flex: 0 0 auto;
   color: var(--accent-text);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   white-space: nowrap;
 }
 
@@ -199,7 +199,7 @@
   align-items: center;
   flex: 0 1 auto;
   min-width: 0;
-  height: 22px;
+  height: var(--control-h-compact);
   border-radius: var(--radius);
 }
 
@@ -285,8 +285,8 @@
   gap: var(--space-2);
   margin: var(--space-3);
   padding: 0 var(--space-3);
-  height: 24px;
-  border: 1px solid var(--border);
+  height: var(--control-h-compact);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg-muted);
@@ -319,9 +319,11 @@
 }
 
 .section {
-  padding: var(--space-3) var(--space-4) var(--space-1);
-  color: var(--fg-muted);
-  font-size: 11px;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-group);
+  color: var(--fg);
+  font-size: var(--font-size-small);
   font-weight: 600;
   user-select: none;
 }
@@ -403,7 +405,7 @@
 .listStatus {
   padding: var(--space-2) var(--space-4);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   line-height: 1.4;
 }
 
@@ -455,7 +457,7 @@
   gap: var(--space-4);
   margin-top: calc(-1 * var(--space-2));
   padding: 0 var(--space-4) var(--space-2);
-  font-size: 11px;
+  font-size: var(--font-size-small);
 }
 
 /* --- 팝오버 안: 날짜 --- */
@@ -506,9 +508,9 @@
 
 .dateInput {
   box-sizing: border-box;
-  height: 24px;
+  height: var(--control-h-compact);
   padding: 0 var(--space-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
@@ -535,9 +537,9 @@
   flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
-  height: 24px;
+  height: var(--control-h-compact);
   padding: 0 var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);

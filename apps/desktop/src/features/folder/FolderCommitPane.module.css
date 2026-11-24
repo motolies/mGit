@@ -41,6 +41,7 @@
 .title {
   font-weight: 600;
   white-space: nowrap;
+  font-size: var(--font-size-section);
 }
 
 /* 미선택·읽는 중·오류·파일 없음 안내 */

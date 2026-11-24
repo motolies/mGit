@@ -4,6 +4,7 @@
  * 작업 라벨은 위험 색 테두리로 표시한다 (배경 채움 + 흰 글자는 다크 2.78:1)
  */
 .row {
+  min-height: 37px;
   display: flex;
   align-items: center;
   gap: 10px;

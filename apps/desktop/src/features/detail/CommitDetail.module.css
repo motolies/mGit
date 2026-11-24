@@ -15,7 +15,7 @@
 
 .title {
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--font-size-section);
 }
 
 .hash {
@@ -94,9 +94,12 @@
 }
 
 .filesHeader {
-  font-size: 12px;
+  font-size: var(--font-size-section);
   font-weight: 600;
   margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--bg-group);
+  color: var(--fg);
 }
 
 .files {

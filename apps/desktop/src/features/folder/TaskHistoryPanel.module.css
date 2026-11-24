@@ -20,6 +20,7 @@
 
 .title {
   font-weight: 600;
+  font-size: var(--font-size-section);
 }
 
 .count {
@@ -176,7 +177,7 @@ button.toggle:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-small);
 }
 
 /* 실행하지 못한 사유 (펼친 줄) */
@@ -189,6 +190,6 @@ button.toggle:focus-visible {
   border-radius: var(--radius);
   color: var(--danger);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   white-space: pre-wrap;
 }

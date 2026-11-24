@@ -17,7 +17,9 @@
 }
 
 .tab[data-active="true"] {
-  background: var(--bg-hover);
+  background: var(--bg-selected);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent-text);
 }
 
 .tabName,
@@ -32,6 +34,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-size-section);
 }
 
 .tab[data-exited="true"] .tabName {
@@ -47,6 +50,11 @@
   color: var(--fg-muted);
   /* 탭 줄에 맞게 아이콘을 한 단계 작게 */
   --icon-size: 14px;
+}
+
+.tab[data-active="true"] .tabName,
+.tab[data-active="true"] .tabButton {
+  color: var(--fg);
 }
 
 .tabButton:hover {

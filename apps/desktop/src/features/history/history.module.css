@@ -30,7 +30,7 @@
 
 .title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-title);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -21,6 +21,7 @@
 .title {
   font-weight: 600;
   white-space: nowrap;
+  font-size: var(--font-size-section);
 }
 
 .spacer {

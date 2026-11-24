@@ -150,6 +150,7 @@ export function OpRowView({
       <span className={styles.actions}>
         {onResolve && slots.has('resolve') ? (
           <Button
+            size="compact"
             disabled={busy}
             onClick={onResolve}
             title={resolveTitle}
@@ -162,6 +163,7 @@ export function OpRowView({
         {/* 꺼진 단추는 툴팁이 뜨지 않는 웹뷰가 있어 사유는 감싼 칸에 단다 */}
         <span title={blocked ?? c.continueReason ?? undefined} {...at('continue')}>
           <Button
+            size="compact"
             variant="primary"
             disabled={c.continueDisabled || stopped}
             onClick={() => onContinue()}
@@ -171,11 +173,18 @@ export function OpRowView({
           </Button>
         </span>
         {slots.has('skip') ? (
-          <Button disabled={busy || stopped} onClick={() => onSkip()} {...describe} {...at('skip')}>
+          <Button
+            size="compact"
+            disabled={busy || stopped}
+            onClick={() => onSkip()}
+            {...describe}
+            {...at('skip')}
+          >
             {S.op.skip}
           </Button>
         ) : null}
         <Button
+          size="compact"
           {...describe}
           disabled={busy || stopped}
           onClick={() =>
@@ -247,11 +256,12 @@ export function IsolatedRowView({
       <span className={styles.actions}>
         {/* 꺼진 단추는 툴팁이 뜨지 않는 웹뷰가 있어 사유는 감싼 칸에 단다 (Continue 와 같다) */}
         <span title={applyBlocked ?? undefined} {...at('apply')}>
-          <Button disabled={applyBlocked !== null} onClick={() => onApply()}>
+          <Button size="compact" disabled={applyBlocked !== null} onClick={() => onApply()}>
             {S.preview.isolatedApply}
           </Button>
         </span>
         <Button
+          size="compact"
           onClick={() =>
             void dialogs.confirm(discardConfirm).then((ok) => {
               if (ok) {

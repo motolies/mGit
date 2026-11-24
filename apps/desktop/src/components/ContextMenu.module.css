@@ -6,7 +6,7 @@
   background: var(--bg);
   color: var(--fg);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-  font-size: 12px;
+  font-size: var(--font-size-small);
   z-index: 50;
 }
 
@@ -56,9 +56,11 @@
 
 /* 드롭다운 메뉴 (그래프 옵션): 그룹 라벨과 체크 표시 */
 .label {
-  padding: 4px 10px 2px;
-  color: var(--fg-muted);
-  font-size: 11px;
+  margin: 4px 0;
+  padding: 5px 10px;
+  background: var(--bg-group);
+  color: var(--fg);
+  font-size: var(--font-size-small);
   font-weight: 600;
   user-select: none;
 }

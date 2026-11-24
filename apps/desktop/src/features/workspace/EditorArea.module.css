@@ -18,7 +18,7 @@
   overflow-x: auto;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--panel-seam);
-  font-size: 12px;
+  font-size: var(--font-size-section);
 }
 
 .tab {
@@ -39,6 +39,7 @@
   background: var(--bg);
   color: var(--fg);
   box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 600;
 }
 
 .tabTitle {

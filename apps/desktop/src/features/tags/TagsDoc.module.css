@@ -42,13 +42,14 @@
 
 .select,
 .search {
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
   font-size: 12px;
   padding: 2px 6px;
+  min-height: var(--control-h-compact);
 }
 
 .search {
@@ -95,11 +96,13 @@
   flex: 0 0 auto;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
+  color: var(--fg);
   font-size: 12px;
   height: var(--tree-row-h, 22px);
   /* 머리 줄은 한 줄로 고정한다 (두 줄로 접히면 칸마다 높이가 어긋난다). `.th` 는 `all: unset` 으로 이 값을 물려받는다 */
   white-space: nowrap;
+  background: var(--bg-group);
+  font-weight: 600;
 }
 
 .th {
@@ -205,7 +208,7 @@
 .action {
   all: unset;
   padding: 2px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   cursor: pointer;
   font-size: 12px;

@@ -77,8 +77,9 @@
   font-weight: 600;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
+  color: var(--fg);
   white-space: nowrap;
+  background: var(--bg-group);
 }
 
 .th {

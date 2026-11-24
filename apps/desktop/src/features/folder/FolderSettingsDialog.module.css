@@ -31,7 +31,7 @@
 .title {
   margin: 0;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-title);
 }
 
 .spacer {

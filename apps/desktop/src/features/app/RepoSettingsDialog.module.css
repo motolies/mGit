@@ -30,7 +30,7 @@
 
 .title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-title);
 }
 
 .spacer {
@@ -46,8 +46,11 @@
 }
 
 .heading {
+  color: var(--fg);
+  background: var(--bg-group);
+  padding: 6px 10px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-section);
   font-weight: 600;
 }
 
@@ -68,7 +71,8 @@
 
 .input,
 .textarea {
-  border: 1px solid var(--border);
+  min-height: var(--field-h);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);

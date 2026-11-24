@@ -22,7 +22,7 @@
   color: var(--fg);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-size-small);
 }
 
 .input {
@@ -33,7 +33,7 @@
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size);
   padding: 10px 12px;
   outline: none;
 }
@@ -51,9 +51,12 @@
 }
 
 .group [cmdk-group-heading] {
-  padding: 6px 8px 2px;
-  font-size: 11px;
-  color: var(--fg-muted);
+  margin: 4px 0;
+  padding: 5px 8px;
+  background: var(--bg-group);
+  color: var(--fg);
+  font-size: var(--font-size-small);
+  font-weight: 600;
 }
 
 .item {
@@ -79,7 +82,7 @@
 
 .kbd {
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--fg-muted);
   border: 1px solid var(--border);
   border-radius: 4px;

@@ -22,7 +22,7 @@
 
 .title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-title);
 }
 
 .hint {
@@ -72,7 +72,7 @@
 
 .select {
   grid-area: select;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
@@ -130,7 +130,7 @@
 
 .message {
   grid-area: message;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);

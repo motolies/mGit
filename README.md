@@ -57,6 +57,7 @@ pnpm build     # .app·.dmg 만들기 → target/release/bundle/
 아래는 개발하며 남긴 내부 기록입니다. 앱을 쓰는 데는 필요 없습니다.
 
 - [기능 명세](claudedocs/mgit-기능-명세.md) — 기능 목록과 결정 사항
+- [UI 가독성 가이드](agent-docs/UI-가독성-가이드.md) — 화면 작업 전 참고할 제목·그룹·컨트롤 기준, 토큰 사용법과 검증 체크리스트
 - [IntelliJ식 화면 개편 결과](agent-docs/intellij-화면-개편-구현-결과.md) — 지금 화면 배치로 바꾼 작업의 결과와 실기기 확인 목록
 - [다국어 지원 결과](agent-docs/다국어-지원-구현-결과.md) — 한국어·영어 화면 작업의 결과와 실기기 확인 목록
 - `claudedocs/` 의 단계별 결과(`phase*-결과.md`)와 Git GUI 조사

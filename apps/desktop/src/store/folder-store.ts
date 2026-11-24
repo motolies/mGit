@@ -217,6 +217,15 @@ export interface TimelineSelection {
   oid: string;
 }
 
+/** 요청한 저장소 범위와 현재 표시 데이터의 범위가 다른지 비교한다. 빈 범위와 전체 명시 선택은 같다. */
+export function timelineScopePending(info: TimelineInfo | null, scope: readonly string[]): boolean {
+  return (
+    info?.repos.some(
+      (repo) => repo.inScope !== (scope.length === 0 || scope.includes(repo.path)),
+    ) ?? false
+  );
+}
+
 /** 타임라인 행의 저장소 번호 → 저장소 경로 (번호 == 순번 == `info.repos[].index`). 모르면 null */
 export function timelineRepoPath(
   info: TimelineInfo | null,
@@ -715,6 +724,9 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
   // 저장소 범위 변경 요청 차례와 도는 요청 수 (도는 동안은 타임라인 정보로 범위를 덮어쓰지 않는다)
   let scopeSeq = 0;
   let scopeInflight = 0;
+  let scopeRequest: Promise<void> | null = null;
+  let confirmedScope: string[] = [];
+  let scopeAwaitingData = false;
   // 브랜치 더블클릭이 건 저장소 범위의 기억 (없으면 null). 화면이 그릴 값이 아니라 스토어 상태에 넣지 않는다
   let branchFocus: BranchFocusScope | null = null;
   // 작성자 후보 요청 차례. 새 요청·범위 변경마다 올려 늦게 온 옛 응답을 버린다
@@ -979,7 +991,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
     /** 타임라인 데이터가 왔다 (첫 로드 완료·다시 읽힘): 행 수를 바꾸고, 질의가 바뀐 뒤 처음이면 스크롤 기준을 맞춘다 */
     const timelineLoaded = (generation: number, rows: number) => {
       timelineCache.setTotalRows(rows, true);
-      timelineCache.invalidateAll();
+      timelineCache.invalidateAll({ discardRows: scopeAwaitingData });
       const listMode = isListModeQuery(get().timeline.query);
       const changed = shownEpoch !== queryEpoch;
       shownEpoch = queryEpoch;
@@ -990,6 +1002,9 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         error: null,
         ...(changed ? {} : { listMode }),
       });
+      // ref 이동·삭제로 그래프가 바뀌면 같은 선택의 상세도 새 타임라인에서 읽는다.
+      // loadDetail의 차례가 이전 세대에서 읽던 상세 응답을 폐기한다.
+      get().reloadTimelineDetail();
       // 정보(저장소 번호·범위)를 받은 뒤에 찾는다 — 처음 열 때는 정보가 이 데이터와 함께 온다
       void get()
         .refreshTimelineInfo()
@@ -1429,15 +1444,19 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
 
       async refreshTimelineInfo() {
+        const seq = scopeSeq;
+        const generation = get().timeline.generation;
         try {
           const info = await client.folderTimelineInfo(id);
-          if (disposed) {
+          if (disposed || seq !== scopeSeq || generation !== get().timeline.generation) {
             return;
           }
           // 범위를 바꾸는 요청이 돌고 있지 않으면 코어의 범위로 맞춘다 (재스캔으로 범위가 풀린 경우 등)
           const scope = scopeOfInfo(info);
           const current = get().timeline.scope;
-          const syncScope = scopeInflight === 0 && !samePaths(scope, current);
+          if (!timelineScopePending(info, current)) scopeAwaitingData = false;
+          const syncScope = scopeInflight === 0 && !scopeAwaitingData && !samePaths(scope, current);
+          if (syncScope) confirmedScope = scope;
           patchTimeline({ info, ...(syncScope ? { scope } : {}) });
         } catch {
           // 정보는 다음 이벤트에서 다시 받는다
@@ -1521,13 +1540,28 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           ...(before.opened ? { loadState: 'loading' as const } : {}),
         });
         scopeInflight += 1;
-        try {
+        scopeAwaitingData = true;
+        const previous = scopeRequest;
+        // 연속 체크는 직렬화하고 아직 보내지 않은 중간 선택은 건너뛴다.
+        const request = (async () => {
+          if (previous) await previous;
+          if (disposed || seq !== scopeSeq) return;
           await client.folderTimelineScopeSet(id, scope);
+          confirmedScope = scope;
+        })();
+        scopeRequest = request.catch(() => {});
+        try {
+          await request;
         } catch (e) {
           if (!disposed && seq === scopeSeq) {
+            scopeAwaitingData = false;
             patchTimeline({
-              scope: before.scope,
-              loadState: before.loadState,
+              scope: confirmedScope,
+              loadState:
+                get().timeline.info?.finished &&
+                !timelineScopePending(get().timeline.info, confirmedScope)
+                  ? 'complete'
+                  : 'error',
               error: describeError(e),
             });
           }

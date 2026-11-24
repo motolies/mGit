@@ -371,12 +371,23 @@ export function GraphPane() {
    */
   const onLogKeyDownCapture = (e: KeyboardEvent<HTMLDivElement>) => {
     const grid = e.target as HTMLElement;
-    if (!hasChanges || grid.getAttribute('role') !== 'grid' || hasModifier(e)) {
+    const commandBoundary =
+      e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+    if (
+      !hasChanges ||
+      grid.getAttribute('role') !== 'grid' ||
+      (hasModifier(e) && !commandBoundary)
+    ) {
       return;
     }
     const onlyWip = s.totalRows === 0 && ROW_KEYS.has(e.key);
     const firstOid = cache.slice(0, 1).rows[0]?.oid;
     const fromTop =
+      !commandBoundary &&
       e.key === 'ArrowUp' &&
       (s.wipSelected || (firstOid !== undefined && s.selectedCommit === firstOid));
     if (!onlyWip && !fromTop) {

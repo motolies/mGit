@@ -103,12 +103,13 @@ export class GraphRangeCache {
     };
   }
 
-  /** 로드 완료·재로드 뒤: 세대를 올려 이후 재요청 때 모든 청크를 새로 받는다 */
-  invalidateAll(): void {
+  /** 로드 완료·재로드 뒤 세대를 올린다. 저장소 범위가 바뀌면 이전 행을 즉시 버릴 수 있다. */
+  invalidateAll(options: { discardRows?: boolean } = {}): void {
     for (const listener of this.invalidationListeners) {
       listener();
     }
     this.generation += 1;
+    if (options.discardRows) this.chunks.clear();
     this.bump();
   }
 

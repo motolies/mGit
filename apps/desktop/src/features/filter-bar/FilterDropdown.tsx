@@ -12,6 +12,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -199,8 +200,10 @@ interface ChecklistDropdownProps {
   options: readonly CheckOption[];
   /** 지금 적용된 체크 */
   selected: readonly string[];
-  /** 닫을 때 체크가 바뀌었으면 한 번 부른다 (git 을 체크마다 돌리지 않는다) */
+  /** 기본은 닫을 때 한 번, applyOnChange 모드에서는 체크 변경마다 부른다 */
   onApply: (ids: string[]) => void;
+  /** 저장소 범위처럼 체크를 바꿀 때마다 바로 적용한다 */
+  applyOnChange?: boolean;
   /** 다른 항목과 함께 고를 수 없는 항목 (branch 의 HEAD) */
   exclusive?: readonly string[];
   /** 고른 값 중 목록에 없는 것의 묶음 이름 (지울 수 있게 맨 앞에 보인다) */
@@ -222,7 +225,7 @@ interface ChecklistDropdownProps {
 /**
  * 여러 개 체크 드롭다운 (저장소·branch·작성자). 열 때 지금 값을 초안으로 복사하고, 체크는 초안만 바꾸며, 닫을 때
  * 바뀐 것이 있으면 한 번 적용한다. 검색 칸에서 ↑↓ 로 항목을 옮기고 Enter 로 체크한다. 검색 칸 아래의 전체 선택·해제도
- * 초안만 바꾼다 (보이는 항목에만)
+ * 초안만 바꾼다 (보이는 항목에만). applyOnChange 모드는 저장소 체크를 즉시 적용한다
  */
 export function ChecklistDropdown({
   name,
@@ -231,6 +234,7 @@ export function ChecklistDropdown({
   options,
   selected,
   onApply,
+  applyOnChange = false,
   exclusive,
   missingSection,
   status,
@@ -246,10 +250,21 @@ export function ChecklistDropdown({
   // 아래 단추로 닫을 때는 초안을 적용하지 않는다 (단추를 받은 쪽에 넘긴다)
   const skipApply = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (applyOnChange) {
+      draftRef.current = [...selected];
+      setDraft([...selected]);
+    }
+  }, [applyOnChange, selected]);
   /** 초안을 바꾼다 */
   const setChecked = (next: string[]) => {
     draftRef.current = next;
     setDraft(next);
+  };
+  /** 즉시 적용 모드에서는 초안과 적용값을 함께 바꾼다. 열기 초기화는 적용하지 않는다. */
+  const changeChecked = (next: string[]) => {
+    setChecked(next);
+    if (applyOnChange) onApply(orderChecked(next, all));
   };
   // 지금 값 중 목록에 없는 것도 보이고 지울 수 있게 맨 앞에 둔다
   const known = new Set(options.map((o) => o.id));
@@ -272,6 +287,7 @@ export function ChecklistDropdown({
         onOpen?.();
       }}
       onClosed={() => {
+        if (applyOnChange) return;
         if (skipApply.current) {
           skipApply.current = false;
           return;
@@ -287,9 +303,9 @@ export function ChecklistDropdown({
             name={name}
             options={all}
             checked={draft}
-            onToggle={(id) => setChecked(toggleChecked(draftRef.current, id, exclusive))}
+            onToggle={(id) => changeChecked(toggleChecked(draftRef.current, id, exclusive))}
             onSetShown={(ids, check) =>
-              setChecked(
+              changeChecked(
                 check
                   ? checkShown(draftRef.current, ids, exclusive)
                   : uncheckShown(draftRef.current, ids),

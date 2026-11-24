@@ -100,6 +100,56 @@ describe('커밋 로그의 키보드', () => {
     expect(onSelect.mock.calls.at(-1)?.[0].row).toBe(0);
   });
 
+  it('⌘↓는 미로드된 마지막 행을 읽어 선택하고 ⌘↑는 Home과 같은 첫 행을 선택한다', async () => {
+    const { cache } = setup(2000);
+    const onSelect = vi.fn();
+    const { container } = render(<Controlled cache={cache} total={2000} onSelect={onSelect} />);
+    await flush();
+    await flush();
+    const grid = container.querySelector('[role="grid"]') as HTMLElement;
+    fireEvent.keyDown(grid, { key: 'ArrowDown' });
+    expect(onSelect.mock.calls.at(-1)?.[0].row).toBe(0);
+    expect(cache.slice(1999, 2000).rows[0]).toBeUndefined();
+    expect(fireEvent.keyDown(grid, { key: 'ArrowDown', metaKey: true })).toBe(false);
+    await flush();
+    await flush();
+    expect(onSelect.mock.calls.at(-1)?.[0].row).toBe(1999);
+    expect(fireEvent.keyDown(grid, { key: 'ArrowUp', metaKey: true })).toBe(false);
+    await flush();
+    expect(onSelect.mock.calls.at(-1)?.[0].row).toBe(0);
+  });
+
+  it('빈 목록의 ⌘↑·⌘↓는 선택하지 않는다', async () => {
+    const { cache } = setup(0);
+    const onSelect = vi.fn();
+    const { container } = render(<Controlled cache={cache} total={0} onSelect={onSelect} />);
+    const grid = container.querySelector('[role="grid"]') as HTMLElement;
+    fireEvent.keyDown(grid, { key: 'ArrowUp', metaKey: true });
+    fireEvent.keyDown(grid, { key: 'ArrowDown', metaKey: true });
+    await flush();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('입력란과 편집 중인 요소의 ⌘↑·⌘↓는 가로채지 않는다', async () => {
+    const { cache } = setup(30);
+    const onSelect = vi.fn();
+    const { container } = render(<Controlled cache={cache} total={30} onSelect={onSelect} />);
+    await flush();
+    const grid = container.querySelector('[role="grid"]') as HTMLElement;
+    const input = document.createElement('input');
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    grid.append(input, editor);
+    for (const target of [input, editor]) {
+      expect(fireEvent.keyDown(target, { key: 'ArrowUp', metaKey: true })).toBe(true);
+      expect(fireEvent.keyDown(target, { key: 'ArrowDown', metaKey: true })).toBe(true);
+    }
+    await flush();
+    expect(onSelect).not.toHaveBeenCalled();
+    input.remove();
+    editor.remove();
+  });
+
   it('⇧F10·메뉴 키는 고른 행에 contextmenu 를 보낸다 (바깥의 메뉴 영역이 연다)', async () => {
     const { cache } = setup(30);
     const { container } = render(<Controlled cache={cache} total={30} onSelect={() => {}} />);
@@ -115,13 +165,14 @@ describe('커밋 로그의 키보드', () => {
     expect(opened.mock.calls).toEqual([['0'], ['0']]);
   });
 
-  it('수정키 조합(⌘↓ 등)은 뷰가 가로채지 않는다 (앱 단축키)', async () => {
+  it('⌘↑·⌘↓ 이외의 수정키 조합은 뷰가 가로채지 않는다 (앱 단축키)', async () => {
     const { cache } = setup(30);
     const onSelect = vi.fn();
     const { container } = render(<Controlled cache={cache} total={30} onSelect={onSelect} />);
     await flush();
     const grid = container.querySelector('[role="grid"]') as HTMLElement;
-    fireEvent.keyDown(grid, { key: 'ArrowDown', metaKey: true });
+    fireEvent.keyDown(grid, { key: 'ArrowDown', metaKey: true, shiftKey: true });
+    fireEvent.keyDown(grid, { key: 'ArrowUp', metaKey: true, altKey: true });
     fireEvent.keyDown(grid, { key: 'End', ctrlKey: true });
     await flush();
     expect(onSelect).not.toHaveBeenCalled();

@@ -20,6 +20,7 @@ import {
   type TimelineReveal,
   type TimelineSelection,
   timelineRepoPath,
+  timelineScopePending,
 } from '../../store/folder-store';
 import { requestRepoReword } from '../../store/reword-request';
 import { BranchToolbar } from '../branches/BranchToolbar';
@@ -504,7 +505,11 @@ export function FolderTimeline() {
   const tl = f.timeline;
   const query = tl.query;
   const filtered = hasConditions(query) || tl.scope.length > 0;
-  const body = logBodyState({ loadState: tl.loadState, totalRows: tl.totalRows, filtered });
+  const scopePending = timelineScopePending(info, tl.scope);
+  const body =
+    scopePending && tl.loadState !== 'error'
+      ? 'skeleton'
+      : logBodyState({ loadState: tl.loadState, totalRows: tl.totalRows, filtered });
   const failed = failedTimelineRepos(info);
   /** 필터 지우기 (결과 없음 상태): 필터 바의 "모두 지우기"와 같다 */
   const clearFilters = () => {

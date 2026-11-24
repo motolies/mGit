@@ -15,6 +15,7 @@ import {
   DEFAULT_TIMELINE_QUERY,
   scopeOfInfo,
   selectionInScope,
+  timelineScopePending,
 } from '../store/folder-store';
 
 const Q: GraphQuery = DEFAULT_TIMELINE_QUERY;
@@ -234,6 +235,75 @@ describe('저장소 범위 (W17, folderTimelineScopeSet)', () => {
     expect(store.getState().timeline.scope).toEqual([API]);
     pending.resolve();
     await p;
+  });
+
+  it('범위 적용 중에는 이전 데이터와 범위가 다름을 알리고, 전체 명시 선택은 전체와 같다', () => {
+    expect(timelineScopePending(info(), [API])).toBe(true);
+    expect(timelineScopePending(info([API]), [API])).toBe(false);
+    expect(timelineScopePending(info(), [API, WEB])).toBe(false);
+  });
+
+  it('연속 변경은 요청을 직렬화하고 대기 중 중간 선택을 건너뛰어 마지막 선택을 적용한다', async () => {
+    const first = deferred<void>();
+    const c = client();
+    c.folderTimelineScopeSet.mockImplementationOnce(() => first.promise);
+    const store = await opened(c);
+    const a = store.getState().setTimelineScope([API]);
+    const b = store.getState().setTimelineScope([WEB]);
+    const last = store.getState().setTimelineScope([API, WEB]);
+    expect(c.folderTimelineScopeSet).toHaveBeenCalledTimes(1);
+    expect(store.getState().timeline.scope).toEqual([API, WEB]);
+    first.resolve();
+    await Promise.all([a, b, last]);
+    expect(c.folderTimelineScopeSet.mock.calls.map((call) => call[1])).toEqual([[API], [API, WEB]]);
+    expect(store.getState().timeline.scope).toEqual([API, WEB]);
+  });
+
+  it('이전 범위에서 시작한 정보 응답과 새 로드 전 정보가 최신 체크를 덮어쓰지 않는다', async () => {
+    const old = deferred<TimelineInfo>();
+    const c = client();
+    const store = await opened(c);
+    c.folderTimelineInfo.mockImplementationOnce(() => old.promise);
+    const refresh = store.getState().refreshTimelineInfo();
+    await store.getState().setTimelineScope([API]);
+    old.resolve(info());
+    await refresh;
+    expect(store.getState().timeline.scope).toEqual([API]);
+    c.folderTimelineInfo.mockResolvedValueOnce(info());
+    await store.getState().refreshTimelineInfo();
+    expect(store.getState().timeline.scope).toEqual([API]);
+    c.folderTimelineInfo.mockResolvedValueOnce(info([API]));
+    await store.getState().refreshTimelineInfo();
+    expect(timelineScopePending(store.getState().timeline.info, [API])).toBe(false);
+  });
+
+  it('옛 범위 요청이 늦게 실패해도 최신 체크는 유지하고 다음 요청을 진행한다', async () => {
+    const first = deferred<void>();
+    const c = client();
+    c.folderTimelineScopeSet.mockImplementationOnce(() => first.promise);
+    const store = await opened(c);
+    const a = store.getState().setTimelineScope([API]);
+    const b = store.getState().setTimelineScope([WEB]);
+    first.reject(new Error('old failure'));
+    await Promise.all([a, b]);
+    expect(store.getState().timeline.scope).toEqual([WEB]);
+    expect(c.folderTimelineScopeSet).toHaveBeenLastCalledWith(9, [WEB]);
+    expect(store.getState().timeline.error).toBeNull();
+  });
+
+  it('마지막 연속 변경이 실패하면 직전 성공 범위로 돌아가며 로딩 상태에 멈추지 않는다', async () => {
+    const first = deferred<void>();
+    const c = client();
+    c.folderTimelineScopeSet.mockImplementationOnce(() => first.promise);
+    c.folderTimelineScopeSet.mockRejectedValueOnce(new Error('latest failure'));
+    const store = await opened(c);
+    const a = store.getState().setTimelineScope([API]);
+    const b = store.getState().setTimelineScope([WEB]);
+    first.resolve();
+    await Promise.all([a, b]);
+    expect(store.getState().timeline.scope).toEqual([API]);
+    expect(store.getState().timeline.loadState).not.toBe('loading');
+    expect(store.getState().timeline.error).toContain('latest failure');
   });
 
   it('실패하면 이전 범위로 되돌리고 사유를 둔다', async () => {

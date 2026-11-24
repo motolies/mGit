@@ -467,11 +467,15 @@ export function GraphView({
   /**
    * 행 이동 (UX-10, W19 ③): ↑↓ 인접 행(로드된 행 안에서), PageUp·PageDown 한 화면, Home·End 처음·끝 행.
    * ⇧F10·메뉴 키는 고른 행의 우클릭 메뉴를 연다 (바깥의 메뉴 영역이 행의 `contextmenu` 를 받는다).
-   * 입력란 안의 키와 수정키 조합은 건드리지 않는다
+   * ⌘↑·⌘↓는 Home·End와 같은 경로로 이동한다. 입력란 안의 키와 나머지 수정키 조합은 건드리지 않는다
    */
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      if ((e.target as HTMLElement).closest('input, textarea, select')) {
+      if (
+        (e.target as HTMLElement).closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+        )
+      ) {
         return;
       }
       const rows = slice.rows;
@@ -493,10 +497,17 @@ export function GraphView({
         }
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
+      const commandBoundary =
+        e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+      if ((e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) && !commandBoundary) {
         return;
       }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const key = commandBoundary ? (e.key === 'ArrowUp' ? 'Home' : 'End') : e.key;
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
         e.preventDefault();
         const next =
           idx < 0
@@ -516,7 +527,7 @@ export function GraphView({
       const current = idx >= 0 ? (rows[idx]?.row ?? 0) : first;
       const page = Math.max(1, Math.floor(viewportHeight / rowHeight) - 1);
       let target: number;
-      switch (e.key) {
+      switch (key) {
         case 'Home':
           target = 0;
           break;

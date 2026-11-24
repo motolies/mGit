@@ -50,6 +50,19 @@ describe('GraphRangeCache invalidation listeners', () => {
     expect(seen).toHaveLength(1);
   });
 
+  it('범위가 바뀌면 이전 행을 버리고 새 청크가 올 때까지 노출하지 않는다', async () => {
+    const cache = new GraphRangeCache(source(10), { chunkSize: 5 });
+    cache.setTotalRows(10, true);
+    await cache.ensureRange(0, 10);
+    const listener = vi.fn(() => cache.slice(0, 1).rows[0]?.oid);
+    cache.subscribeInvalidation(listener);
+    cache.invalidateAll({ discardRows: true });
+    expect(listener.mock.results[0]?.value).toBe('0'.repeat(40));
+    expect(cache.slice(0, 5).rows.every((row) => row === undefined)).toBe(true);
+    await cache.ensureRange(0, 5);
+    expect(cache.slice(0, 5).rows.every(Boolean)).toBe(true);
+  });
+
   it('dispose 뒤에는 리스너가 불리지 않는다', () => {
     const cache = new GraphRangeCache(source(1));
     const listener = vi.fn();

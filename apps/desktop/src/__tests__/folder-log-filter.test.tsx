@@ -204,7 +204,7 @@ describe('브랜치 트리 ↔ branch 드롭다운 (같은 상태: 질의의 ref
 });
 
 describe('저장소 범위 (folderTimelineScopeSet)', () => {
-  it('드롭다운에서 둘만 체크 → 닫을 때 한 번 범위 적용 → inScope 갱신, 행은 그 둘만이고 색은 그대로다', async () => {
+  it('드롭다운에서 둘만 체크 → 닫기 전에 범위 적용 → inScope 갱신, 행은 그 둘만이고 색은 그대로다', async () => {
     const { store, spies } = await setup();
     const colors = Object.fromEntries(
       (store.getState().timeline.info?.repos ?? []).map((r) => [r.path, r.color]),
@@ -212,11 +212,11 @@ describe('저장소 범위 (folderTimelineScopeSet)', () => {
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
     act(() => fireEvent.click(option('api-gateway')));
     act(() => fireEvent.click(option('web-console')));
-    expect(spies.scopeSet).not.toHaveBeenCalled();
+    expect(store.getState().timeline.scope).toEqual([API, WEB]);
     closePopover();
     await tick();
     await tick();
-    expect(spies.scopeSet).toHaveBeenCalledTimes(1);
+    expect(spies.scopeSet).toHaveBeenCalledTimes(2);
     expect(spies.scopeSet).toHaveBeenCalledWith(expect.any(Number), [API, WEB]);
     const repos = store.getState().timeline.info?.repos ?? [];
     expect(repos.filter((r) => r.inScope).map((r) => r.path)).toEqual([API, WEB]);
@@ -231,6 +231,36 @@ describe('저장소 범위 (folderTimelineScopeSet)', () => {
     expect(shown.length).toBeGreaterThan(0);
     expect(shown.every((r) => inScope.has(r.repo ?? -1))).toBe(true);
     expect(dropButton(S.filterBar.repo).textContent).toBe('저장소: api-gateway +1');
+  });
+
+  it('저장소 체크를 바꾼 뒤 로드가 끝나기 전에는 제외 저장소가 든 이전 그래프를 숨긴다', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { store } = await setup((mock) => ({
+      folderTimelineScopeSet: async (id, scope) => {
+        await pending;
+        return mock.folderTimelineScopeSet(id, scope);
+      },
+    }));
+    await loadRows(store);
+    expect(screen.getByTestId('graph-view')).toBeTruthy();
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    act(() => fireEvent.click(option('api-gateway')));
+    expect(store.getState().timeline.scope).toEqual([API]);
+    expect(screen.queryByTestId('graph-view')).toBeNull();
+    expect(screen.getByRole('status', { name: S.folder.timeline.loading })).toBeTruthy();
+    expect(popover()).not.toBeNull();
+    await act(async () => {
+      release();
+      await pending;
+    });
+    await tick();
+    await tick();
+    expect(screen.getByTestId('graph-view')).toBeTruthy();
+    expect(store.getState().timeline.scope).toEqual([API]);
+    closePopover();
   });
 
   it('행 우클릭 "이 저장소만 보기" → 그 저장소 하나, 다시 우클릭하면 "모든 저장소 보기" 로 푼다', async () => {

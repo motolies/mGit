@@ -19,6 +19,7 @@ import {
   clearSessionRegistry,
   disposeFolder,
   disposeWorkspace,
+  getSessionStore,
   registerFolder,
   registerSession,
   registerWorkspace,
@@ -137,7 +138,7 @@ async function settle() {
 }
 
 /** 로그(grid)에 포커스를 주고 키를 누른다 */
-async function key(k: string, mods: { shiftKey?: boolean } = {}) {
+async function key(k: string, mods: { shiftKey?: boolean; metaKey?: boolean } = {}) {
   act(() => {
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: k, ...mods });
   });
@@ -186,6 +187,28 @@ afterEach(() => {
   repos = [];
   folders = [];
   clearSessionRegistry();
+});
+
+describe('로그의 macOS 처음·끝 이동', () => {
+  it.each(['repo', 'folder'] as const)(
+    '%s: ⌘↑·⌘↓는 Home·End와 같은 커밋을 선택한다',
+    async (kind) => {
+      const mounted = kind === 'repo' ? await mountRepo() : await mountFolder();
+      const selected = () =>
+        kind === 'repo'
+          ? getSessionStore(mounted.id)?.getState().selectedCommit
+          : getFolderStore(mounted.id)?.getState().timeline.selected?.oid;
+      focusGrid();
+      await key('End');
+      const endOid = selected();
+      expect(endOid).toBeTruthy();
+      await key('ArrowUp', { metaKey: true });
+      expect(activeRow()?.getAttribute('data-row')).toBe('0');
+      await key('ArrowDown', { metaKey: true });
+      expect(selected()).toBe(endOid);
+      expect(document.activeElement).toBe(grid());
+    },
+  );
 });
 
 describe('저장소 탭 로그의 Enter·⇧F10 (W27 — 폴더 탭과 같은 키)', () => {

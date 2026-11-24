@@ -530,6 +530,7 @@ export function FilterBar({
             options={repoOptions}
             selected={repos.scope}
             onApply={repos.onScopeChange}
+            applyOnChange
             missingSection={S.filterBar.repo}
             note={S.filterBar.repoNone}
             first={first === 'repo'}

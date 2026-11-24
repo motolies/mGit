@@ -296,13 +296,14 @@ describe('폴더 스토어: 로그 선택 → 커밋 상세 (LG-07, CD-05)', () 
     expect(store.getState().timeline.detail?.detail?.oid).toBe(OTHER);
   });
 
-  it('같은 선택은 다시 읽지 않는다: 같은 행을 다시 골라도, 타임라인이 다시 읽혀도 그대로다', async () => {
+  it('같은 행 재선택은 재사용하고 타임라인 재로드 뒤에는 선택 상세를 다시 읽는다', async () => {
     const { client, spies } = folderClient();
     const store = folderStore(client);
     await store.getState().openTimeline();
     store.getState().selectTimelineRow(WEB, OID);
     await tick();
     store.getState().selectTimelineRow(WEB, OID);
+    expect(spies.folderCommitDetail).toHaveBeenCalledTimes(1);
     store.getState().applyEvent({
       type: 'graphReloaded',
       session: FOLDER_ID,
@@ -312,9 +313,33 @@ describe('폴더 스토어: 로그 선택 → 커밋 상세 (LG-07, CD-05)', () 
     });
     store.getState().applyEvent({ type: 'folderRescanned', session: FOLDER_ID, repos: [] });
     await tick();
-    expect(spies.folderCommitDetail).toHaveBeenCalledTimes(1);
+    expect(spies.folderCommitDetail).toHaveBeenCalledTimes(2);
     expect(store.getState().timeline.detail?.state).toBe('ready');
     expect(store.getState().timeline.selected).toEqual({ repoPath: WEB, oid: OID });
+  });
+
+  it('재로드 전에 시작한 상세 응답은 새 타임라인 상세를 덮어쓰지 않는다', async () => {
+    const old = deferred<CommitDetail>();
+    let calls = 0;
+    const { client } = folderClient({
+      folderCommitDetail: async () =>
+        ++calls === 1 ? old.promise : detailOf(OID, { children: [OTHER] }),
+    });
+    const store = folderStore(client);
+    await store.getState().openTimeline();
+    store.getState().selectTimelineRow(WEB, OID);
+    store.getState().applyEvent({
+      type: 'graphReloaded',
+      session: FOLDER_ID,
+      generation: 2,
+      rows: 10,
+      laneCount: 2,
+    });
+    await tick();
+    old.resolve(detailOf(OID, { children: [] }));
+    await tick();
+    expect(calls).toBe(2);
+    expect(store.getState().timeline.detail?.detail?.children).toEqual([OTHER]);
   });
 
   it('읽지 못하면 오류 상태이고, 다시 시도하거나 같은 행을 다시 고르면 다시 읽는다', async () => {

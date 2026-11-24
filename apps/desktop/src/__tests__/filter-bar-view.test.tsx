@@ -267,7 +267,7 @@ describe('텍스트·해시 입력 (LG-06)', () => {
 });
 
 describe('드롭다운 (LG-06)', () => {
-  it('저장소 드롭다운: 열기·여러 개 체크는 닫을 때 한 번만 적용, Esc 로 닫으면 포커스가 단추로 돌아온다', () => {
+  it('저장소 드롭다운: 여러 개 체크를 즉시 적용하고 닫을 때 중복 적용하지 않는다, Esc 로 닫으면 포커스가 단추로 돌아온다', () => {
     const { scopes } = setup();
     const button = dropButton(S.filterBar.repo);
     expect(button.getAttribute('aria-expanded')).toBe('false');
@@ -282,21 +282,22 @@ describe('드롭다운 (LG-06)', () => {
     act(() => fireEvent.click(option('api-gateway')));
     act(() => fireEvent.click(option('web-console')));
     expect(option('api-gateway').getAttribute('aria-selected')).toBe('true');
-    expect(scopes).toHaveLength(0);
+    expect(scopes).toEqual([['/r/api'], ['/r/api', '/r/web']]);
     act(() => {
       fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
     });
     expect(popover()).toBeNull();
-    expect(scopes).toEqual([['/r/api', '/r/web']]);
+    expect(scopes).toHaveLength(2);
+    expect(scopes.at(-1)).toEqual(['/r/api', '/r/web']);
     expect(document.activeElement).toBe(dropButton(S.filterBar.repo));
     expect(dropButton(S.filterBar.repo).textContent).toBe('저장소: api-gateway +1');
     // 체크를 바꾸지 않고 닫으면 적용하지 않는다
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
-    expect(scopes).toHaveLength(1);
+    expect(scopes.at(-1)).toEqual(['/r/api', '/r/web']);
   });
 
-  it('전체 선택·해제: 검색으로 보이는 항목에만 적용하고, 닫을 때 한 번만 적용한다', () => {
+  it('전체 선택·해제: 검색으로 보이는 항목에만 즉시 적용한다', () => {
     const { scopes } = setup();
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
     const search = document.activeElement as HTMLInputElement;
@@ -326,14 +327,14 @@ describe('드롭다운 (LG-06)', () => {
     expect(bulk(S.selection.all).disabled).toBe(false);
     // 안내는 그대로다
     expect(popover()?.textContent).toContain(S.filterBar.repoNone);
-    expect(scopes).toHaveLength(0);
+    expect(scopes.length).toBeGreaterThan(0);
     act(() => {
       fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
     });
-    expect(scopes).toEqual([['/r/api', '/r/web']]);
+    expect(scopes.at(-1)).toEqual(['/r/api', '/r/web']);
   });
 
-  it('전체 해제도 보이는 항목만 풀고, 전체 선택 후 다시 해제하면 바뀐 것이 없어 적용하지 않는다', () => {
+  it('전체 해제도 보이는 항목만 풀고, 전체 선택 후 다시 해제해도 각 변경을 즉시 적용한다', () => {
     const { scopes } = setup();
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
     const search = document.activeElement as HTMLInputElement;
@@ -349,8 +350,8 @@ describe('드롭다운 (LG-06)', () => {
     act(() => {
       fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
     });
-    expect(scopes).toEqual([['/r/infra']]);
-    // 열고 전체 선택 → 전체 해제 로 처음 값으로 돌아오면 적용하지 않는다
+    expect(scopes.at(-1)).toEqual(['/r/infra']);
+    // 전체 선택·해제·다시 선택은 각각 바로 적용한다
     act(() => fireEvent.click(dropButton(S.filterBar.repo)));
     act(() => fireEvent.click(bulk(S.selection.all)));
     act(() => fireEvent.click(bulk(S.selection.none)));
@@ -358,7 +359,8 @@ describe('드롭다운 (LG-06)', () => {
     act(() => {
       fireEvent.keyDown(popover() as HTMLElement, { key: 'Escape' });
     });
-    expect(scopes).toHaveLength(1);
+    expect(scopes).toHaveLength(5);
+    expect(scopes.at(-1)).toEqual(['/r/infra']);
   });
 
   it('branch 의 전체 선택은 HEAD 를 더하지 않고, 체크돼 있던 HEAD 는 뺀다', () => {

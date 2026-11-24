@@ -42,65 +42,120 @@ export function primaryModifierLabel(): string {
  * Shift 와 함께 누르면 웹뷰에 따라 `e.key` 가 다른 글자로 오는 문장부호 (US 배열): 표기의 키 → Shift 글자.
  * 기본 단축키에 새로 쓰는 키만 둔다 — 이미 쓰던 조합(`mod+shift+]` 등)의 판정은 바꾸지 않는다
  */
-const SHIFTED_KEY: Record<string, string> = { "'": '"' };
+const SHIFTED_KEY: Record<string, string> = {
+  "'": '"',
+  '[': '{',
+  ']': '}',
+  ',': '<',
+  '.': '>',
+  '/': '?',
+  ';': ':',
+  '-': '_',
+  '=': '+',
+  '`': '~',
+  '1': '!',
+  '2': '@',
+  '3': '#',
+  '4': '$',
+  '5': '%',
+  '6': '^',
+  '7': '&',
+  '8': '*',
+  '9': '(',
+  '0': ')',
+};
 
-/**
- * 단축키 표기(`mod+shift+p`, `f8`, `escape`)와 키 이벤트를 맞춰 본다 (UX-03).
- * `mod` 는 macOS Cmd / 그 외 Ctrl. 수정키는 정확히 일치해야 한다
- */
+/** 기록·표시·충돌·실행이 공유하는 정규형. mod는 현재 OS의 실제 수정키로 바꾼다. */
+export function normalizeShortcut(shortcut: string, mac = isMac()): string | null {
+  const parts = shortcut.toLowerCase().trim().split('+');
+  let key = parts.pop() ?? '';
+  if (!key && parts.at(-1) === '') {
+    parts.pop();
+    key = 'plus';
+  }
+  const mods = new Set<string>();
+  for (const part of parts) {
+    const name = part.trim();
+    const mod =
+      name === 'mod'
+        ? mac
+          ? 'command'
+          : 'ctrl'
+        : ['cmd', 'meta', 'command'].includes(name)
+          ? 'command'
+          : ['control', 'ctrl'].includes(name)
+            ? 'ctrl'
+            : ['option', 'alt'].includes(name)
+              ? 'alt'
+              : name;
+    if (!['ctrl', 'command', 'alt', 'shift'].includes(mod)) return null;
+    mods.add(mod);
+  }
+  if (!key || ['control', 'meta', 'alt', 'shift', 'dead', 'unidentified', 'process'].includes(key))
+    return null;
+  if (key === 'esc') key = 'escape';
+  if (key === ' ') key = 'space';
+  if (key === 'plus' && mods.has('shift')) key = '=';
+  if (mods.has('shift')) key = Object.keys(SHIFTED_KEY).find((k) => SHIFTED_KEY[k] === key) ?? key;
+  return [...['ctrl', 'command', 'alt', 'shift'].filter((m) => mods.has(m)), key].join('+');
+}
+
+/** 실제 수정키를 모두 기록하여 Ctrl과 Command를 구분한다. */
+function eventShortcut(e: KeyLike): string | null {
+  return normalizeShortcut(
+    [
+      ...(e.ctrlKey ? ['ctrl'] : []),
+      ...(e.metaKey ? ['command'] : []),
+      ...(e.altKey ? ['alt'] : []),
+      ...(e.shiftKey ? ['shift'] : []),
+      e.key === ' ' ? 'space' : e.key,
+    ].join('+'),
+  );
+}
+
+/** 추가 수정키를 허용하지 않는 공통 키 판정. */
 export function matchShortcut(e: KeyLike, shortcut: string): boolean {
-  const parts = shortcut.toLowerCase().split('+');
-  const key = parts[parts.length - 1] ?? '';
-  const wantMod = parts.includes('mod');
-  const wantShift = parts.includes('shift');
-  const wantAlt = parts.includes('alt');
-  const mac = isMac();
-  const mod = mac ? e.metaKey : e.ctrlKey;
-  const other = mac ? e.ctrlKey : e.metaKey;
-  if (mod !== wantMod || e.shiftKey !== wantShift || e.altKey !== wantAlt || other) {
-    return false;
-  }
-  const pressed = e.key.toLowerCase();
-  return pressed === key || (wantShift && SHIFTED_KEY[key] === pressed);
+  if (isImeKey(e)) return false;
+  const wanted = normalizeShortcut(shortcut);
+  return wanted !== null && wanted === eventShortcut(e);
 }
 
-/** 단축키 표기를 화면용으로 (`mod+shift+p` → `⌘⇧P` / `Ctrl+Shift+P`) */
+/** 공통 정규형을 OS에 맞춰 표시한다. */
 export function formatShortcut(shortcut: string): string {
-  const mac = isMac();
-  const parts = shortcut.split('+');
+  const parts = (normalizeShortcut(shortcut) ?? shortcut).split('+');
   const key = parts.pop() ?? '';
-  const keyLabel =
-    key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1);
-  if (mac) {
-    const map: Record<string, string> = { mod: '⌘', shift: '⇧', alt: '⌥' };
-    return `${parts.map((p) => map[p] ?? p).join('')}${keyLabel}`;
-  }
-  const map: Record<string, string> = { mod: 'Ctrl', shift: 'Shift', alt: 'Alt' };
-  return [...parts.map((p) => map[p] ?? p), keyLabel].join('+');
+  const label =
+    key === 'plus'
+      ? '+'
+      : key.length === 1
+        ? key.toUpperCase()
+        : key.charAt(0).toUpperCase() + key.slice(1);
+  const map: Record<string, string> = isMac()
+    ? { ctrl: '⌃', command: '⌘', alt: '⌥', shift: '⇧' }
+    : { ctrl: 'Ctrl', command: 'Command', alt: 'Alt', shift: 'Shift' };
+  return [...parts.map((p) => map[p] ?? p), label].join(isMac() ? '' : '+');
 }
 
-/** 키 이벤트를 단축키 표기로 (`mod+shift+k`). 수정키만 눌렀거나 글자 단독이면 null (UX-04) */
+/** 기록 중에만 호출한다. 일반 탐색키·취소키·IME와 단독 문자는 재지정하지 않는다. */
 export function shortcutFromEvent(e: KeyLike): string | null {
-  const key = e.key.toLowerCase();
-  if (['meta', 'control', 'shift', 'alt', 'dead', 'unidentified', 'process', ''].includes(key)) {
+  if (isImeKey(e) || ['tab', 'escape'].includes(e.key.toLowerCase())) return null;
+  if (
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    (e.key.length === 1 ||
+      [
+        'home',
+        'end',
+        'enter',
+        'space',
+        'arrowup',
+        'arrowdown',
+        'arrowleft',
+        'arrowright',
+        'f10',
+      ].includes(e.key.toLowerCase()))
+  )
     return null;
-  }
-  const mac = isMac();
-  const mod = mac ? e.metaKey : e.ctrlKey;
-  const parts: string[] = [];
-  if (mod) {
-    parts.push('mod');
-  }
-  if (e.shiftKey) {
-    parts.push('shift');
-  }
-  if (e.altKey) {
-    parts.push('alt');
-  }
-  // 글자·숫자 단독은 입력과 겹치므로 수정키가 있어야 한다 (F 키 등은 허용)
-  if (parts.length === 0 && key.length === 1) {
-    return null;
-  }
-  parts.push(key);
-  return parts.join('+');
+  return eventShortcut(e);
 }

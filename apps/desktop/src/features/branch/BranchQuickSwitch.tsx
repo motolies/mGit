@@ -1,6 +1,7 @@
 import { remoteBranchName } from '@mgit/ipc';
 import { isImeKey, S } from '@mgit/ui';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useModal } from '../../components/use-modal';
 import { useSession } from '../../store';
 import styles from './BranchQuickSwitch.module.css';
 
@@ -32,20 +33,13 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
     labels: st.refs.labels,
     checkout: st.checkout,
   }));
+  const listId = useId();
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const dialogRef = useModal(true);
 
   useEffect(() => {
-    const el = dialogRef.current;
-    if (el && !el.open) {
-      if (typeof el.showModal === 'function') {
-        el.showModal();
-      } else {
-        el.setAttribute('open', '');
-      }
-    }
     inputRef.current?.focus();
   }, []);
 
@@ -55,6 +49,11 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
     const fuzzy = branches.filter((l) => !exact.includes(l) && fuzzyMatch(query, l.shortName));
     return [...exact, ...fuzzy].slice(0, 50);
   }, [s.labels, query]);
+
+  useEffect(() => {
+    if (!candidates[cursor]) return;
+    document.getElementById(`${listId}-${cursor}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [cursor, listId, candidates]);
 
   /** 고른 항목으로 checkout */
   const pick = (index: number) => {
@@ -80,6 +79,12 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
         <div className={styles.title}>{S.quickSwitch.title}</div>
         <input
           ref={inputRef}
+          role="combobox"
+          aria-label={S.quickSwitch.title}
+          aria-controls={listId}
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-activedescendant={candidates[cursor] ? `${listId}-${cursor}` : undefined}
           className={styles.input}
           value={query}
           placeholder={S.quickSwitch.placeholder}
@@ -103,14 +108,20 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
             }
           }}
         />
-        <ul className={styles.list}>
+        <div id={listId} className={styles.list} role="listbox" aria-label={S.quickSwitch.title}>
           {candidates.length === 0 ? (
-            <li className={styles.empty}>{S.quickSwitch.empty}</li>
+            <div className={styles.empty} role="presentation">
+              {S.quickSwitch.empty}
+            </div>
           ) : (
             candidates.map((l, i) => (
-              <li key={l.fullName}>
+              <div key={l.fullName} role="presentation">
                 <button
                   type="button"
+                  id={`${listId}-${i}`}
+                  role="option"
+                  aria-selected={i === cursor}
+                  tabIndex={-1}
                   className={styles.candidate}
                   data-active={i === cursor ? 'true' : 'false'}
                   onMouseEnter={() => setCursor(i)}
@@ -121,10 +132,10 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
                     {l.kind.kind === 'remoteBranch' ? l.kind.remote : ''}
                   </span>
                 </button>
-              </li>
+              </div>
             ))
           )}
-        </ul>
+        </div>
       </div>
     </dialog>
   );

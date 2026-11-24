@@ -178,6 +178,7 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
   const items: MenuItem[] = [
     {
       label: S.menu.checkout,
+      commandId: 'branch.checkout',
       disabled: disabled || current,
       onSelect: () => void s.checkout({ kind: 'branch', name }),
     },
@@ -227,6 +228,7 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
     },
     {
       label: S.menu.rename,
+      commandId: 'branch.rename',
       separator: true,
       disabled: state.busy,
       onSelect: () =>
@@ -319,6 +321,7 @@ function remoteItems(
   return [
     {
       label: S.menu.checkout,
+      commandId: 'branch.checkout',
       disabled,
       onSelect: () => void s.checkout({ kind: 'remoteBranch', remote: target.remote, name }),
     },

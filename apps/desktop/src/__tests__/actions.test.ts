@@ -1,4 +1,4 @@
-import { formatShortcut, matchShortcut, S } from '@mgit/ui';
+import { formatShortcut, isMac, matchShortcut, S } from '@mgit/ui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ActionContext, buildActions, focusPanel } from '../actions';
 import type { DockState, TabKind } from '../store/app-store';
@@ -153,7 +153,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
   it('기존 동작 id 와 순서는 그대로이고 새 동작은 목록 끝에 붙는다', () => {
     const ids = buildActions(ctx()).map((a) => a.id);
     expect(ids.slice(0, LEGACY_IDS.length)).toEqual(LEGACY_IDS);
-    expect(ids.slice(LEGACY_IDS.length)).toEqual([
+    expect(ids.slice(LEGACY_IDS.length, LEGACY_IDS.length + 8)).toEqual([
       'view.dockMaximize',
       'view.dockHide',
       'view.focusEditor',
@@ -262,7 +262,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
     expect(byId(ctx())['view.toolCommit']?.enabled).toBe(false);
     const r = ctx({ active: 2, session: {}, dock: { tool: 'git', maximized: true } });
     const repoTab = byId(r);
-    expect(repoTab['view.toolCommit']?.shortcut).toBe('mod+0');
+    expect(repoTab['view.toolCommit']?.shortcut).toBe(isMac() ? 'mod+0' : 'alt+0');
     expect(repoTab['view.toolCommit']?.enabled).toBe(true);
     repoTab['view.toolCommit']?.run();
     expect(r.app.setLeftTool).toHaveBeenCalledWith('commit');
@@ -279,7 +279,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
     const c = ctx();
     const actions = byId(c);
     expect(actions['view.log']?.shortcut).toBe('mod+j');
-    expect(actions['view.terminal']?.shortcut).toBe('mod+shift+j');
+    expect(actions['view.terminal']?.shortcut).toBe('alt+f12');
     actions['view.log']?.run();
     expect(c.app.toggleDock).toHaveBeenLastCalledWith('git', 'console');
     actions['view.terminal']?.run();
@@ -377,10 +377,10 @@ describe('영역 포커스 동작 (5.7절)', () => {
 
   it('기본 키: ⌘1 Project, ⌘2 에디터, ⌘3 상세, ⌘9 로그 (id 는 그대로)', () => {
     const actions = byId(ctx());
-    expect(actions['view.focusSidebar']?.shortcut).toBe('mod+1');
+    expect(actions['view.focusSidebar']?.shortcut).toBe(isMac() ? 'mod+1' : 'alt+1');
     expect(actions['view.focusEditor']?.shortcut).toBe('mod+2');
     expect(actions['view.focusDetail']?.shortcut).toBe('mod+3');
-    expect(actions['view.focusGraph']?.shortcut).toBe('mod+9');
+    expect(actions['view.focusGraph']?.shortcut).toBe(isMac() ? 'mod+9' : 'alt+9');
     // 같은 기본 키를 쓰는 동작이 둘이면 뒤의 것이 죽는다
     const shortcuts = buildActions(ctx()).flatMap((a) => (a.shortcut ? [a.shortcut] : []));
     expect(new Set(shortcuts).size).toBe(shortcuts.length);
@@ -654,7 +654,7 @@ describe('⌘F·⌘⇧G 의 탭 종류별 뜻 (5.7절, W17)', () => {
   it('동작 id·기본 키는 그대로다', () => {
     const actions = byId(ctx());
     expect(actions['view.search']?.shortcut).toBe('mod+f');
-    expect(actions['view.graphFilter']?.shortcut).toBe('mod+shift+g');
+    expect(actions['view.graphFilter']?.shortcut).toBeUndefined();
   });
 
   it.each<[string, Partial<DockState>, boolean]>([
@@ -738,33 +738,41 @@ describe('⌘F·⌘⇧G 의 탭 종류별 뜻 (5.7절, W17)', () => {
 describe('팔레트·단축키 대화상자의 제목 정리 (W27) — 동작 id·순서·기본 키는 그대로', () => {
   /** 모든 동작의 기본 키 (사용자 재지정이 이 id 로 저장된다 — 바뀌면 안 된다, WS-20) */
   const DEFAULT_KEYS: Record<string, string | undefined> = {
+    'app.palette': 'mod+shift+a',
+    'commit.prepare': 'mod+k',
+    'commit.execute': 'mod+enter',
+    'log.reword': 'f2',
+    'log.copyHash': 'mod+c',
+    'log.searchNext': isMac() ? 'mod+g' : 'f3',
+    'log.searchPrevious': isMac() ? 'mod+shift+g' : 'shift+f3',
+    'file.showDiff': 'mod+d',
+    'diff.nextHunk': 'f7',
+    'diff.previousHunk': 'shift+f7',
     'repo.open': 'mod+o',
     'repo.close': 'mod+w',
     'repo.nextTab': 'mod+shift+]',
     'repo.prevTab': 'mod+shift+[',
     'view.refresh': 'mod+r',
     'sync.fetch': 'mod+shift+f',
-    'sync.pull': 'mod+shift+l',
+    'sync.pull': 'mod+t',
     'sync.push': 'mod+shift+k',
     'view.search': 'mod+f',
-    'view.terminal': 'mod+shift+j',
-    'view.graphFilter': 'mod+shift+g',
-    'view.focusSidebar': 'mod+1',
-    'view.focusGraph': 'mod+9',
+    'view.terminal': 'alt+f12',
+    'view.focusSidebar': isMac() ? 'mod+1' : 'alt+1',
+    'view.focusGraph': isMac() ? 'mod+9' : 'alt+9',
     'view.focusDetail': 'mod+3',
     'branch.quickSwitch': 'mod+b',
-    'branch.create': 'mod+shift+b',
     'branch.stash': 'mod+shift+s',
     'view.log': 'mod+j',
     'external.editor': 'mod+shift+e',
     'external.terminal': 'mod+shift+t',
-    'app.settings': 'mod+,',
+    'app.settings': isMac() ? 'mod+,' : 'ctrl+alt+s',
     'edit.undo': 'mod+z',
     'edit.redo': 'mod+shift+z',
     'view.dockMaximize': "mod+shift+'",
     'view.dockHide': 'shift+escape',
     'view.focusEditor': 'mod+2',
-    'view.toolCommit': 'mod+0',
+    'view.toolCommit': isMac() ? 'mod+0' : 'alt+0',
   };
 
   it('W20~W26 으로 뜻이 바뀐 동작의 제목이 지금 동작을 말한다', () => {

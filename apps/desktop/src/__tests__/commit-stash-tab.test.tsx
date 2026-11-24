@@ -282,7 +282,7 @@ describe('Commit 도구 창의 탭 (WS-22)', () => {
 
   it('⌘0 과 왼쪽 띠의 Commit 단추는 마지막에 보던 탭(Stash)을 그대로 연다', async () => {
     await mountRepo('repo', { leftTool: 'project', commitTab: 'stash' });
-    press('0', MOD);
+    press('0', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(useAppStore.getState().leftTool).toBe('commit');
     expect(tabState()).toBe('stash');
@@ -396,7 +396,7 @@ describe('충돌 목록이 Stash 탭 뒤에 가려지지 않는다 (계획 10절
     setConflicts(store, 2);
     selectTab('stash');
     act(() => useAppStore.getState().setLeftTool('project'));
-    press('0', MOD);
+    press('0', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(useAppStore.getState().leftTool).toBe('commit');
     expect(tabState()).toBe('stash');

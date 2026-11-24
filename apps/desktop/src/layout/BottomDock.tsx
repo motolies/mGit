@@ -11,6 +11,7 @@ import {
 } from 'react-resizable-panels';
 import { DOCK_ATTR } from '../actions';
 import { hasModifier, rovingIndex } from '../components/roving';
+import { useCommandTitle } from '../components/use-command-shortcut';
 import { FolderTimeline } from '../features/folder/FolderTimeline';
 import { TaskHistoryPanel } from '../features/folder/TaskHistoryPanel';
 import { CommandLogPanel } from '../features/log/CommandLogPanel';
@@ -189,6 +190,8 @@ function DockWindow() {
   const hide = useAppStore((s) => s.hideDock);
   const terminal = tool === 'terminal';
   const sizeLabel = maximized ? S.dock.restore : S.dock.maximize;
+  const sizeTitle = useCommandTitle('view.dockMaximize', sizeLabel, "mod+shift+'");
+  const hideTitle = useCommandTitle('view.dockHide', S.dock.hide, 'shift+escape');
   return (
     // 숨겨진 동안에는 높이 0 으로 접혀 있을 뿐 DOM 에 남으므로 포커스·보조 기술에서 뺀다
     <section
@@ -203,9 +206,10 @@ function DockWindow() {
         <ToolButton
           icon={maximized ? 'restore' : 'maximize'}
           label={sizeLabel}
+          title={sizeTitle}
           onClick={toggleMaximized}
         />
-        <ToolButton icon="hide" label={S.dock.hide} onClick={hide} />
+        <ToolButton icon="hide" label={S.dock.hide} title={hideTitle} onClick={hide} />
       </header>
       <div className={styles.content}>
         {tool === 'git' ? <GitToolWindow /> : null}

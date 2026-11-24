@@ -1,8 +1,17 @@
 import { type ExtraWip, GraphView } from '@mgit/graph-view';
 import { type GraphQuery, type GraphRow, isListModeQuery } from '@mgit/ipc';
 import { Button, S } from '@mgit/ui';
-import { type KeyboardEvent, type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { focusPanel, showCommitChanges } from '../../actions';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea } from '../../components/ContextMenu';
 import { hasModifier } from '../../components/roving';
 import { str, useDialogs } from '../../components/use-dialogs';
@@ -17,11 +26,12 @@ import {
   useSession,
   useWorkspace,
 } from '../../store';
+import { finishRewordRequest, useRewordRequest } from '../../store/reword-request';
 import { clearedQuery, conditionSummary, hasConditions } from '../filter-bar/filter-model';
 import { CommitGraphBanner } from './CommitGraphBanner';
 import styles from './GraphPane.module.css';
 import { GraphSearch } from './GraphSearch';
-import { graphMenuItems } from './graph-menu';
+import { graphMenuItems, rewordDisabledReason, rewordFlow } from './graph-menu';
 import { PerfBanner } from './PerfBanner';
 import { RepoLogFilter } from './RepoLogFilter';
 import {
@@ -92,6 +102,7 @@ export function GraphPane() {
     selectCommit: st.selectCommit,
     searchOpen: st.search.open,
     searchRows: st.search.rows,
+    searchStep: st.searchStep,
     scrollToRow: st.scrollToRow,
     consumeScroll: st.consumeScroll,
     checkout: st.checkout,
@@ -109,6 +120,8 @@ export function GraphPane() {
     openRebasePreview: st.openRebasePreview,
     openRemergeDiff: st.openRemergeDiff,
     rewordCommit: st.rewordCommit,
+    checkRewordAllowed: st.checkRewordAllowed,
+    containing: st.containing,
     squashIntoParent: st.squashIntoParent,
     prepareSquashRange: st.prepareSquashRange,
     squashRange: st.squashRange,
@@ -136,6 +149,9 @@ export function GraphPane() {
     headBranch: headBranchOf(st.refs),
   }));
   const dialogs = useDialogs();
+  const paneRef = useRef<HTMLDivElement>(null);
+  const rewordLoading = useRef(false);
+  const request = useRewordRequest((state) => state.request);
   const remoteNames = useMemo(() => s.remotes.map((r) => r.name), [s.remotes]);
   const openRepositoryAt = useAppStore((st) => st.openRepositoryAt);
   // 로그는 Git 도구 창의 탭이라 콘솔·터미널로 바꾸거나 숨기면 내려간다 (W21): 다시 붙을 때 보던 자리에서 시작한다
@@ -219,6 +235,91 @@ export function GraphPane() {
   const staleMount = useRef<number | null>(null);
   // 우클릭한 행의 데이터를 찾기 위해 최근 슬라이스의 행을 oid 로 기억한다
   const rowsByOid = useRef(new Map<string, GraphRow>());
+  const rewordState = useRef({ s, dialogs });
+  rewordState.current = { s, dialogs };
+  /** 메시지를 읽는 동안의 반복 입력을 합치고 화면·선택이 달라지면 늦은 대화상자를 열지 않는다. */
+  const editSelectedMessage = useCallback(async () => {
+    const { s: selected, dialogs: currentDialogs } = rewordState.current;
+    const oid = selected.selectedCommit;
+    if (!oid || selected.wipSelected || selected.range || rewordLoading.current || !cache) return;
+    rewordLoading.current = true;
+    const active = () =>
+      paneRef.current?.isConnected === true &&
+      useAppStore.getState().activeSessionId === selected.id &&
+      rewordState.current.s.selectedCommit === oid &&
+      !rewordState.current.s.range &&
+      !rewordState.current.s.busy &&
+      !rewordState.current.s.op &&
+      rewordState.current.s.headBranch === selected.headBranch;
+    try {
+      const index = await selected.resolveRow(oid);
+      if (!active()) return;
+      if (index === null) {
+        useAppStore.getState().notice({ kind: 'error', title: S.shortcuts.commitMissing });
+        return;
+      }
+      await cache.ensureRange(index, index + 1);
+      if (!active()) return;
+      const row = cache.slice(index, index + 1).rows[0];
+      const reason = rewordDisabledReason(row, rewordState.current.s);
+      if (reason) {
+        useAppStore.getState().notice({ kind: 'info', title: reason });
+        return;
+      }
+      await rewordFlow(oid, { ...rewordState.current.s, remoteNames: [] }, currentDialogs, active);
+    } catch {
+      if (active())
+        useAppStore.getState().notice({ kind: 'error', title: S.shortcuts.commitLoadFailed });
+    } finally {
+      rewordLoading.current = false;
+    }
+  }, [cache]);
+  useEffect(() => {
+    const element = paneRef.current;
+    if (!element) return;
+    const single = () => !s.wipSelected && !s.range && s.selectedCommit !== null;
+    const reason = () =>
+      single()
+        ? rewordDisabledReason(rowsByOid.current.get(s.selectedCommit ?? ''), s)
+        : S.shortcuts.rewordSelection;
+    const unregister = [
+      registerCommand('log.reword', element, {
+        enabled: () =>
+          single() &&
+          !s.busy &&
+          !s.op &&
+          s.headBranch !== null &&
+          rowsByOid.current.get(s.selectedCommit ?? '')?.inHead !== false &&
+          reason() !== S.shortcuts.rewordPublished,
+        reason,
+        run: () => void editSelectedMessage(),
+      }),
+      registerCommand('log.copyHash', element, {
+        enabled: single,
+        run: () => {
+          if (s.selectedCommit)
+            void navigator.clipboard.writeText(s.selectedCommit).catch(() => {});
+        },
+      }),
+      registerCommand('log.searchNext', element, {
+        enabled: () => s.searchOpen && s.searchRows.length > 0,
+        run: () => s.searchStep(1),
+      }),
+      registerCommand('log.searchPrevious', element, {
+        enabled: () => s.searchOpen && s.searchRows.length > 0,
+        run: () => s.searchStep(-1),
+      }),
+    ];
+    return () => {
+      for (const remove of unregister) remove();
+    };
+  }, [s, editSelectedMessage]);
+  useEffect(() => {
+    if (request?.sessionId !== s.id || request.oid !== s.selectedCommit || request.signal.aborted)
+      return;
+    // 요청 수명은 메시지를 읽고 대화상자를 닫을 때까지 유지한다.
+    void editSelectedMessage().finally(() => finishRewordRequest(request));
+  }, [request, s.id, s.selectedCommit, editSelectedMessage]);
   const wantAvatars = s.graphColumns.avatar ?? false;
   const onRowsRendered = useCallback(
     (rows: readonly (GraphRow | undefined)[]) => {
@@ -404,7 +505,12 @@ export function GraphPane() {
   }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: 로그(grid)에서 올라온 키를 받는다 (W27 — WIP 행·Enter)
-    <div className={styles.pane} onKeyDownCapture={onLogKeyDownCapture} onKeyDown={onLogKeyDown}>
+    <div
+      ref={paneRef}
+      className={styles.pane}
+      onKeyDownCapture={onLogKeyDownCapture}
+      onKeyDown={onLogKeyDown}
+    >
       {live ? <CommitGraphBanner /> : null}
       {live ? <PerfBanner /> : null}
       {filterBar}

@@ -143,7 +143,10 @@ afterEach(cleanup);
 
 describe('BranchTree 렌더 (BT-01·02)', () => {
   it('검색 입력과 트리를 그리고 행에 단계·펼침·선택을 싣는다', () => {
-    setup({ selectedIds: ['ref:refs/heads/main', 'ref:refs/remotes/origin/main'] });
+    setup({
+      multiselectable: true,
+      selectedIds: ['ref:refs/heads/main', 'ref:refs/remotes/origin/main'],
+    });
     expect(screen.getByRole('searchbox', { name: S.branches.search })).toBeTruthy();
     expect(tree().getAttribute('aria-multiselectable')).toBe('true');
     expect(tree().getAttribute('tabindex')).toBe('0');

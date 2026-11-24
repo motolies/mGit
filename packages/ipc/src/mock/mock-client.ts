@@ -631,6 +631,50 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
     return folder.allHistory;
   };
 
+  /** 폴더 하위 저장소는 통합 로그와 같은 이력을 쓴다. 탭 열기·가벼운 세션 승격 모두 같은 해시를 찾게 한다. */
+  const createRepoSource = (
+    path: string,
+  ): { source: MockGraphSource; data: MockRepoData | null } => {
+    const folderData = scene?.folder;
+    const index = folderData?.folderTimeline.findIndex((repo) => repo.path === path) ?? -1;
+    if (!folderData || index < 0) {
+      const source = new MockGraphSource({ rows: opts.rows, seed: opts.seed });
+      return { source, data: scene ? scene.repo(path, source.graph) : null };
+    }
+    const folder = [...folders.values()].find((entry) => entry.data === folderData);
+    const history = folder
+      ? allHistoryOf(folder)
+      : buildMockTimeline(folderData, opts.rows, TIMELINE_QUERY, 0, opts.seed);
+    const rows = history.graph.rows
+      .filter((row) => row.repo === index)
+      .map((row, at) => ({ ...row, row: at, lane: 0, repo: null }));
+    const source = new MockGraphSource({ rows: 0, seed: opts.seed });
+    Object.assign(source.graph, {
+      rows: rows.map((row) => ({ ...row })),
+      segments:
+        rows.length > 0
+          ? [{ lane: 0, start: 0, end: rows.length - 1, color: rows[0]?.color ?? 0 }]
+          : [],
+      edges: [],
+      stubs: [],
+      laneCount: rows.length > 0 ? 1 : 0,
+    });
+    const data = scene?.repo(path, source.graph) ?? null;
+    // 저장소 장면의 일반 ref 배치 대신 통합 로그의 실제 branch·tag·HEAD를 복원한다.
+    source.graph.rows = rows;
+    source.setShown(null);
+    if (data) {
+      const headRow = rows.find((row) => row.isHead);
+      const head = data.repoState.refs.head;
+      if (headRow && head.state !== 'unborn') {
+        data.repoState.refs.head = { ...head, oid: headRow.oid };
+        data.repoState.status.branch.oid = headRow.oid;
+      }
+      data.repoState.refs.labels = rows.flatMap((row) => row.refs);
+    }
+    return { source, data };
+  };
+
   /** 타임라인을 다시 만들고 코어처럼 폴더 세션 id 로 `graphReloaded` 를 보낸다 */
   const reloadTimeline = (session: SessionId) => {
     const folder = folderOf(session);
@@ -946,7 +990,10 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           return paths;
         },
 
-        // 저장소 세션
+        // 저장소 세션: 메시지 수정도 상세와 같은 전체 메시지를 읽는다.
+        commitMessage: async (session, oid) =>
+          mockCommitDetail(entryOf(session).source.graph, dataOf(session).commitDetail, oid)
+            .message,
         commitDetail: async (session, oid) =>
           mockCommitDetail(entryOf(session).source.graph, dataOf(session).commitDetail, oid),
         commitFileDiff: async (session, _oid, path, oldPath) =>
@@ -1602,8 +1649,8 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
             throw new IpcClientError({ kind: 'internal', message: failed });
           }
           const id = nextId++;
-          const source = new MockGraphSource({ rows: opts.rows, seed: opts.seed });
-          const data = scene.repo(repo, source.graph);
+          const { source, data } = createRepoSource(repo);
+          if (!data) throw new Error('Missing mock repository data');
           const entry: MockSession = {
             path: repo,
             source,
@@ -1883,8 +1930,7 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         }
       }
       const session = nextId++;
-      const source = new MockGraphSource({ rows: opts.rows, seed: opts.seed });
-      const data = scene ? scene.repo(path, source.graph) : null;
+      const { source, data } = createRepoSource(path);
       const entry: MockSession = {
         path,
         source,

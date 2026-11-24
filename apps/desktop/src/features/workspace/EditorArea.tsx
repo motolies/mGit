@@ -1,6 +1,15 @@
 import { formatShortcut, S } from '@mgit/ui';
-import { type KeyboardEvent, type ReactNode, useId, useLayoutEffect, useRef } from 'react';
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+} from 'react';
+import { registerCommand } from '../../command-registry';
 import { hasModifier, rovingIndex } from '../../components/roving';
+import { captureFocusReturn } from '../../components/use-modal';
 import { ToolButton } from '../../layout/ToolButton';
 import styles from './EditorArea.module.css';
 
@@ -51,6 +60,7 @@ export function EditorArea<D extends EditorTabDoc>({
   empty,
 }: EditorAreaProps<D>) {
   const baseId = useId();
+  const areaRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   // 키보드로 탭을 닫았으면 다음에 활성이 되는 탭으로 포커스를 옮긴다 (닫힌 탭과 함께 포커스가 사라지지 않게)
   const refocus = useRef(false);
@@ -58,17 +68,72 @@ export function EditorArea<D extends EditorTabDoc>({
   const activeIndex = active ? docs.indexOf(active) : -1;
   const tabId = (index: number) => `${baseId}-tab-${index}`;
   const panelId = `${baseId}-panel`;
+  const origins = useRef(new Map<string, () => void>());
+  const previous = useRef<{ ids: Set<string>; active: string | null }>({
+    ids: new Set(),
+    active: null,
+  });
+
+  // 문서를 연 출발 영역을 기억하고 닫힌 뒤 복귀한다. 새 미리보기로 교체한 경우에는 복귀하지 않는다.
+  useLayoutEffect(() => {
+    const before = previous.current;
+    const ids = new Set(docs.map((doc) => doc.id));
+    const added = docs.filter((doc) => !before.ids.has(doc.id));
+    const focused = document.activeElement;
+    if (
+      added.length > 0 &&
+      focused instanceof HTMLElement &&
+      focused !== document.body &&
+      !areaRef.current?.contains(focused)
+    ) {
+      for (const doc of added) origins.current.set(doc.id, captureFocusReturn());
+    }
+    if (
+      before.active &&
+      !ids.has(before.active) &&
+      added.length === 0 &&
+      (focused === document.body || areaRef.current?.contains(focused))
+    ) {
+      const restore = origins.current.get(before.active);
+      if (restore) {
+        restore();
+        refocus.current = false;
+      } else {
+        refocus.current = true;
+      }
+    }
+    for (const id of before.ids) if (!ids.has(id)) origins.current.delete(id);
+    previous.current = { ids, active: activeId };
+  });
+
+  // 미리보기 고정은 탭과 본문에서 동일한 명령으로 실행한다.
+  useEffect(() => {
+    if (!areaRef.current) return;
+    return registerCommand('editor.pin', areaRef.current, {
+      enabled: () => active !== null && !active.pinned,
+      run: () => {
+        if (active) onPin(active.id);
+      },
+    });
+  }, [active, onPin]);
 
   useLayoutEffect(() => {
     if (!refocus.current) {
       return;
     }
     refocus.current = false;
-    tabsRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    const target = tabsRef.current?.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]',
+    );
+    (target ?? areaRef.current)?.focus();
   });
 
   if (docs.length === 0) {
-    return <div className={styles.area}>{empty}</div>;
+    return (
+      <div ref={areaRef} className={styles.area} tabIndex={-1}>
+        {empty}
+      </div>
+    );
   }
 
   /** 탭 막대의 키: ←→·Home·End 옆 탭 열기, Delete·Backspace 그 탭 닫기 */
@@ -93,7 +158,7 @@ export function EditorArea<D extends EditorTabDoc>({
   };
 
   return (
-    <div className={styles.area}>
+    <div ref={areaRef} className={styles.area} tabIndex={-1}>
       <div ref={tabsRef} className={styles.tabs} role="tablist" aria-label={S.workspace.editorTabs}>
         {docs.map((doc, index) => {
           const title = titleOf(doc);
@@ -130,7 +195,10 @@ export function EditorArea<D extends EditorTabDoc>({
                 icon="close"
                 label={S.workspace.closeTab(title)}
                 tabIndex={-1}
-                onClick={() => onClose(doc.id)}
+                onClick={() => {
+                  refocus.current = true;
+                  onClose(doc.id);
+                }}
               />
             </div>
           );

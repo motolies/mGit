@@ -1,7 +1,7 @@
 import type { FileDiff, LineSelection } from '@mgit/ipc';
-import { Button, S } from '@mgit/ui';
+import { Button, isImeKey, S } from '@mgit/ui';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 /** 선택 토글에 필요한 키 정보 (마우스·키보드 공용) */
 interface ToggleEvent {
@@ -44,7 +44,17 @@ interface LineSelectionState {
 
 const NO_LINES: ReadonlySet<string> = new Set();
 
+export interface DiffNavigation {
+  moveHunk(direction: 1 | -1): void;
+  available: boolean;
+}
+
 export interface DiffViewProps {
+  /** 앱의 유효 키맵에 구간 이동을 연결한다. 반환한 함수는 뷰 변경·해제 때 정리한다 */
+  onNavigationReady?: (
+    element: HTMLElement,
+    navigation: DiffNavigation,
+  ) => (() => void) | undefined;
   diff: FileDiff | null;
   /** 구문 강조 언어 선택용 경로 */
   path: string;
@@ -116,8 +126,11 @@ export function DiffView({
   initialHeight,
   wrap = true,
   tabWidth = 4,
+  onNavigationReady,
 }: DiffViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const baseId = useId();
+  const [cursor, setCursor] = useState({ key: '', row: 0, side: 'right' as 'left' | 'right' });
   // 비 UTF-8 줄은 코어가 줄 단위 stage·discard 를 거부한다
   const actions = diff?.nonUtf8 ? undefined : givenActions;
   const contentKey = useMemo(() => diffContentKey(path, diff), [path, diff]);
@@ -167,6 +180,93 @@ export function DiffView({
     },
     [diff, actions, anchor, selected, contentKey],
   );
+
+  const cursorRow = cursor.key === contentKey ? Math.min(cursor.row, rows.length - 1) : 0;
+  const cursorRef = useRef(cursorRow);
+  cursorRef.current = cursorRow;
+
+  /** 커서만 옮긴다. 구간 이동은 줄 선택·stage 를 실행하지 않는다 */
+  const moveCursor = useCallback(
+    (index: number) => {
+      const row = Math.max(0, Math.min(rows.length - 1, index));
+      cursorRef.current = row;
+      setCursor((prev) => ({ key: contentKey, row, side: prev.side }));
+      virtualizer.scrollToIndex(row, { align: 'auto' });
+    },
+    [contentKey, rows.length, virtualizer],
+  );
+
+  /** 다음·이전 변경 구간으로 옮기며 양끝에서 멈춘다 */
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || !onNavigationReady) {
+      return;
+    }
+    return onNavigationReady(element, {
+      available: rows.some((row) => row.kind === 'hunk'),
+      moveHunk: (direction) => {
+        const hunks = rows.flatMap((row, index) => (row.kind === 'hunk' ? [index] : []));
+        const next =
+          direction === 1
+            ? hunks.find((index) => index > cursorRef.current)
+            : [...hunks].reverse().find((index) => index < cursorRef.current);
+        if (next !== undefined) {
+          moveCursor(next);
+        }
+        element.focus();
+      },
+    });
+  }, [rows, moveCursor, onNavigationReady]);
+
+  /** 본문은 Tab 진입점 하나다. 방향키는 커서, Space 는 줄, Shift 는 같은 구간의 범위를 고른다 */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget || isImeKey(e) || e.metaKey || e.ctrlKey || e.altKey) {
+      return;
+    }
+    const row = rows[cursorRow];
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      setCursor({
+        key: contentKey,
+        row: cursorRow,
+        side: e.key === 'ArrowLeft' ? 'left' : 'right',
+      });
+      return;
+    }
+    const next =
+      e.key === 'ArrowDown'
+        ? cursorRow + 1
+        : e.key === 'ArrowUp'
+          ? cursorRow - 1
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? rows.length - 1
+              : null;
+    if (next !== null) {
+      e.preventDefault();
+      const at = Math.max(0, Math.min(rows.length - 1, next));
+      moveCursor(at);
+      const target = rows[at];
+      const ref =
+        target?.kind === 'line'
+          ? target.ref
+          : target?.kind === 'split'
+            ? target[cursor.side]
+            : null;
+      if (e.shiftKey && ref && ref.line.kind !== 'context') {
+        toggle(ref, e);
+      }
+      return;
+    }
+    if (e.key === ' ') {
+      e.preventDefault();
+      const ref = row?.kind === 'line' ? row.ref : row?.kind === 'split' ? row[cursor.side] : null;
+      if (ref && ref.line.kind !== 'context') {
+        toggle(ref, e);
+      }
+    }
+  };
 
   /** 선택을 코어 형식으로 */
   const selection = useMemo(() => selectionFromKeys(selected), [selected]);
@@ -241,10 +341,22 @@ export function DiffView({
           {S.diff.binary(diff.binary.oldSize ?? null, diff.binary.newSize ?? null)}
         </div>
       ) : (
+        // biome-ignore lint/a11y/useSemanticElements: 가상 스크롤 본문은 grid 배치와 activedescendant 를 쓴다
         <div
           ref={scrollRef}
           className={styles.scroller}
           data-testid="diff-scroller"
+          data-command-scope="diff"
+          role="grid"
+          aria-label={path}
+          aria-rowcount={rows.length}
+          aria-activedescendant={
+            virtualizer.getVirtualItems().some((item) => item.index === cursorRow)
+              ? `${baseId}-row-${cursorRow}`
+              : undefined
+          }
+          tabIndex={0}
+          onKeyDown={onKeyDown}
           data-wrap={wrap ? 'true' : 'false'}
           style={{ tabSize: tabWidth }}
         >
@@ -255,9 +367,15 @@ export function DiffView({
                 return null;
               }
               return (
+                // biome-ignore lint/a11y/useSemanticElements: 가상 스크롤 행은 절대 위치로 배치한다
                 <div
                   key={item.key}
                   data-index={item.index}
+                  id={`${baseId}-row-${item.index}`}
+                  data-cursor={item.index === cursorRow ? 'true' : undefined}
+                  role="row"
+                  tabIndex={-1}
+                  aria-rowindex={item.index + 1}
                   ref={virtualizer.measureElement}
                   className={styles.rowWrap}
                   style={{ transform: `translateY(${item.start}px)` }}
@@ -269,6 +387,7 @@ export function DiffView({
                         <span className={styles.hunkActions}>
                           <button
                             type="button"
+                            tabIndex={-1}
                             className={styles.link}
                             onClick={() => actions.onApplyHunk(row.hunk)}
                           >
@@ -277,6 +396,7 @@ export function DiffView({
                           {actions.onDiscardHunk ? (
                             <button
                               type="button"
+                              tabIndex={-1}
                               className={styles.link}
                               onClick={() => actions.onDiscardHunk?.(row.hunk)}
                             >
@@ -285,6 +405,7 @@ export function DiffView({
                           ) : null}
                           <button
                             type="button"
+                            tabIndex={-1}
                             className={styles.link}
                             onClick={() => {
                               const h = diff.hunks[row.hunk];

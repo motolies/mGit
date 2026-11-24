@@ -1,7 +1,7 @@
 import type { GraphRow } from '@mgit/ipc';
 import { S, shortHash } from '@mgit/ui';
 import type { MenuItem } from '../../components/ContextMenu';
-import { bool, str, type useDialogs } from '../../components/use-dialogs';
+import { bool, raw, str, type useDialogs } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
 import { rangeRowCount } from '../../store/squash-range';
 import { branchNameField } from '../branch/branch-name';
@@ -29,6 +29,8 @@ export type GraphMenuActions = Pick<
   | 'openRebasePreview'
   | 'openRemergeDiff'
   | 'rewordCommit'
+  | 'checkRewordAllowed'
+  | 'containing'
   | 'squashIntoParent'
   | 'range'
   | 'prepareSquashRange'
@@ -49,9 +51,15 @@ export type GraphMenuActions = Pick<
 type Dialogs = Pick<ReturnType<typeof useDialogs>, 'confirm' | 'confirmChoice' | 'prompt'>;
 
 /** 커밋 메시지 고치기: 입력란을 메시지 전체로 채운다. 코어는 메시지를 통째로 바꾸므로 제목만 주면 본문이 사라진다 */
-async function rewordFlow(oid: string, a: GraphMenuActions, d: Dialogs): Promise<void> {
+export async function rewordFlow(
+  oid: string,
+  a: GraphMenuActions,
+  d: Dialogs,
+  active: () => boolean = () => true,
+): Promise<void> {
+  if (!(await a.checkRewordAllowed(oid)) || !active()) return;
   const message = await a.commitMessageOf(oid);
-  if (message === null) {
+  if (message === null || !active()) {
     return;
   }
   const v = await d.prompt({
@@ -62,15 +70,35 @@ async function rewordFlow(oid: string, a: GraphMenuActions, d: Dialogs): Promise
         key: 'message',
         label: S.rebase.message,
         type: 'textarea',
-        initial: message.trimEnd(),
+        initial: message,
         required: true,
       },
     ],
     confirmLabel: S.dialog.apply,
   });
-  if (v) {
-    await a.rewordCommit(oid, str(v, 'message'));
+  if (v && active()) {
+    await a.rewordCommit(oid, raw(v, 'message'));
   }
+}
+
+/** 메시지 수정의 공통 허용 조건. 메뉴의 우클릭 대상과 키보드의 선택 대상에 같은 규칙을 쓴다. */
+export function rewordDisabledReason(
+  row: GraphRow | undefined,
+  a: Pick<GraphMenuActions, 'busy' | 'op' | 'headBranch'> &
+    Partial<Pick<GraphMenuActions, 'containing'>>,
+): string | undefined {
+  if (!row) return S.shortcuts.rewordSelection;
+  if (a.busy || a.op) return S.shortcuts.rewordBusy;
+  if (a.headBranch === null) return S.shortcuts.rewordDetached;
+  if (!row.inHead) return S.shortcuts.rewordOutside;
+  if (row.refs?.some((ref) => ref.kind.kind === 'remoteBranch')) return S.shortcuts.rewordPublished;
+  if (
+    a.containing?.of === row.oid &&
+    a.containing.state === 'ready' &&
+    a.containing.refs.branches.some((branch) => branch.remote)
+  )
+    return S.shortcuts.rewordPublished;
+  return undefined;
 }
 
 /**
@@ -265,7 +293,9 @@ export function graphMenuItems(row: GraphRow, a: GraphMenuActions, d: Dialogs): 
   });
   items.push({
     label: S.menu.reword,
-    disabled: !canRewrite,
+    commandId: 'log.reword',
+    disabled: rewordDisabledReason(row, a) !== undefined,
+    disabledReason: rewordDisabledReason(row, a),
     onSelect: () => void rewordFlow(oid, a, d),
   });
   items.push({
@@ -308,6 +338,7 @@ export function graphMenuItems(row: GraphRow, a: GraphMenuActions, d: Dialogs): 
   });
   items.push({
     label: S.menu.copyHash,
+    commandId: 'log.copyHash',
     separator: true,
     onSelect: () => void navigator.clipboard.writeText(oid).catch(() => {}),
   });

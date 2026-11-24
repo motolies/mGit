@@ -95,7 +95,12 @@ async function mountRepo(leftTool: LeftTool | null = 'project') {
 async function press(key: string, mods: { shift?: boolean } = {}) {
   const target = document.activeElement ?? document.body;
   act(() => {
-    fireEvent.keyDown(target, { key, ctrlKey: true, shiftKey: mods.shift ?? false });
+    fireEvent.keyDown(target, {
+      key,
+      ctrlKey: !['0', '1', '9'].includes(key),
+      altKey: ['0', '1', '9'].includes(key),
+      shiftKey: mods.shift ?? false,
+    });
   });
   await tick();
 }
@@ -131,6 +136,7 @@ afterEach(() => {
   removeDialogStub();
   act(() =>
     useAppStore.setState({
+      shortcutOverrides: {},
       sessions: {},
       sessionOrder: [],
       activeSessionId: null,
@@ -354,6 +360,7 @@ describe('저장소 탭 영역 단축키의 포커스 대상 (WS-11, 두 탭이 
     await press('0');
     expect(focusedPanel()).toBe('commit');
     expect(document.activeElement?.closest('ul')).not.toBeNull();
+    act(() => useAppStore.getState().setShortcutOverrides({ 'view.graphFilter': 'ctrl+shift+g' }));
     await press('g', { shift: true });
     expect(document.activeElement?.hasAttribute('data-filter-text')).toBe(true);
   });

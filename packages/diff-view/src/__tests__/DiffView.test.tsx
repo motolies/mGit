@@ -124,3 +124,73 @@ describe('DiffView 비 UTF-8', () => {
     expect(screen.getByText(S.diff.nonUtf8)).toBeTruthy();
   });
 });
+
+describe('DiffView 키보드 본문', () => {
+  it('본문 진입점 하나에서 방향키·Space·Shift 범위 선택을 제공한다', async () => {
+    const a = actions();
+    render(<DiffView diff={diff('a')} path="a.txt" mode="unified" actions={a} />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    expect(grid.tabIndex).toBe(0);
+    expect(
+      [...grid.querySelectorAll<HTMLElement>('button, input, [tabindex]')].filter(
+        (el) => el.tabIndex === 0,
+      ),
+    ).toHaveLength(0);
+    fireEvent.keyDown(grid, { key: 'ArrowDown' });
+    expect(selectedCount()).toBe(0);
+    fireEvent.keyDown(grid, { key: ' ' });
+    expect(selectedCount()).toBe(1);
+    fireEvent.keyDown(grid, { key: 'ArrowDown', shiftKey: true });
+    expect(selectedCount()).toBe(2);
+    expect(a.onApplyHunk).not.toHaveBeenCalled();
+    expect(a.onApplyLines).not.toHaveBeenCalled();
+  });
+
+  it('구간 이동은 끝에서 멈추고 선택·stage 없이 이동한다', async () => {
+    const a = actions();
+    let navigation: import('../DiffView').DiffNavigation | undefined;
+    const release = vi.fn();
+    const ready = (_el: HTMLElement, controller: import('../DiffView').DiffNavigation) => {
+      navigation = controller;
+      return release;
+    };
+    const value = { ...diff('a'), hunks: [hunk('a'), hunk('b'), hunk('c')] } as FileDiff;
+    const { unmount } = render(
+      <DiffView diff={value} path="a.txt" mode="unified" actions={a} onNavigationReady={ready} />,
+    );
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    const cursor = () =>
+      document
+        .getElementById(grid.getAttribute('aria-activedescendant') ?? '')
+        ?.getAttribute('data-index');
+    act(() => navigation?.moveHunk(1));
+    expect(cursor()).toBe('3');
+    act(() => navigation?.moveHunk(1));
+    expect(cursor()).toBe('6');
+    act(() => navigation?.moveHunk(1));
+    expect(cursor()).toBe('6');
+    act(() => navigation?.moveHunk(-1));
+    expect(cursor()).toBe('3');
+    expect(document.activeElement).toBe(grid);
+    expect(selectedCount()).toBe(0);
+    expect(a.onApplyHunk).not.toHaveBeenCalled();
+    unmount();
+    expect(release).toHaveBeenCalled();
+  });
+
+  it('split 좌우 선택과 IME 보호를 제공한다', async () => {
+    render(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    fireEvent.keyDown(grid, { key: 'ArrowDown' });
+    fireEvent.keyDown(grid, { key: ' ' });
+    expect(document.querySelector('[data-kind="add"][data-selected="true"]')).not.toBeNull();
+    fireEvent.keyDown(grid, { key: 'ArrowLeft' });
+    fireEvent.keyDown(grid, { key: ' ', isComposing: true });
+    expect(selectedCount()).toBe(1);
+    fireEvent.keyDown(grid, { key: ' ' });
+    expect(selectedCount()).toBe(2);
+  });
+});

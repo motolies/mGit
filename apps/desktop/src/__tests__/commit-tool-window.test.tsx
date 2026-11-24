@@ -139,6 +139,7 @@ afterEach(() => {
   removeDialogStub();
   act(() =>
     useAppStore.setState({
+      shortcutOverrides: {},
       sessions: {},
       sessionOrder: [],
       activeSessionId: null,
@@ -161,7 +162,7 @@ describe('Commit 도구 창 자리 (WS-05, ⌘0)', () => {
     await mountFolder('project');
     expect(commitArea()).toBeNull();
     expect(document.querySelector('[data-panel="project"]')).not.toBeNull();
-    press('0', MOD);
+    press('0', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(useAppStore.getState().leftTool).toBe('commit');
     expect(commitArea()).not.toBeNull();
@@ -405,6 +406,45 @@ describe('세 상태 체크 = git index (W14)', () => {
   });
 });
 
+describe('사용자 키맵의 커밋 작업 흐름', () => {
+  it('커밋 준비는 메시지를 포커스하고 실행 키 재지정은 입력 영역에만 적용한다', async () => {
+    const { mock } = await mountFolder('project');
+    const commit = vi.spyOn(mock, 'folderCommit');
+    press('k', MOD);
+    await tick();
+    expect(document.activeElement).toBe(messageBox());
+    act(() => {
+      fireEvent.change(messageBox(), { target: { value: 'feat: keyboard' } });
+      useAppStore.getState().setShortcutOverrides({ 'commit.execute': 'alt+enter' });
+    });
+    fireEvent.keyDown(messageBox(), { key: 'Enter', ...MOD });
+    fireEvent.keyDown(document.body, { key: 'Enter', altKey: true });
+    fireEvent.keyDown(messageBox(), { key: 'Enter', altKey: true, shiftKey: true });
+    fireEvent.keyDown(messageBox(), { key: 'Enter', altKey: true, isComposing: true });
+    expect(commit).not.toHaveBeenCalled();
+    act(() => fireEvent.keyDown(messageBox(), { key: 'Enter', altKey: true }));
+    await tick();
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('Show Diff는 선택 파일의 저장소를 보존하고 명시적 해제를 따른다', async () => {
+    const { mock, id } = await mountFolder();
+    const open = vi.spyOn(mock, 'folderOpenRepoSession');
+    const tree = within(commitArea() as HTMLElement).getByRole('tree', { name: S.commitTool.tree });
+    act(() => {
+      tree.focus();
+      fireEvent.keyDown(tree, { key: 'End' });
+      useAppStore.getState().setShortcutOverrides({ 'file.showDiff': null });
+    });
+    act(() => fireEvent.keyDown(tree, { key: 'd', ...MOD }));
+    expect(open).not.toHaveBeenCalled();
+    act(() => useAppStore.getState().setShortcutOverrides({}));
+    act(() => fireEvent.keyDown(tree, { key: 'd', ...MOD }));
+    await tick();
+    expect(open).toHaveBeenCalledWith(id, WEB, expect.any(Function));
+  });
+});
+
 describe('커밋 영역 (W14)', () => {
   it('누르기 전에 대상과 커밋되지 않을 저장소를 보이고, 메시지가 비면 버튼이 꺼진다', async () => {
     await mountFolder();
@@ -486,6 +526,7 @@ describe('커밋 영역 (W14)', () => {
     const commit = vi.spyOn(mock, 'folderCommit');
     act(() => fireEvent.change(messageBox(), { target: { value: 'feat: 주문' } }));
     act(() => {
+      messageBox().focus();
       fireEvent.keyDown(messageBox(), { key: 'Enter', ...MOD });
     });
     await tick();
@@ -612,7 +653,14 @@ describe('Commit 도구 창 → 작업 트리 diff 탭 (ED-05)', () => {
 
 describe('Commit 도구 창 파일 메뉴 (Finder·터미널·변경 되돌리기)', () => {
   /** 열린 메뉴 항목의 이름 (구분선은 `─` 를 앞에 붙인다) */
-  const menuLabels = () => screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+  const menuLabels = () =>
+    screen.getAllByRole('menuitem').map((i) => {
+      const copy = i.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll('kbd').forEach((el) => {
+        el.remove();
+      });
+      return copy.textContent ?? '';
+    });
 
   it('파일: 열기·저장소 탭 뒤에 변경 되돌리기와 Finder·터미널. 되돌리기는 파일 목록 확인창 → 그 저장소 세션으로 Rollback', async () => {
     const { mock } = await mountFolder();
@@ -623,7 +671,7 @@ describe('Commit 도구 창 파일 메뉴 (Finder·터미널·변경 되돌리�
     await tick();
     const m = S.project.menu;
     expect(menuLabels()).toEqual([
-      m.open,
+      S.menu.showDiff,
       S.project.openAsTab,
       m.rollback,
       revealLabel(),

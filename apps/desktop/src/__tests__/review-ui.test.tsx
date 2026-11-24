@@ -579,6 +579,7 @@ describe('그래프 메뉴 reword', () => {
       headBranch: 'main',
       selectedCommit: null,
       signingInfo: null,
+      checkRewordAllowed: vi.fn(async () => true),
       commitMessageOf: vi.fn(async () => 'subject\n\nbody line'),
       rewordCommit: vi.fn(async () => {}),
       ...over,
@@ -686,6 +687,7 @@ describe('rebase 플랜', () => {
       runRebasePlan: vi.fn(async () => false),
       verifyCommand: null,
       actionError: null,
+      checkRewordAllowed: vi.fn(async () => true),
       commitMessageOf: vi.fn(async () => 'subject\n\nbody line'),
       ...over,
     };
@@ -1343,8 +1345,8 @@ describe('터미널 패널 숨기기', () => {
     );
     await tick();
     // 탭 이름은 제목, 없으면 경로의 마지막 조각. 끝난 셸은 종료 코드를 붙인다
-    const api = screen.getByRole('button', { name: 'api' });
-    expect(screen.getByRole('button', { name: `검증 · ${S.terminal.exited(0)}` })).toBeTruthy();
+    const api = screen.getByRole('tab', { name: 'api' });
+    expect(screen.getByRole('tab', { name: `검증 · ${S.terminal.exited(0)}` })).toBeTruthy();
     act(() => fireEvent.click(api));
     expect(useAppStore.getState().activeTerminal).toBe(1);
     act(() => fireEvent.click(screen.getByRole('button', { name: S.terminal.open })));

@@ -3,11 +3,13 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   memo,
+  useEffect,
   useId,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { openContextMenuAt, siblingPositions, treeKeyCommand } from '../../components/tree-keys';
 import styles from './BranchTree.module.css';
@@ -25,6 +27,8 @@ import {
 export interface BranchTreeProps {
   /** 그릴 트리. 빌더가 만든 순서 그대로 그린다 (정렬은 빌더의 몫) */
   nodes: readonly BranchTreeNode[];
+  /** 실제로 여러 가지 필터를 함께 고를 수 있는 화면에서만 켠다. */
+  multiselectable?: boolean;
   /** 선택된 것으로 그릴 노드 id. 무엇이 선택인지는 컨테이너가 정한다 */
   selectedIds: readonly string[];
   /** 사용자가 바꾼 펼침 상태. 바깥의 세로 툴바가 모두 펼치기·접기를 하므로 밖에서 받는다 */
@@ -159,6 +163,7 @@ function cursorIndexOf(
  */
 export const BranchTree = memo(function BranchTree({
   nodes,
+  multiselectable = false,
   selectedIds,
   expansion,
   onExpansionChange,
@@ -205,6 +210,24 @@ export const BranchTree = memo(function BranchTree({
   const positions = useMemo(() => siblingPositions(rows.map((r) => r.parentId)), [rows]);
   const cursorIndex = cursorIndexOf(rows, cursorId, selected);
   const rowDomId = (index: number) => `${baseId}-row-${index}`;
+
+  useEffect(() => {
+    const element = treeRef.current;
+    if (!element) return;
+    const selectedNode = rows[cursorIndex]?.node;
+    const items = selectedNode ? menu(selectedNode) : [];
+    const unregister = ['branch.rename', 'branch.checkout', 'branch.create'].map((id) => {
+      const item = items.find((candidate) => candidate.commandId === id);
+      return registerCommand(id, element, {
+        enabled: () => item !== undefined && item.disabled !== true,
+        reason: () => item?.disabledReason,
+        run: () => item?.onSelect?.(),
+      });
+    });
+    return () => {
+      for (const remove of unregister) remove();
+    };
+  }, [rows, cursorIndex, menu]);
 
   /** 커서를 그 행으로 옮기고 보이게 스크롤한다. 범위를 벗어나면 끝 행에서 멈춘다 */
   const moveCursor = (index: number) => {
@@ -315,7 +338,7 @@ export const BranchTree = memo(function BranchTree({
           className={styles.tree}
           role="tree"
           aria-label={S.branches.tree}
-          aria-multiselectable="true"
+          aria-multiselectable={multiselectable}
           aria-activedescendant={cursorIndex >= 0 ? rowDomId(cursorIndex) : undefined}
           tabIndex={0}
           onKeyDown={onKeyDown}

@@ -253,6 +253,16 @@ impl Core {
         session: SessionId,
         plan: &RebasePlan,
     ) -> Result<OpOutcome, CoreError> {
+        self.rebase_interactive_guarded(session, plan, None).await
+    }
+
+    /// 빠른 메시지 수정에서만 백업과 rebase 쓰기에 원격 게시 검사를 전달한다.
+    async fn rebase_interactive_guarded(
+        &self,
+        session: SessionId,
+        plan: &RebasePlan,
+        unpublished_commit: Option<Oid>,
+    ) -> Result<OpOutcome, CoreError> {
         let expected = self
             .rebase_plan_commits(session, plan.onto.as_deref())
             .await?;
@@ -301,7 +311,12 @@ impl Core {
         std::fs::write(&todo_path, todo)?;
 
         if let Some(b) = self.head_branch_name(session) {
-            let _ = self.backup_ref(session, &b, "rebase -i").await;
+            if unpublished_commit.is_some() {
+                self.backup_ref_guarded(session, &b, "rebase -i", unpublished_commit)
+                    .await?;
+            } else {
+                let _ = self.backup_ref(session, &b, "rebase -i").await;
+            }
         }
         let mut args: Vec<String> = vec!["rebase".into(), "-i".into(), "--empty=drop".into()];
         if plan.autostash {
@@ -321,7 +336,9 @@ impl Core {
             "GIT_SEQUENCE_EDITOR",
             &format!("cp {}", shell_quote(&todo_path)),
         );
-        let r = self.run_write(session, spec).await;
+        let r = self
+            .run_write(session, spec.guard_unpublished(unpublished_commit))
+            .await;
         self.outcome(r)
     }
 
@@ -346,7 +363,8 @@ impl Core {
         };
         if head == Some(*oid) {
             if let Some(b) = self.head_branch_name(session) {
-                let _ = self.backup_ref(session, &b, "reword").await;
+                self.backup_ref_guarded(session, &b, "reword", Some(*oid))
+                    .await?;
             }
             self.run_write(
                 session,
@@ -360,6 +378,7 @@ impl Core {
                     "-",
                 ])
                 .with_stdin(message.as_bytes().to_vec())
+                .guard_unpublished(Some(*oid))
                 .label(format!("reword {}", &hex[..7])),
             )
             .await?;
@@ -383,7 +402,7 @@ impl Core {
                 },
             })
             .collect();
-        self.rebase_interactive(
+        self.rebase_interactive_guarded(
             session,
             &RebasePlan {
                 onto: parent,
@@ -392,6 +411,7 @@ impl Core {
                 update_refs: false,
                 exec: None,
             },
+            Some(*oid),
         )
         .await
     }

@@ -322,3 +322,156 @@ describe('폴더 탭 로그 — 같은 규칙 (W19 ③ + W27 의 행 클릭)', (
     expect(document.activeElement?.getAttribute('aria-label')).toBe(S.detail.changedFiles);
   });
 });
+
+describe('로그 메시지 수정 명령', () => {
+  it('F2의 원격 포함 확인이 실패하면 메시지 수정 창을 열지 않는다', async () => {
+    const { store } = await mountRepo();
+    const read = vi.fn(async () => 'subject');
+    const check = vi.fn(async () => false);
+    act(() => store.setState({ commitMessageOf: read, checkRewordAllowed: check }));
+    focusGrid();
+    await key('Home');
+    await key('F2');
+    expect(check).toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: S.rebase.message })).toBeNull();
+  });
+
+  it('원격 브랜치에 포함된 커밋은 F2와 우클릭 수정 모두 비활성이다', async () => {
+    const { store } = await mountRepo();
+    focusGrid();
+    await key('Home');
+    const oid = store.getState().selectedCommit as string;
+    act(() =>
+      store.setState({
+        containing: {
+          of: oid,
+          state: 'ready',
+          refs: {
+            timedOut: false,
+            head: true,
+            branches: [
+              {
+                name: 'refs/remotes/other/main',
+                shortName: 'other/main',
+                remote: true,
+                current: false,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    await key('F2');
+    expect(screen.queryByRole('textbox', { name: S.rebase.message })).toBeNull();
+    await key('F10', { shiftKey: true });
+    const item = screen.getByRole('menuitem', { name: /메시지 수정/ });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(item.getAttribute('title')).toBe(S.shortcuts.rewordPublished);
+  });
+
+  it('F2는 전체 메시지를 채우고 취소하면 수정하지 않는다', async () => {
+    const { store } = await mountRepo();
+    const message = 'subject\n\nbody paragraph\n\n';
+    const read = vi.fn(async () => message);
+    const write = vi.fn(async () => {});
+    act(() => store.setState({ commitMessageOf: read, rewordCommit: write }));
+    focusGrid();
+    await key('Home');
+    await key('F2');
+    const input = screen.getByRole('textbox', { name: S.rebase.message }) as HTMLTextAreaElement;
+    expect(input.value).toBe(message);
+    expect(read).toHaveBeenCalledTimes(1);
+    act(() => fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel })));
+    await settle();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('수정 저장 시 메시지 본문과 앞뒤 공백을 그대로 전달한다', async () => {
+    const { store } = await mountRepo();
+    const message = 'subject\n\nbody\n\n';
+    const write = vi.fn(async () => {});
+    act(() => store.setState({ commitMessageOf: vi.fn(async () => message), rewordCommit: write }));
+    focusGrid();
+    await key('Home');
+    const oid = store.getState().selectedCommit;
+    await key('F2');
+    act(() => fireEvent.click(screen.getByRole('button', { name: S.dialog.apply })));
+    await settle();
+    expect(write).toHaveBeenCalledWith(oid, message);
+  });
+
+  it('과거 커밋도 같은 수정 창을 열고 입력 중 F2는 실행하지 않는다', async () => {
+    const { store } = await mountRepo();
+    const read = vi.fn(async () => 'older subject\n\nolder body');
+    act(() => store.setState({ commitMessageOf: read }));
+    focusGrid();
+    await key('Home');
+    await key('ArrowDown');
+    const oid = store.getState().selectedCommit;
+    await key('F2');
+    expect(read).toHaveBeenCalledWith(oid);
+    const input = screen.getByRole('textbox', { name: S.rebase.message });
+    act(() => fireEvent.keyDown(input, { key: 'F2' }));
+    expect(read).toHaveBeenCalledTimes(1);
+    act(() => fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel })));
+    await settle();
+  });
+
+  it('범위 선택과 detached HEAD에서는 수정 창을 열지 않는다', async () => {
+    const { store } = await mountRepo();
+    const read = vi.fn(async () => 'message');
+    act(() => store.setState({ commitMessageOf: read }));
+    focusGrid();
+    await key('Home');
+    act(() =>
+      store.setState({
+        range: { from: 0, to: 1, newer: 'a', older: 'b', base: 'c', files: [], loading: false },
+      }),
+    );
+    await key('F2');
+    expect(read).not.toHaveBeenCalled();
+    act(() =>
+      store.setState({
+        range: null,
+        refs: { ...store.getState().refs, head: { state: 'detached', oid: 'a' } },
+      }),
+    );
+    await key('F2');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('WIP와 실행 중 작업은 메시지를 읽지 않는다', async () => {
+    const { store } = await mountRepo();
+    const read = vi.fn(async () => 'message');
+    act(() => store.setState({ commitMessageOf: read }));
+    focusGrid();
+    await key('F2');
+    expect(read).not.toHaveBeenCalled();
+    await key('Home');
+    act(() => store.setState({ busy: true }));
+    await key('F2');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('메시지 로드 중 반복 F2를 합치고 다른 선택으로 바꾸면 늦은 창을 열지 않는다', async () => {
+    const { store } = await mountRepo();
+    let finish!: (message: string) => void;
+    const read = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    act(() => store.setState({ commitMessageOf: read }));
+    focusGrid();
+    await key('Home');
+    await key('F2');
+    await key('F2');
+    expect(read).toHaveBeenCalledTimes(1);
+    await key('ArrowDown');
+    await act(async () => finish('late'));
+    await settle();
+    expect(screen.queryByRole('textbox', { name: S.rebase.message })).toBeNull();
+  });
+});

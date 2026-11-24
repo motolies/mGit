@@ -1,6 +1,15 @@
 import type { ChangedFile } from '@mgit/ipc';
 import { Icon, S } from '@mgit/ui';
-import { type CSSProperties, type KeyboardEvent, useId, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { openContextMenuAt, treeKeyCommand } from '../../components/tree-keys';
 import { useVirtualTree } from '../../components/use-virtual-tree';
@@ -63,6 +72,18 @@ export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: Chang
   const items = virtualizer.getVirtualItems();
   const selectedRendered = items.some((item) => item.index === selectedIndex);
   const rowDomId = (index: number) => `${baseId}-row-${index}`;
+
+  // 선택 파일의 Diff 열기는 Enter 와 같은 고정 문서 경로를 쓴다.
+  useEffect(() => {
+    if (!treeRef.current) return;
+    const file = rows[selectedIndex]?.file;
+    return registerCommand('file.showDiff', treeRef.current, {
+      enabled: () => file !== undefined,
+      run: () => {
+        if (file) onOpen(file);
+      },
+    });
+  }, [rows, selectedIndex, onOpen]);
 
   /** 그 행을 고르고 보이게 스크롤한다. 범위를 벗어나면 끝 행에서 멈춘다 */
   const select = (index: number) => {
@@ -136,6 +157,7 @@ export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: Chang
       <div
         ref={treeRef}
         className={styles.tree}
+        data-command-scope="files"
         role="tree"
         aria-label={S.detail.changedFiles}
         aria-activedescendant={selectedRendered ? rowDomId(selectedIndex) : undefined}

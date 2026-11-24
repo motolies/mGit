@@ -1,5 +1,7 @@
-import { Button, isImeKey, isPrimaryModifier, S, shortHash } from '@mgit/ui';
-import { useSession } from '../../store';
+import { Button, formatShortcut, S, shortHash } from '@mgit/ui';
+import { useEffect, useRef } from 'react';
+import { registerCommand } from '../../command-registry';
+import { useAppStore, useSession } from '../../store';
 import styles from './CommitForm.module.css';
 
 /** 메시지를 요약·본문으로 나눈다 (첫 빈 줄 기준) */
@@ -51,19 +53,22 @@ export function CommitForm() {
     !s.committing && summary.trim() !== '' && s.conflicted === 0 && (s.staged > 0 || s.amend);
   const longBodyLine = body.split('\n').some((l) => l.length > 72);
 
-  /** ⌘Enter 로 커밋. 한글 조합 중에는 무시 */
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (isImeKey(e) || !isPrimaryModifier(e) || e.key !== 'Enter') {
-      return;
-    }
-    e.preventDefault();
-    if (canCommit) {
-      void s.commit();
-    }
-  };
+  const ref = useRef<HTMLDivElement>(null);
+  const shortcut = useAppStore((st) => st.shortcutOverrides['commit.execute']);
+  const shortcutLabel = formatShortcut(shortcut === undefined ? 'mod+enter' : (shortcut ?? ''));
+  // 커밋 입력 영역에만 실행 명령을 등록한다. 키 판정은 공통 디스패처가 맡는다.
+  useEffect(() => {
+    if (!ref.current) return;
+    return registerCommand('commit.execute', ref.current, {
+      enabled: () => canCommit,
+      run: () => {
+        void s.commit();
+      },
+    });
+  }, [canCommit, s.commit]);
 
   return (
-    <div className={styles.form}>
+    <div ref={ref} className={styles.form} data-command-scope="commit-input">
       {s.templates.length > 0 ? (
         <select
           className={styles.template}
@@ -85,11 +90,11 @@ export function CommitForm() {
         </select>
       ) : null}
       <input
+        data-commit-message
         className={styles.summary}
         value={summary}
         placeholder={S.commit.summary}
         onChange={(e) => s.setMessage(joinMessage(e.target.value, body))}
-        onKeyDown={onKeyDown}
         data-too-long={summary.length > 50 ? 'true' : 'false'}
       />
       <div className={styles.guide} data-too-long={summary.length > 50 ? 'true' : 'false'}>
@@ -102,7 +107,6 @@ export function CommitForm() {
         placeholder={S.commit.body}
         rows={4}
         onChange={(e) => s.setMessage(joinMessage(summary, e.target.value))}
-        onKeyDown={onKeyDown}
       />
       <div className={styles.options}>
         <label className={styles.option}>
@@ -136,7 +140,7 @@ export function CommitForm() {
           variant="primary"
           disabled={!canCommit}
           onClick={() => void s.commit()}
-          title="⌘Enter"
+          title={shortcutLabel}
           className={styles.commitButton}
         >
           {s.committing ? S.commit.committing : S.commit.button}

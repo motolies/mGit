@@ -172,7 +172,7 @@ describe('handleGlobalKey', () => {
     const c = ctx({ actions: [a] });
     handleGlobalKey(key('x', { ...MOD, shiftKey: true }), c);
     expect(a.run).toHaveBeenCalledTimes(1);
-    handleGlobalKey(key('p', { ...MOD, shiftKey: true }), c);
+    handleGlobalKey(key('a', { ...MOD, shiftKey: true }), c);
     expect(c.openPalette).toHaveBeenCalledTimes(1);
   });
 

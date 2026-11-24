@@ -571,7 +571,10 @@ export interface SessionState {
   loadFullDiff(): Promise<void>;
   clearActionError(): void;
   consumeScroll(): void;
-  jumpToCommit(oid: string): Promise<void>;
+  jumpToCommit(
+    oid: string,
+    signal?: AbortSignal,
+  ): Promise<'found' | 'missing' | 'failed' | 'cancelled'>;
   /** 로드가 끝난 뒤 커밋으로 이동한다 (아직 스트리밍 중이면 보관했다가 끝나면 이동) */
   jumpToCommitWhenLoaded(oid: string): void;
 
@@ -900,6 +903,8 @@ export interface SessionState {
   openRebasePlan(onto: string | null): Promise<void>;
   closeRebasePlan(): void;
   runRebasePlan(plan: RebasePlan): Promise<boolean>;
+  /** 원격 포함 여부를 새로 조회한다. 조회 실패도 수정 허용으로 간주하지 않는다 */
+  checkRewordAllowed(oid: string): Promise<boolean>;
   rewordCommit(oid: string, message: string): Promise<void>;
   squashIntoParent(oid: string): Promise<void>;
   /**
@@ -2034,12 +2039,29 @@ export function createSessionStore(
         }
       },
 
-      async jumpToCommit(oid) {
-        const row = await get().resolveRow(oid);
-        if (row !== null) {
+      async jumpToCommit(oid, signal) {
+        if (signal?.aborted) {
+          return 'cancelled';
+        }
+        try {
+          // 조회 실패와 현재 필터에 없는 커밋을 구분한다. 취소 뒤에는 선택·포커스를 바꾸지 않는다.
+          const row = await client.findRow(id, oid);
+          if (signal?.aborted) {
+            return 'cancelled';
+          }
+          if (row === null) {
+            return 'missing';
+          }
           set({ scrollToRow: row });
           options.onRevealLog?.();
           get().selectCommit(oid);
+          return 'found';
+        } catch (e) {
+          if (signal?.aborted) {
+            return 'cancelled';
+          }
+          set({ actionError: describeError(e) });
+          return 'failed';
         }
       },
 
@@ -4034,7 +4056,27 @@ export function createSessionStore(
         return false;
       },
 
+      async checkRewordAllowed(oid) {
+        try {
+          const refs = await client.commitContainingRefs(id, oid);
+          const reason = refs.timedOut
+            ? S.shortcuts.rewordRemoteUnknown
+            : refs.branches.some((branch) => branch.remote)
+              ? S.shortcuts.rewordPublished
+              : null;
+          if (reason) {
+            set({ actionError: reason });
+            return false;
+          }
+          return true;
+        } catch {
+          set({ actionError: S.shortcuts.rewordRemoteUnknown });
+          return false;
+        }
+      },
+
       async rewordCommit(oid, message) {
+        if (!(await get().checkRewordAllowed(oid))) return;
         await outcome(() => client.rewordCommit(id, oid, message));
       },
 

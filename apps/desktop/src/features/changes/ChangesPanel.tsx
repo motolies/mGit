@@ -1,7 +1,9 @@
 import type { StatusEntry } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
-import { type MouseEvent, useCallback, useMemo, useState } from 'react';
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea } from '../../components/ContextMenu';
+import { useCommandTitle } from '../../components/use-command-shortcut';
 import { entryInArea, useAppStore, useSession } from '../../store';
 import { groupByModule } from '../modules/module-groups';
 import { ignoreMenuItem, revealLabel } from '../project/file-actions-menu';
@@ -62,6 +64,7 @@ function Section({
   view: 'tree' | 'flat' | 'module';
 }) {
   const s = useSession((st) => ({
+    busy: st.busy,
     modules: st.modules,
     openPath: st.selectedFile?.path ?? null,
     openBlame: st.openBlame,
@@ -90,7 +93,12 @@ function Section({
   const openExternal = useAppStore((st) => st.openExternal);
   const order = useMemo(() => entries.map((e) => e.path), [entries]);
   const { selected, onSelect, clear } = useAreaSelection(order);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [discardPaths, setDiscardPaths] = useState<string[] | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const stageTitle = useCommandTitle('file.stage', S.changes.stageSelected);
+  const unstageTitle = useCommandTitle('file.unstage', S.changes.unstageSelected);
+  const discardTitle = useCommandTitle('file.discard', S.changes.discardSelected);
   const staged = area === 'staged';
   const picked = [...selected];
   const title =
@@ -106,8 +114,59 @@ function Section({
   const openPath =
     area === 'conflict' ? s.conflictPath : s.openStaged === staged ? s.openPath : null;
   const moduleGroups = view === 'module' ? groupByModule(entries, s.modules) : [];
+  // 현재 파일과 선택 집합을 같은 영역의 명령에 연결한다. 폐기는 기존 확인창을 재사용한다.
+  useEffect(() => {
+    const element = sectionRef.current;
+    if (!element) return;
+    const path =
+      focusedPath && order.includes(focusedPath)
+        ? focusedPath
+        : picked.length === 1
+          ? picked[0]
+          : null;
+    const paths = picked.length > 0 ? picked : path ? [path] : [];
+    const registrations = [
+      registerCommand('file.showDiff', element, {
+        enabled: () => area !== 'conflict' && !!path,
+        run: () => {
+          if (path) void s.openFile(path, staged);
+        },
+      }),
+      registerCommand('file.stage', element, {
+        enabled: () => area !== 'staged' && !s.busy && paths.length > 0,
+        run: () => {
+          void s.stage(paths).then(clear);
+        },
+      }),
+      registerCommand('file.unstage', element, {
+        enabled: () => staged && !s.busy && paths.length > 0,
+        run: () => {
+          void s.unstage(paths).then(clear);
+        },
+      }),
+      registerCommand('file.discard', element, {
+        enabled: () => area === 'unstaged' && !s.busy && paths.length > 0,
+        run: () => setDiscardPaths(paths),
+      }),
+    ];
+    return () => {
+      for (const unregister of registrations) unregister();
+    };
+  });
   return (
-    <section className={styles.section} data-area={area}>
+    // biome-ignore lint/a11y/noStaticElementInteractions: 하위 파일의 포커스를 기록하며 section 자체는 상호작용하지 않는다
+    <section
+      ref={sectionRef}
+      className={styles.section}
+      data-area={area}
+      data-command-scope="changes"
+      onFocus={(e) =>
+        setFocusedPath(
+          (e.target as HTMLElement).closest('[data-path]')?.getAttribute('data-path') ??
+            focusedPath,
+        )
+      }
+    >
       <header className={styles.header}>
         <span className={styles.title}>{title}</span>
         <span className={styles.actions}>
@@ -115,11 +174,16 @@ function Section({
             <>
               <Button
                 disabled={picked.length === 0}
+                title={stageTitle}
                 onClick={() => void s.stage(picked).then(clear)}
               >
                 {S.changes.stageSelected}
               </Button>
-              <Button disabled={picked.length === 0} onClick={() => setConfirmDiscard(true)}>
+              <Button
+                title={discardTitle}
+                disabled={picked.length === 0}
+                onClick={() => setDiscardPaths(picked)}
+              >
                 {S.changes.discardSelected}
               </Button>
               <Button disabled={entries.length === 0} onClick={() => void s.stageAll()}>
@@ -131,6 +195,7 @@ function Section({
             <>
               <Button
                 disabled={picked.length === 0}
+                title={unstageTitle}
                 onClick={() => void s.unstage(picked).then(clear)}
               >
                 {S.changes.unstageSelected}
@@ -157,6 +222,7 @@ function Section({
               </Button>
               <Button
                 disabled={picked.length === 0}
+                title={stageTitle}
                 onClick={() => void s.stage(picked).then(clear)}
               >
                 {S.changes.stageSelected}
@@ -171,6 +237,15 @@ function Section({
           null
         }
         items={(path) => [
+          ...(area === 'conflict'
+            ? []
+            : [
+                {
+                  label: S.menu.showDiff,
+                  commandId: 'file.showDiff',
+                  onSelect: () => void s.openFile(path, staged),
+                },
+              ]),
           {
             label: S.actions.openEditor,
             onSelect: () => void openExternal('editor', `${s.repoPath}/${path}`),
@@ -240,17 +315,18 @@ function Section({
         )}
       </ContextMenuArea>
       <ConfirmDialog
-        open={confirmDiscard}
+        open={discardPaths !== null}
         title={S.changes.discardTitle}
-        message={S.changes.discardMessage(picked.length)}
-        items={picked}
+        message={S.changes.discardMessage(discardPaths?.length ?? 0)}
+        items={discardPaths ?? []}
         confirmLabel={S.changes.discardConfirm}
         danger
         onConfirm={() => {
-          setConfirmDiscard(false);
-          void s.discard(picked).then(clear);
+          const paths = discardPaths ?? [];
+          setDiscardPaths(null);
+          void s.discard(paths).then(clear);
         }}
-        onCancel={() => setConfirmDiscard(false)}
+        onCancel={() => setDiscardPaths(null)}
       />
     </section>
   );

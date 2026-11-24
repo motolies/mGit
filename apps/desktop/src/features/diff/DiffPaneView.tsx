@@ -1,7 +1,26 @@
-import { type DiffActions, type DiffMode, DiffView } from '@mgit/diff-view';
+import { type DiffActions, type DiffMode, type DiffNavigation, DiffView } from '@mgit/diff-view';
 import type { DiffOptions, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
 import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
+import { registerCommand } from '../../command-registry';
 import styles from './DiffPane.module.css';
+
+/** Diff 본문의 구간 이동을 앱 공통 명령에 연결한다 */
+function registerNavigation(element: HTMLElement, navigation: DiffNavigation) {
+  const cleanups = (
+    [
+      ['diff.nextHunk', 1],
+      ['diff.previousHunk', -1],
+    ] as const
+  ).map(([id, direction]) =>
+    registerCommand(id, element.closest<HTMLElement>('[data-diff-pane]') ?? element, {
+      enabled: () => navigation.available,
+      run: () => navigation.moveHunk(direction),
+    }),
+  );
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+  };
+}
 
 /** 문자열 → 범위 안의 정수 */
 function clampInt(text: string, min: number, max: number, fallback: number): number {
@@ -70,7 +89,7 @@ export function DiffPaneView({
   submoduleLog,
 }: DiffPaneViewProps) {
   return (
-    <div className={styles.pane}>
+    <div className={styles.pane} data-diff-pane>
       <header className={styles.header}>
         {onBack ? <Button onClick={onBack}>← {S.diff.back}</Button> : null}
         <span className={styles.path} title={path}>
@@ -154,6 +173,7 @@ export function DiffPaneView({
       ) : null}
       <div className={styles.body}>
         <DiffView
+          onNavigationReady={registerNavigation}
           diff={diff}
           path={path}
           mode={mode}

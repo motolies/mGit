@@ -5,7 +5,11 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
-use mgit_model::{EnvProfile, GitError, GitRequest, classify_stderr, redact_args, redact_text};
+use mgit_git::cmd::containing_branches;
+use mgit_l10n::pick;
+use mgit_model::{
+    EnvProfile, GitError, GitRequest, Oid, classify_stderr, redact_args, redact_text,
+};
 
 use crate::core::CoreInner;
 use crate::error::CoreError;
@@ -44,6 +48,8 @@ pub struct WriteSpec {
     /// op 가 있어도 출력 줄을 `OperationOutput` 으로 흘리지 않는다 (큰 stdout 을 내는 조회). 취소는 그대로 붙는다.
     /// 기본은 꺼짐
     pub quiet: bool,
+    /// 메시지 수정 대상이 알려진 원격 추적 브랜치에서 도달 가능하면 쓰기를 거부한다.
+    pub(crate) unpublished_commit: Option<Oid>,
 }
 
 impl WriteSpec {
@@ -62,7 +68,14 @@ impl WriteSpec {
             keep_failed_output: false,
             keep_op_open: false,
             quiet: false,
+            unpublished_commit: None,
         }
+    }
+
+    /// 메시지 수정의 백업·실제 쓰기에 같은 원격 게시 검사를 붙인다. 다른 이력 작업은 정책을 바꾸지 않는다.
+    pub(crate) fn guard_unpublished(mut self, oid: Option<Oid>) -> Self {
+        self.unpublished_commit = oid;
+        self
     }
 
     /// op 출력 이벤트를 보내지 않는다 (취소는 유지)
@@ -200,6 +213,31 @@ impl CoreInner {
     ) -> Result<WriteResult, CoreError> {
         let lock = self.write_lock_for(&session.info.common_dir);
         let _queued = lock.lock().await;
+        if let Some(oid) = spec.unpublished_commit {
+            // 캐시·UI 조회 취소와 독립적으로 확인한다. 잠금 안이므로 앱 내부 fetch/push와 쓰기 사이에 끼어들 수 없다.
+            // 네트워크는 부르지 않으며 현재 refs/remotes의 도달성만 판단한다. 조회 실패·시간 초과는 쓰기를 허용하지 않는다.
+            let containing = containing_branches(
+                self.runner(),
+                &session.info.work_tree,
+                &self.cfg.git_config_overrides,
+                &oid,
+                crate::inspect::CONTAINING_TIMEOUT,
+            )
+            .await?
+            .ok_or_else(|| CoreError::Invalid(pick(
+                "원격 게시 여부를 확인하지 못해 커밋 메시지를 수정할 수 없습니다",
+                "Cannot edit the commit message because its remote publication status could not be checked",
+            ).into()))?;
+            if containing.branches.iter().any(|branch| branch.remote) {
+                return Err(CoreError::Invalid(
+                    pick(
+                        "원격 브랜치에 포함된 커밋의 메시지는 수정할 수 없습니다",
+                        "Cannot edit the message of a commit contained in a remote branch",
+                    )
+                    .into(),
+                ));
+            }
+        }
         // SF-03: ref 변경을 되돌릴 수 있게 전후 스냅샷을 찍는다 (브랜치·태그·HEAD 만)
         let before = if spec.no_undo {
             None

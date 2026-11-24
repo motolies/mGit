@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { openContextMenuAt, siblingPositions, treeKeyCommand } from '../../components/tree-keys';
 import { useVirtualTree } from '../../components/use-virtual-tree';
@@ -28,6 +29,10 @@ export interface FolderCommitTreeProps {
   locked: boolean;
   /** 체크를 눌렀다 (클릭·Space). 막힌 줄은 부르지 않는다 */
   onToggleCheck: (row: CommitRow) => void;
+  /** 명시적으로 stage 또는 unstage 한다. 기존 체크와 같은 쓰기 검증을 거친다 */
+  onIndex?: (row: CommitRow, op: 'stage' | 'unstage') => void;
+  /** 선택 파일의 변경 폐기 확인창 */
+  onDiscard?: (row: CommitFileRow) => void;
   /** 저장소·디렉터리 줄을 펼치거나 접는다 */
   onToggleExpand: (row: CommitRow) => void;
   /** 파일을 연다 (클릭·Enter) */
@@ -84,6 +89,8 @@ export function FolderCommitTree({
   processing,
   locked,
   onToggleCheck,
+  onIndex,
+  onDiscard,
   onToggleExpand,
   onOpen,
   menu,
@@ -101,6 +108,43 @@ export function FolderCommitTree({
     keyOf: (index) => rows[index]?.id ?? index,
   });
   const selectedIndex = selectedId === null ? -1 : rows.findIndex((r) => r.id === selectedId);
+  // 키보드·팔레트는 현재 행의 저장소와 staged 상태를 보존한다.
+  useEffect(() => {
+    const element = treeRef.current;
+    if (!element) return;
+    const row = rows[selectedIndex];
+    const canWrite = !!row && blockedReason(row, { busyRepos, locked }) === null;
+    const unregister = [
+      registerCommand('file.showDiff', element, {
+        enabled: () => row?.kind === 'file' && row.check !== 'conflict',
+        run: () => {
+          if (row?.kind === 'file') onOpen(row);
+        },
+      }),
+      registerCommand('file.stage', element, {
+        enabled: () => canWrite && !!onIndex && row?.check !== 'checked',
+        run: () => {
+          if (row) onIndex?.(row, 'stage');
+        },
+      }),
+      registerCommand('file.unstage', element, {
+        enabled: () => canWrite && !!onIndex && row?.check !== 'unchecked',
+        run: () => {
+          if (row) onIndex?.(row, 'unstage');
+        },
+      }),
+      registerCommand('file.discard', element, {
+        enabled: () => canWrite && !!onDiscard && row?.kind === 'file',
+        run: () => {
+          if (row?.kind === 'file') onDiscard?.(row);
+        },
+      }),
+    ];
+    return () => {
+      for (const cleanup of unregister) cleanup();
+    };
+  }, [rows, selectedIndex, busyRepos, locked, onOpen, onIndex, onDiscard]);
+
   // 형제 수·순번 (W18 이 넘긴 것): 가상 스크롤로 화면 밖 행이 DOM 에 없어도 "N개 중 M번째"를 알린다
   const positions = useMemo(() => siblingPositions(rows.map((r) => r.parentId)), [rows]);
   const items = virtualizer.getVirtualItems();
@@ -322,6 +366,7 @@ export function FolderCommitTree({
       <div
         ref={treeRef}
         className={styles.tree}
+        data-command-scope="files"
         role="tree"
         aria-label={S.commitTool.tree}
         aria-activedescendant={selectedRendered ? rowDomId(selectedIndex) : undefined}

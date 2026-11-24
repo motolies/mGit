@@ -246,7 +246,7 @@ describe('저장소 세션 장부: 승격·빌림·닫기·재스캔 (W13)', () 
   });
 
   it('숨은 세션이 있는 저장소를 탭으로 열면 같은 스토어가 승격된다: 그래프 로드가 그 스토어로 오고 장부는 빌림이 된다', async () => {
-    const { store, folder, entry, use } = await setup();
+    const { client, store, folder, entry, use } = await setup();
     await use(API, 1_000);
     const light = entry(API)?.session ?? -1;
     const lightStore = getSessionStore(light);
@@ -260,7 +260,12 @@ describe('저장소 세션 장부: 승격·빌림·닫기·재스캔 (W13)', () 
     expect(lightStore?.getState().profile).toBe('full');
     // 목은 간격 0 이면 승격하며 그래프 로드를 바로 끝낸다 — 그 이벤트가 이 스토어로 왔다
     expect(lightStore?.getState().loadState).toBe('complete');
-    expect(lightStore?.getState().totalRows).toBe(60);
+    const timelineInfo = await client.folderTimelineOpen(folder);
+    const timeline = await client.folderTimelineWindow(folder, 0, timelineInfo.rows);
+    const repoIndex = timelineInfo.repos.find((item) => item.path === API)?.index;
+    expect(repoIndex).toBeDefined();
+    const ownRows = timeline.rows.filter((row) => row.repo === repoIndex);
+    expect(lightStore?.getState().totalRows).toBe(ownRows.length);
     expect(store.getState().sessions[light]).toMatchObject({ kind: 'repo', parent: folder });
     expect(entry(API)).toMatchObject({ session: light, held: false });
 

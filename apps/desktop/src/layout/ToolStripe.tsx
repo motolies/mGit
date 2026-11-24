@@ -1,5 +1,6 @@
 import { Icon, type IconName, S } from '@mgit/ui';
 import { useRovingToolbar } from '../components/roving';
+import { useCommandTitle } from '../components/use-command-shortcut';
 import styles from './ToolStripe.module.css';
 
 /** 띠의 버튼 하나 = 도구 창 하나 */
@@ -26,19 +27,32 @@ function StripeGroup({ tools }: { tools: readonly StripeTool[] }) {
   return (
     <div className={styles.group}>
       {tools.map((tool) => (
-        <button
-          key={tool.id}
-          type="button"
-          className={styles.button}
-          aria-label={tool.label}
-          aria-pressed={tool.active}
-          title={tool.label}
-          onClick={tool.onToggle}
-        >
-          <Icon name={tool.icon} />
-        </button>
+        <StripeButton key={tool.id} tool={tool} />
       ))}
     </div>
+  );
+}
+
+/** 도구 창 단추에 현재 키맵을 표시한다. */
+function StripeButton({ tool }: { tool: StripeTool }) {
+  const ids: Record<string, string> = {
+    project: 'view.focusSidebar',
+    commit: 'view.toolCommit',
+    git: 'view.focusGraph',
+    terminal: 'view.terminal',
+  };
+  const title = useCommandTitle(ids[tool.id] ?? '', tool.label);
+  return (
+    <button
+      type="button"
+      className={styles.button}
+      aria-label={tool.label}
+      aria-pressed={tool.active}
+      title={title}
+      onClick={tool.onToggle}
+    >
+      <Icon name={tool.icon} />
+    </button>
   );
 }
 

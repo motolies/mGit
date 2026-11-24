@@ -1,10 +1,14 @@
+import { formatShortcut } from '@mgit/ui';
 import * as RadixMenu from '@radix-ui/react-context-menu';
 import { type MouseEvent, type ReactNode, useState } from 'react';
 import styles from './ContextMenu.module.css';
+import { useCommandShortcut } from './use-command-shortcut';
 
 /** 메뉴 항목. `children` 이 있으면 하위 메뉴 */
 export interface MenuItem {
   label: string;
+  commandId?: string;
+  disabledReason?: string;
   onSelect?: () => void;
   disabled?: boolean;
   danger?: boolean;
@@ -52,8 +56,10 @@ function renderItems(items: MenuItem[]) {
         className={item.danger ? styles.itemDanger : styles.item}
         disabled={item.disabled}
         onSelect={item.onSelect}
+        title={item.disabledReason}
       >
         {item.label}
+        {item.commandId ? <MenuShortcut id={item.commandId} /> : null}
       </RadixMenu.Item>,
     ];
   });
@@ -113,4 +119,10 @@ export function ContextMenuArea<T>({
       </RadixMenu.Portal>
     </RadixMenu.Root>
   );
+}
+
+/** 메뉴 우측에는 사용자 재지정까지 반영한 유효 키만 표시한다. */
+function MenuShortcut({ id }: { id: string }) {
+  const key = useCommandShortcut(id);
+  return key ? <kbd className={styles.chevron}>{formatShortcut(key)}</kbd> : null;
 }

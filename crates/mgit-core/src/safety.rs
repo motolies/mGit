@@ -252,6 +252,17 @@ impl Core {
         branch: &str,
         reason: &str,
     ) -> Result<Option<BackupRef>, CoreError> {
+        self.backup_ref_guarded(session, branch, reason, None).await
+    }
+
+    /// 메시지 수정은 백업 ref를 쓰기 직전에도 원격 게시 여부를 검사한다. 호출자는 검사 실패를 무시하지 않는다.
+    pub(crate) async fn backup_ref_guarded(
+        &self,
+        session: SessionId,
+        branch: &str,
+        reason: &str,
+        unpublished_commit: Option<Oid>,
+    ) -> Result<Option<BackupRef>, CoreError> {
         check_arg(branch)?;
         let inner = self.inner_arc();
         let s = inner.get(session)?;
@@ -282,6 +293,7 @@ impl Core {
                 name.as_str(),
                 hex.as_str(),
             ])
+            .guard_unpublished(unpublished_commit)
             .no_undo()
             .skip_refresh(),
         )

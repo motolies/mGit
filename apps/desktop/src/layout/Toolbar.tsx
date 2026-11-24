@@ -1,7 +1,9 @@
-import type { PullMode } from '@mgit/ipc';
+import type { PullMode, SessionId } from '@mgit/ipc';
 import { Button, S } from '@mgit/ui';
-import { useState } from 'react';
+import { type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from 'react';
 import { type DropdownItem, DropdownMenu } from '../components/DropdownMenu';
+import { hasModifier, rovingIndex } from '../components/roving';
+import { useCommandTitle } from '../components/use-command-shortcut';
 import { useBatchReport } from '../features/folder/batch-report';
 import { useFolderBatchFlows } from '../features/folder/FolderBatchBar';
 import { RemotesDialog } from '../features/remote/RemotesDialog';
@@ -130,6 +132,9 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
     pull: st.pull,
     push: st.push,
   }));
+  const fetchTitle = useCommandTitle('sync.fetch', S.remote.fetch, 'mod+shift+f');
+  const pullTitle = useCommandTitle('sync.pull', S.remote.pullMode[s.pullMode]);
+  const pushTitle = useCommandTitle('sync.push', S.remote.push);
   const disabled = s.busy || s.op !== null;
   const cur = s.current;
   const badge = cur
@@ -159,14 +164,18 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
   ];
   return (
     <span className={styles.sync}>
-      <Button disabled={disabled || !s.hasRemotes} onClick={() => void s.fetch(null, true)}>
+      <Button
+        title={fetchTitle}
+        disabled={disabled || !s.hasRemotes}
+        onClick={() => void s.fetch(null, true)}
+      >
         {S.remote.fetch}
       </Button>
       <span className={styles.split}>
         <Button
           disabled={disabled || !cur?.upstream || cur.upstreamGone}
           onClick={() => void s.pull()}
-          title={S.remote.pullMode[s.pullMode]}
+          title={pullTitle}
         >
           {S.remote.pull}
         </Button>
@@ -184,7 +193,11 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
         </select>
       </span>
       <span className={styles.split}>
-        <Button disabled={pushDisabled} onClick={() => void s.push()} title={pushLabel}>
+        <Button
+          disabled={pushDisabled}
+          onClick={() => void s.push()}
+          title={`${pushLabel} · ${pushTitle}`}
+        >
           {S.remote.push}
         </Button>
         <DropdownMenu
@@ -288,6 +301,58 @@ export function Toolbar() {
   const repoTab = useIsRepoTab();
   const folderTab = useActiveTab()?.kind === 'folder';
   const [showRemotes, setShowRemotes] = useState(false);
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const settingsTitle = useCommandTitle('app.settings', S.actions.settings);
+  const refreshTitle = useCommandTitle('view.refresh', S.toolbar.refresh, 'mod+r');
+  const logTitle = useCommandTitle('view.log', S.toolbar.log, 'mod+j');
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const tabPrefix = useId();
+  const previousActive = useRef(activeSessionId);
+  // 전역 닫기 명령으로 세션 본문까지 사라졌다면 남은 활성 탭 또는 빈 탭 영역으로 돌아간다.
+  useLayoutEffect(() => {
+    const closed =
+      previousActive.current !== null && !sessionOrder.includes(previousActive.current);
+    previousActive.current = activeSessionId;
+    if (closed && document.activeElement === document.body) {
+      const target =
+        activeSessionId === null
+          ? null
+          : document.getElementById(`${tabPrefix}-${activeSessionId}`);
+      (target ?? tabsRef.current)?.focus();
+    }
+  }, [sessionOrder, activeSessionId, tabPrefix]);
+
+  /** 탭 닫기 완료 뒤 포커스가 사라졌으면 다음·이전 탭, 빈 목록 순서로 복귀한다 */
+  const closeTab = async (id: SessionId) => {
+    const tabs = sessionOrder.filter((key) => sessions[key]);
+    const index = tabs.indexOf(id);
+    const origin = document.activeElement;
+    await closeSession(id);
+    if (origin instanceof HTMLElement && origin.isConnected) return;
+    const live = tabsRef.current;
+    if (!live) return;
+    const next = tabs.slice(index + 1).concat(tabs.slice(0, index).reverse());
+    const target = next
+      .map((key) => document.getElementById(`${tabPrefix}-${key}`))
+      .find((el) => el?.isConnected);
+    (target ?? live).focus();
+  };
+
+  /** 저장소·폴더 탭도 Tab 진입점 하나와 방향키·Home/End 선택을 제공한다 */
+  const onTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, id: SessionId) => {
+    if (hasModifier(e)) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      void closeTab(id);
+      return;
+    }
+    const index = rovingIndex(e.key, sessionOrder.indexOf(id), sessionOrder.length, 'horizontal');
+    const next = index === null ? undefined : sessionOrder[index];
+    if (!next) return;
+    e.preventDefault();
+    setActiveSession(next);
+    document.getElementById(`${tabPrefix}-${next}`)?.focus();
+  };
 
   return (
     <header className={styles.toolbar}>
@@ -295,14 +360,24 @@ export function Toolbar() {
       <Button variant="primary" onClick={() => void openRepository()} disabled={isOpening}>
         {isOpening ? S.toolbar.opening : S.toolbar.openRepo}
       </Button>
-      <Button onClick={() => void refreshActive()} disabled={!repoTab && !folderTab} title="⌘R">
+      <Button
+        onClick={() => void refreshActive()}
+        disabled={!repoTab && !folderTab}
+        title={refreshTitle}
+      >
         {S.toolbar.refresh}
       </Button>
       {repoTab ? <SyncButtons onRemotes={() => setShowRemotes(true)} /> : null}
       {folderTab ? <FolderSyncButtons /> : null}
       {repoTab ? <UndoButtons /> : null}
 
-      <nav className={styles.tabs} aria-label={S.toolbar.tabsLabel}>
+      <div
+        ref={tabsRef}
+        className={styles.tabs}
+        role="tablist"
+        tabIndex={sessionOrder.length === 0 ? 0 : -1}
+        aria-label={S.toolbar.tabsLabel}
+      >
         {sessionOrder.map((id) => {
           const meta = sessions[id];
           if (!meta) {
@@ -314,6 +389,11 @@ export function Toolbar() {
               <button
                 type="button"
                 className={styles.tabLabel}
+                id={`${tabPrefix}-${id}`}
+                role="tab"
+                aria-selected={active}
+                tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
+                onKeyDown={(e) => onTabKeyDown(e, id)}
                 onClick={() => setActiveSession(id)}
                 title={meta.path}
               >
@@ -326,7 +406,8 @@ export function Toolbar() {
               <button
                 type="button"
                 className={styles.tabClose}
-                onClick={() => void closeSession(id)}
+                tabIndex={-1}
+                onClick={() => void closeTab(id)}
                 aria-label={S.toolbar.closeRepo}
                 title={S.toolbar.closeRepo}
               >
@@ -335,7 +416,7 @@ export function Toolbar() {
             </div>
           );
         })}
-      </nav>
+      </div>
 
       <CloneIndicator />
       {repoTab ? <OperationIndicator /> : null}
@@ -349,10 +430,17 @@ export function Toolbar() {
         </span>
       ) : null}
 
-      <Button onClick={() => toggleDock('git', 'console')} aria-pressed={consoleOpen} title="⌘J">
+      <Button
+        onClick={() => toggleDock('git', 'console')}
+        aria-pressed={consoleOpen}
+        title={logTitle}
+      >
         {S.toolbar.log}
       </Button>
 
+      <Button onClick={() => setSettingsOpen(true)} title={settingsTitle}>
+        {S.actions.settings}
+      </Button>
       <label className={styles.theme}>
         <span className={styles.themeLabel}>{S.toolbar.theme.label}</span>
         <select

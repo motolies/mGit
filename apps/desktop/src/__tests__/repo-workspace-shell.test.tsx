@@ -108,6 +108,7 @@ afterEach(() => {
   removeDialogStub();
   act(() =>
     useAppStore.setState({
+      shortcutOverrides: {},
       sessions: {},
       sessionOrder: [],
       activeSessionId: null,
@@ -363,17 +364,17 @@ describe('저장소 탭의 화면 틀 (WS-15, W21)', () => {
 describe('저장소 탭의 단축키 (WS-20, W21)', () => {
   it('⌘1 Project · ⌘0 Commit · ⌘2 에디터 · ⌘9 로그 · ⌘3 상세 로 포커스가 간다 (옛 영역 폴백 없이)', async () => {
     await mountRepo();
-    press('1', MOD);
+    press('1', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(focusedArea()).toBe('project');
-    press('0', MOD);
+    press('0', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(useAppStore.getState().leftTool).toBe('commit');
     expect(focusedArea()).toBe('commit');
     press('2', MOD);
     await tick();
     expect(focusedArea()).toBe('editor');
-    press('9', MOD);
+    press('9', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(focusedArea()).toBe('git-log');
     press('3', MOD);
@@ -396,7 +397,7 @@ describe('저장소 탭의 단축키 (WS-20, W21)', () => {
     expect(st().selectedFile).toBeNull();
     expect(requestCloseSession).not.toHaveBeenCalled();
     // 에디터 밖(로그)
-    press('9', MOD);
+    press('9', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     press('w', MOD);
     await tick();
@@ -414,6 +415,7 @@ describe('저장소 탭의 단축키 (WS-20, W21)', () => {
     expect(st().search.open).toBe(true);
     expect(area('git-log')).not.toBeNull();
     act(() => useAppStore.getState().toggleDock('git', 'console'));
+    act(() => useAppStore.getState().setShortcutOverrides({ 'view.graphFilter': 'mod+shift+g' }));
     press('g', { ...MOD, shiftKey: true });
     await tick();
     expect(useAppStore.getState().dock.gitTab).toBe('log');
@@ -422,6 +424,7 @@ describe('저장소 탭의 단축키 (WS-20, W21)', () => {
     expect(document.querySelector('[data-panel="git-log"] [data-filter-bar]')).not.toBeNull();
     expect(st().search.open).toBe(true);
     // 한 번 더 눌러도 필터 바를 닫지 않는다
+    act(() => useAppStore.getState().setShortcutOverrides({ 'view.graphFilter': 'mod+shift+g' }));
     press('g', { ...MOD, shiftKey: true });
     await tick();
     expect(document.activeElement?.hasAttribute('data-filter-text')).toBe(true);

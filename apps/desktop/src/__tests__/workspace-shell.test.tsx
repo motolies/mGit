@@ -218,6 +218,14 @@ const pressed = () =>
 
 const ACTIONS: Action[] = [
   {
+    id: 'app.palette',
+    title: S.actions.palette,
+    group: 'app',
+    shortcut: 'mod+shift+a',
+    enabled: true,
+    run: () => {},
+  },
+  {
     id: 'view.focusSidebar',
     title: S.actions.focusSidebar,
     group: 'view',

@@ -26,6 +26,7 @@ export function CommandPalette({
 
   return (
     <Command.Dialog
+      data-command-palette=""
       open={open}
       onOpenChange={onOpenChange}
       label={S.actions.palette}
@@ -54,6 +55,7 @@ export function CommandPalette({
                 key={a.id}
                 value={`${a.title} ${a.id}`}
                 disabled={!a.enabled}
+                title={a.disabledReason}
                 className={styles.item}
                 onSelect={() => {
                   onOpenChange(false);

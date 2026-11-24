@@ -1,5 +1,7 @@
-import { Button, formatShortcut, Icon, isImeKey, isPrimaryModifier, Popover, S } from '@mgit/ui';
-import { type KeyboardEvent, useState } from 'react';
+import { Button, formatShortcut, Icon, Popover, S } from '@mgit/ui';
+import { useEffect, useRef, useState } from 'react';
+import { registerCommand } from '../../command-registry';
+import { useAppStore } from '../../store';
 import styles from './CommitMessageBox.module.css';
 import { skipSummary } from './commit-plan';
 
@@ -42,30 +44,31 @@ export function CommitMessageBox({
 }: CommitMessageBoxProps) {
   const [expanded, setExpanded] = useState(false);
   const [toggle, setToggle] = useState<HTMLButtonElement | null>(null);
-  /** ⌘Enter 로 커밋한다. 막혀 있으면 아무것도 하지 않는다 */
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (isImeKey(e) || !isPrimaryModifier(e) || e.key !== 'Enter') {
-      return;
-    }
-    e.preventDefault();
-    if (blocked === null) {
-      onCommit();
-    }
-  };
+  const ref = useRef<HTMLDivElement>(null);
+  const override = useAppStore((s) => s.shortcutOverrides['commit.execute']);
+  // 입력 영역의 유효 명령만 등록한다. IME·수정키·사용자 재지정은 공통 키맵이 판정한다.
+  useEffect(() => {
+    if (!ref.current) return;
+    return registerCommand('commit.execute', ref.current, {
+      enabled: () => blocked === null && !committing,
+      reason: () => blocked ?? undefined,
+      run: onCommit,
+    });
+  }, [blocked, committing, onCommit]);
   const t = S.commitTool;
-  const shortcut = formatShortcut(COMMIT_SHORTCUT);
+  const shortcut = formatShortcut(override === undefined ? COMMIT_SHORTCUT : (override ?? ''));
   const summary = skipSummary(skipped);
   const open = expanded && summary !== null;
   return (
-    <div className={styles.box}>
+    <div ref={ref} className={styles.box} data-command-scope="commit-input">
       <textarea
+        data-commit-message
         className={styles.message}
         aria-label={t.message}
         placeholder={t.messageHint(shortcut)}
         value={message}
         readOnly={committing}
         onChange={(e) => onMessageChange(e.target.value)}
-        onKeyDown={onKeyDown}
       />
       {targets !== null ? (
         <div className={styles.targets} title={targets}>

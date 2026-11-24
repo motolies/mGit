@@ -4,87 +4,128 @@
   background: var(--bg);
   color: var(--fg);
   padding: 0;
-  width: 640px;
-  max-width: 92vw;
+  width: 900px;
+  max-width: 94vw;
+  max-height: 92vh;
 }
-
 .dialog::backdrop {
   background: rgba(0, 0, 0, 0.25);
 }
-
 .box {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: 12px;
+  padding: 16px;
   font-size: 12px;
 }
-
 .header {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-
-/* 제목은 한 줄로 둔다 (자리가 모자라면 안내 글자가 줄을 바꾼다) */
 .title {
   font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
+  font-size: 16px;
+  margin: 0;
 }
-
 .hint {
   color: var(--fg-muted);
 }
-
-.spacer {
-  flex: 1 1 auto;
-}
-
 .list {
+  max-height: 55vh;
+  overflow: auto;
+}
+.groupList {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 60vh;
-  overflow: auto;
 }
-
-.item {
-  display: grid;
-  grid-template-columns: 70px minmax(0, 1fr) 140px 64px;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--border);
-}
-
 .group {
   color: var(--fg-muted);
+  font-size: 12px;
+  margin: 16px 0 4px;
 }
-
+.item {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) 110px auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.description {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-
 .key {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--fg);
   font: inherit;
   font-size: 12px;
-  padding: 3px 8px;
+  padding: 4px 8px;
   text-align: center;
-  cursor: pointer;
 }
-
-.item[data-conflict="true"] .key {
-  border-color: var(--danger);
+.item[data-conflict="true"] .key,
+.error {
   color: var(--danger);
 }
-
-.resetSlot {
-  display: inline-block;
+.item[data-conflict="true"] .key {
+  border-color: var(--danger);
+}
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.general {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow: auto;
+}
+.general[hidden] {
+  display: none;
+}
+.field {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: 12px;
+  align-items: center;
+}
+.field input,
+.field select,
+.search {
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font: inherit;
+  min-width: 0;
+}
+.search {
+  flex: 1;
+}
+.shortcutPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pageTab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  color: var(--fg-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.pageTab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
 }

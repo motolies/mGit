@@ -1,6 +1,9 @@
 import { type TerminalIo, TerminalView } from '@mgit/terminal';
 import { Button, Icon, S } from '@mgit/ui';
-import { useMemo } from 'react';
+import { useContext, useMemo } from 'react';
+import { CommandContext } from '../../components/command-context';
+import { hasModifier, rovingIndex } from '../../components/roving';
+import { terminalPassKey } from '../../global-keys';
 import { useAppStore } from '../../store';
 import styles from './TerminalPanel.module.css';
 
@@ -19,7 +22,37 @@ export function TerminalTabs() {
   const activate = useAppStore((st) => st.setActiveTerminal);
   const t = S.terminal;
   return (
-    <div className={styles.tabs}>
+    <div
+      className={styles.tabs}
+      data-terminal=""
+      role="tablist"
+      aria-label={t.title}
+      onKeyDown={(e) => {
+        if (hasModifier(e)) return;
+        if ((e.key === 'Delete' || e.key === 'Backspace') && active !== null) {
+          e.preventDefault();
+          const index = terminals.findIndex((t) => t.id === active);
+          const next = terminals[index + 1] ?? terminals[index - 1];
+          close(active);
+          setTimeout(() => {
+            if (next) document.getElementById(`terminal-tab-${next.id}`)?.focus();
+            else document.querySelector<HTMLElement>('[data-terminal-new]')?.focus();
+          }, 0);
+          return;
+        }
+        const next = rovingIndex(
+          e.key,
+          terminals.findIndex((t) => t.id === active),
+          terminals.length,
+          'horizontal',
+        );
+        const term = next === null ? undefined : terminals[next];
+        if (!term) return;
+        e.preventDefault();
+        activate(term.id);
+        document.getElementById(`terminal-tab-${term.id}`)?.focus();
+      }}
+    >
       {terminals.map((term) => (
         <span
           key={term.id}
@@ -30,6 +63,10 @@ export function TerminalTabs() {
           <button
             type="button"
             className={styles.tabName}
+            id={`terminal-tab-${term.id}`}
+            role="tab"
+            aria-selected={term.id === active}
+            tabIndex={term.id === active ? 0 : -1}
             title={term.cwd}
             onClick={() => activate(term.id)}
           >
@@ -41,7 +78,14 @@ export function TerminalTabs() {
             className={styles.tabButton}
             title={t.close}
             aria-label={t.close}
-            onClick={() => close(term.id)}
+            tabIndex={-1}
+            onClick={() => {
+              const index = terminals.findIndex((t) => t.id === term.id);
+              const next = terminals[index + 1] ?? terminals[index - 1];
+              close(term.id);
+              if (next) document.getElementById(`terminal-tab-${next.id}`)?.focus();
+              else document.querySelector<HTMLElement>('[data-terminal-new]')?.focus();
+            }}
           >
             <Icon name="close" />
           </button>
@@ -50,6 +94,7 @@ export function TerminalTabs() {
       <button
         type="button"
         className={styles.tabButton}
+        data-terminal-new=""
         onClick={() => open()}
         title={t.open}
         aria-label={t.open}
@@ -66,6 +111,7 @@ export function TerminalTabs() {
  * 명령이 죽고, 다시 열 때 초기 입력이 또 실행되므로 탭이 있는 동안은 마운트해 둔다
  */
 export function TerminalPanel() {
+  const actions = useContext(CommandContext);
   const client = useAppStore((st) => st.client);
   const terminals = useAppStore((st) => st.terminals);
   const active = useAppStore((st) => st.activeTerminal);
@@ -87,7 +133,11 @@ export function TerminalPanel() {
   );
   const t = S.terminal;
   return (
-    <div className={styles.panel} style={visible ? undefined : { display: 'none' }}>
+    <div
+      data-terminal=""
+      className={styles.panel}
+      style={visible ? undefined : { display: 'none' }}
+    >
       {terminals.length === 0 ? (
         <div className={styles.empty}>
           <span>{t.empty}</span>
@@ -103,6 +153,7 @@ export function TerminalPanel() {
           <TerminalView
             cwd={term.cwd}
             io={io}
+            passKey={(e) => terminalPassKey(e, actions)}
             initialInput={term.initialInput}
             onInitialInputSent={() => clearInput(term.id)}
             active={visible && term.id === active}

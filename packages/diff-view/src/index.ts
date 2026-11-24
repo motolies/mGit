@@ -1,4 +1,10 @@
-export { type DiffActions, type DiffMode, DiffView, type DiffViewProps } from './DiffView';
+export {
+  type DiffActions,
+  type DiffMode,
+  type DiffNavigation,
+  DiffView,
+  type DiffViewProps,
+} from './DiffView';
 export { highlightHunk, parserFor, plainSpans, tokenize } from './highlight';
 export {
   buildRows,

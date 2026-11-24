@@ -1,9 +1,13 @@
 import type { ExternalApps } from '@mgit/ipc';
-import { ConfirmDialog, PromptDialog, S } from '@mgit/ui';
-import { useEffect, useState } from 'react';
+import { Button, ConfirmDialog, PromptDialog, type PromptField, S } from '@mgit/ui';
+import { useEffect, useId, useState } from 'react';
+import type { Action } from '../../actions';
 import { bool, raw, str } from '../../components/use-dialogs';
+import { useModal } from '../../components/use-modal';
 import { useAppStore } from '../../store';
 import type { LanguagePreference } from '../../store/language';
+import { draftActions, hasShortcutConflicts, ShortcutSettings } from './ShortcutsDialog';
+import styles from './ShortcutsDialog.module.css';
 
 /** git·ssh 자격 증명 입력 (AU-01·03). "키체인에 저장" 을 켜면 다음부터 묻지 않는다 */
 export function CredentialDialog() {
@@ -97,114 +101,260 @@ interface SettingsValues {
   autoFetch: number;
 }
 
-/**
- * 설정 (`⌘,`): 맨 위 화면 언어(다국어 L3), 그 아래 외부 앱(UX-07 — 에디터·터미널 프리셋 또는 직접 입력), 맨 아래 자동
- * fetch 간격(저장소 탭·폴더 탭 공용). 저장하면 외부 앱을 저장하고 간격이 바뀌었으면 간격을 저장한 뒤 대화상자를 닫고,
- * 언어가 바뀌었으면 언어를 바꾼다 (화면이 다시 마운트되므로 닫은 다음에 바꿔야 대화상자가 다시 뜨지 않는다)
- */
-export function SettingsDialog() {
+/** 일반·단축키를 같은 대화상자에서 편집한다. 닫힌 뒤 도착한 조회 결과는 버린다. */
+export function SettingsDialog({ actions = [] }: { actions?: readonly Action[] }) {
   const open = useAppStore((s) => s.settingsOpen);
-  const setOpen = useAppStore((s) => s.setSettingsOpen);
   const get = useAppStore((s) => s.externalAppsGet);
-  const save = useAppStore((s) => s.externalAppsSet);
   const getAutoFetch = useAppStore((s) => s.autoFetchGet);
-  const saveAutoFetch = useAppStore((s) => s.autoFetchSet);
-  const language = useAppStore((s) => s.language);
-  const setLanguage = useAppStore((s) => s.setLanguage);
-  // 언어를 바꾸면 화면을 다시 마운트해 열린 터미널이 새 셸로 시작된다. 터미널이 있을 때만 미리 알린다
-  const hasTerminals = useAppStore((s) => s.terminals.length > 0);
   const [loaded, setLoaded] = useState<SettingsValues | null>(null);
   useEffect(() => {
+    let cancelled = false;
     if (open) {
-      void Promise.all([get(), getAutoFetch()]).then(([apps, autoFetch]) =>
-        setLoaded({ apps, autoFetch }),
-      );
-    } else {
-      setLoaded(null);
-    }
+      void Promise.all([get(), getAutoFetch()]).then(([apps, autoFetch]) => {
+        if (!cancelled) setLoaded({ apps, autoFetch });
+      });
+    } else setLoaded(null);
+    return () => {
+      cancelled = true;
+    };
   }, [open, get, getAutoFetch]);
-  if (!open || !loaded) {
-    return null;
-  }
-  const { apps } = loaded;
+  return open && loaded ? <SettingsForm actions={actions} initial={loaded} /> : null;
+}
+
+/** 일반 설정과 단축키의 초안을 유지하고 저장 성공 후에만 대화상자를 닫는다. */
+function SettingsForm({
+  actions,
+  initial,
+}: {
+  actions: readonly Action[];
+  initial: SettingsValues;
+}) {
+  const setOpen = useAppStore((s) => s.setSettingsOpen);
+  const initialPage = useAppStore((s) => s.settingsPage);
+  const [page, setPage] = useState(initialPage);
+  const overrides = useAppStore((s) => s.shortcutOverrides);
+  const setOverrides = useAppStore((s) => s.setShortcutOverrides);
+  const [draft, setDraft] = useState(() => ({ ...overrides }));
+  const save = useAppStore((s) => s.externalAppsSet);
+  const saveAutoFetch = useAppStore((s) => s.autoFetchSet);
+  const initialLanguage = useAppStore((s) => s.language);
+  const setLanguage = useAppStore((s) => s.setLanguage);
+  const hasTerminals = useAppStore((s) => s.terminals.length > 0);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useModal(true);
+  const titleId = useId();
+  const generalId = useId();
+  const shortcutsId = useId();
+  const { apps } = initial;
   const mac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform ?? '');
+  const fields: readonly PromptField[] = [
+    {
+      key: 'language',
+      label: S.settings.language,
+      type: 'select',
+      initial: initialLanguage,
+      options: [
+        { value: 'system', label: S.settings.languageSystem },
+        { value: 'ko', label: S.settings.languageKo },
+        { value: 'en', label: S.settings.languageEn },
+      ],
+    },
+    {
+      key: 'editor',
+      label: S.external.editor,
+      type: 'select',
+      initial: apps.editor,
+      options: [
+        { value: '', label: S.external.auto },
+        { value: 'vscode', label: S.external.vscode },
+        { value: 'idea', label: S.external.idea },
+        { value: 'custom', label: S.external.custom },
+      ],
+    },
+    { key: 'editorCustom', label: S.external.customEditor, initial: apps.editorCustom },
+    {
+      key: 'terminal',
+      label: S.external.terminal,
+      type: 'select',
+      initial: apps.terminal,
+      options: [
+        { value: '', label: S.external.auto },
+        ...(mac
+          ? [
+              { value: 'terminal', label: S.external.terminalApp },
+              { value: 'iterm', label: S.external.iterm },
+            ]
+          : [{ value: 'wt', label: S.external.wt }]),
+        { value: 'custom', label: S.external.custom },
+      ],
+    },
+    { key: 'terminalCustom', label: S.external.customTerminal, initial: apps.terminalCustom },
+    {
+      key: 'autoFetch',
+      label: S.settings.autoFetch,
+      type: 'select',
+      initial: String(initial.autoFetch),
+      options: autoFetchOptions(initial.autoFetch),
+    },
+  ];
+  const [values, setValues] = useState<Record<string, string | boolean>>(() =>
+    Object.fromEntries(fields.map((field) => [field.key, field.initial ?? ''])),
+  );
+  const conflicts = hasShortcutConflicts(draftActions(actions, draft));
+
+  /** 일반 설정 저장 후 단축키를 반영하고, 언어 변경은 창을 닫은 뒤 적용한다. */
+  const submit = async () => {
+    if (saving || conflicts) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await save({
+        editor: str(values, 'editor'),
+        editorCustom: str(values, 'editorCustom'),
+        terminal: str(values, 'terminal'),
+        terminalCustom: str(values, 'terminalCustom'),
+      });
+      const nextAutoFetch = Number(str(values, 'autoFetch') || initial.autoFetch);
+      if (Number.isInteger(nextAutoFetch) && nextAutoFetch !== initial.autoFetch)
+        await saveAutoFetch(nextAutoFetch);
+      if (JSON.stringify(draft) !== JSON.stringify(overrides)) setOverrides(draft);
+      setOpen(false);
+      const nextLanguage = languageOf(values);
+      if (nextLanguage !== initialLanguage) await setLanguage(nextLanguage);
+    } catch (cause) {
+      setError(String(cause));
+      setSaving(false);
+    }
+  };
   return (
-    <PromptDialog
-      open
-      title={S.settings.title}
-      message={hasTerminals ? S.settings.languageRestartsTerminals : undefined}
-      fields={[
-        {
-          key: 'language',
-          label: S.settings.language,
-          type: 'select',
-          initial: language,
-          options: [
-            { value: 'system', label: S.settings.languageSystem },
-            { value: 'ko', label: S.settings.languageKo },
-            { value: 'en', label: S.settings.languageEn },
-          ],
-        },
-        {
-          key: 'editor',
-          label: S.external.editor,
-          type: 'select',
-          initial: apps.editor,
-          options: [
-            { value: '', label: S.external.auto },
-            { value: 'vscode', label: S.external.vscode },
-            { value: 'idea', label: S.external.idea },
-            { value: 'custom', label: S.external.custom },
-          ],
-        },
-        { key: 'editorCustom', label: S.external.customEditor, initial: apps.editorCustom },
-        {
-          key: 'terminal',
-          label: S.external.terminal,
-          type: 'select',
-          initial: apps.terminal,
-          options: [
-            { value: '', label: S.external.auto },
-            ...(mac
-              ? [
-                  { value: 'terminal', label: S.external.terminalApp },
-                  { value: 'iterm', label: S.external.iterm },
-                ]
-              : [{ value: 'wt', label: S.external.wt }]),
-            { value: 'custom', label: S.external.custom },
-          ],
-        },
-        { key: 'terminalCustom', label: S.external.customTerminal, initial: apps.terminalCustom },
-        {
-          key: 'autoFetch',
-          label: S.settings.autoFetch,
-          type: 'select',
-          initial: String(loaded.autoFetch),
-          options: autoFetchOptions(loaded.autoFetch),
-        },
-      ]}
-      confirmLabel={S.settings.save}
-      onConfirm={(v) => {
-        const nextLanguage = languageOf(v);
-        // 값이 없으면(필드가 빠짐) 지금 값 그대로 — 빈 문자열이 0(끔)으로 읽히지 않게 한다
-        const nextAutoFetch = Number(str(v, 'autoFetch') || loaded.autoFetch);
-        void save({
-          editor: str(v, 'editor'),
-          editorCustom: str(v, 'editorCustom'),
-          terminal: str(v, 'terminal'),
-          terminalCustom: str(v, 'terminalCustom'),
-        }).then(async () => {
-          if (Number.isInteger(nextAutoFetch) && nextAutoFetch !== loaded.autoFetch) {
-            await saveAutoFetch(nextAutoFetch);
-          }
-          setOpen(false);
-          if (nextLanguage !== language) {
-            await setLanguage(nextLanguage);
-          }
-        });
+    <dialog
+      ref={ref}
+      className={styles.dialog}
+      aria-labelledby={titleId}
+      onClose={() => setOpen(false)}
+      onCancel={(event) => {
+        event.preventDefault();
+        setOpen(false);
       }}
-      onCancel={() => setOpen(false)}
-    />
+    >
+      <form
+        className={styles.box}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <h2 id={titleId} className={styles.title}>
+          {S.settings.title}
+        </h2>
+        <div className={styles.header} role="tablist" aria-label={S.settings.title}>
+          {(['general', 'shortcuts'] as const).map((tab, index) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              id={`${tab === 'general' ? generalId : shortcutsId}-tab`}
+              aria-controls={tab === 'general' ? generalId : shortcutsId}
+              aria-selected={page === tab}
+              tabIndex={page === tab ? 0 : -1}
+              className={styles.pageTab}
+              onClick={() => setPage(tab)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === 'ArrowLeft' ||
+                  event.key === 'ArrowRight' ||
+                  event.key === 'Home' ||
+                  event.key === 'End'
+                ) {
+                  event.preventDefault();
+                  const next =
+                    event.key === 'Home'
+                      ? 'general'
+                      : event.key === 'End'
+                        ? 'shortcuts'
+                        : index === 0
+                          ? 'shortcuts'
+                          : 'general';
+                  setPage(next);
+                  document
+                    .getElementById(`${next === 'general' ? generalId : shortcutsId}-tab`)
+                    ?.focus();
+                }
+              }}
+            >
+              {tab === 'general' ? S.settings.general : S.shortcuts.title}
+            </button>
+          ))}
+        </div>
+        <div
+          role="tabpanel"
+          id={generalId}
+          aria-labelledby={`${generalId}-tab`}
+          hidden={page !== 'general'}
+          className={styles.general}
+        >
+          {hasTerminals ? (
+            <p className={styles.hint}>{S.settings.languageRestartsTerminals}</p>
+          ) : null}
+          {fields.map((field) => (
+            <label key={field.key} className={styles.field} htmlFor={`${generalId}-${field.key}`}>
+              <span>{field.label}</span>
+              {field.type === 'select' ? (
+                <select
+                  id={`${generalId}-${field.key}`}
+                  value={String(values[field.key] ?? '')}
+                  onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                >
+                  {field.options?.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id={`${generalId}-${field.key}`}
+                  value={String(values[field.key] ?? '')}
+                  onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                />
+              )}
+            </label>
+          ))}
+        </div>
+        <div
+          role="tabpanel"
+          id={shortcutsId}
+          aria-labelledby={`${shortcutsId}-tab`}
+          hidden={page !== 'shortcuts'}
+        >
+          <ShortcutSettings
+            actions={actions}
+            draft={draft}
+            onChange={setDraft}
+            active={page === 'shortcuts'}
+          />
+        </div>
+        {conflicts ? (
+          <p role="status" className={styles.error}>
+            {S.shortcuts.saveConflict}
+          </p>
+        ) : null}
+        {error ? (
+          <p role="alert" className={styles.error}>
+            {error}
+          </p>
+        ) : null}
+        <footer className={styles.footer}>
+          <Button onClick={() => setOpen(false)} disabled={saving}>
+            {S.confirm.cancel}
+          </Button>
+          <Button type="submit" variant="primary" disabled={saving || conflicts}>
+            {S.settings.save}
+          </Button>
+        </footer>
+      </form>
+    </dialog>
   );
 }
 

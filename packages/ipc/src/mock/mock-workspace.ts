@@ -2883,7 +2883,7 @@ export function createMockScene(
   switch (name) {
     case 'folder': {
       // 폴더의 저장소를 탭이나 가벼운 세션으로 열면 그 저장소의 요약 줄과 같은 브랜치·변경·진행 중 작업으로
-      // 연다 (커밋 그래프와 ref 배치는 공통 합성 데이터라 타임라인과는 다르다)
+      // 연다. 클라이언트는 통합 타임라인과 같은 이력·ref 배치를 공급한다.
       const folder = folderData(seed, specs, options.scale);
       return {
         name,

@@ -6,6 +6,7 @@ import {
   type IpcClient,
   type RepoOpened,
 } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionStore, headBranchOf, opLabel } from '../store/session-store';
 
@@ -220,5 +221,94 @@ describe('SessionStore', () => {
     const { store } = setup();
     expect(await store.getState().resolveRow('x'.repeat(40))).toBe(7);
     expect(await store.getState().resolveRow('nope')).toBeNull();
+  });
+});
+
+describe('취소 가능한 커밋 이동', () => {
+  it('대상 부재와 조회 실패를 구분하고 필터를 바꾸지 않는다', async () => {
+    const { store, client } = setup();
+    const query = store.getState().graphQuery;
+    expect(await store.getState().jumpToCommit('missing')).toBe('missing');
+    vi.mocked(client.findRow).mockRejectedValueOnce(new Error('offline'));
+    expect(await store.getState().jumpToCommit('missing')).toBe('failed');
+    expect(store.getState().graphQuery).toBe(query);
+  });
+
+  it('늦은 조회가 완료돼도 취소된 이동은 선택과 스크롤을 바꾸지 않는다', async () => {
+    const { store, client } = setup();
+    let finish!: (row: number) => void;
+    vi.mocked(client.findRow).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const result = store.getState().jumpToCommit('target', controller.signal);
+    controller.abort();
+    finish(3);
+    expect(await result).toBe('cancelled');
+    expect(store.getState().selectedCommit).toBeNull();
+    expect(store.getState().scrollToRow).toBeNull();
+  });
+});
+
+describe('원격 커밋 메시지 수정 보호', () => {
+  const oid = 'a'.repeat(40);
+  const published = {
+    timedOut: false,
+    head: true,
+    branches: [
+      { name: 'refs/remotes/other/main', shortName: 'other/main', remote: true, current: false },
+    ],
+  };
+
+  it('다른 원격 브랜치에 포함된 조상 커밋도 쓰기 호출 전에 차단한다', async () => {
+    const { store, client } = setup();
+    client.commitContainingRefs = vi.fn(async () => published);
+    client.rewordCommit = vi.fn(async () => 'clean' as const);
+    await store.getState().rewordCommit(oid, 'changed');
+    expect(client.rewordCommit).not.toHaveBeenCalled();
+    expect(store.getState().actionError).toBe(S.shortcuts.rewordPublished);
+  });
+
+  it('창을 연 뒤 원격 상태가 바뀌어도 제출 때 새로 조회한다', async () => {
+    const { store, client } = setup();
+    client.commitContainingRefs = vi
+      .fn()
+      .mockResolvedValueOnce({ timedOut: false, head: true, branches: [] })
+      .mockResolvedValueOnce(published);
+    client.rewordCommit = vi.fn(async () => 'clean' as const);
+    expect(await store.getState().checkRewordAllowed(oid)).toBe(true);
+    await store.getState().rewordCommit(oid, 'changed');
+    expect(client.commitContainingRefs).toHaveBeenCalledTimes(2);
+    expect(client.rewordCommit).not.toHaveBeenCalled();
+  });
+
+  it.each(['timeout', 'error'])(
+    '원격 포함 조회 %s는 미발행으로 취급하지 않는다',
+    async (failure) => {
+      const { store, client } = setup();
+      client.commitContainingRefs =
+        failure === 'error'
+          ? vi.fn(async () => {
+              throw new Error('offline');
+            })
+          : vi.fn(async () => ({ timedOut: true, head: false, branches: [] }));
+      client.rewordCommit = vi.fn(async () => 'clean' as const);
+      await store.getState().rewordCommit(oid, 'changed');
+      expect(client.rewordCommit).not.toHaveBeenCalled();
+      expect(store.getState().actionError).toBe(S.shortcuts.rewordRemoteUnknown);
+    },
+  );
+
+  it('로컬 브랜치에만 포함된 미발행 커밋은 허용한다', async () => {
+    const { store, client } = setup();
+    client.commitContainingRefs = vi.fn(async () => ({
+      timedOut: false,
+      head: true,
+      branches: [{ name: 'refs/heads/main', shortName: 'main', remote: false, current: true }],
+    }));
+    expect(await store.getState().checkRewordAllowed(oid)).toBe(true);
   });
 });

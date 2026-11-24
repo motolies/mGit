@@ -194,7 +194,8 @@ export function TerminalView({
       if (id !== null) {
         io.resize(id, term.cols, term.rows).catch(() => {});
       }
-      term.focus();
+      // 탭 막대에서 방향키로 고를 때는 포커스를 막대에 유지한다.
+      if (!document.activeElement?.closest('[role="tablist"]')) term.focus();
     }, 0);
     return () => clearTimeout(t);
   }, [active, io]);

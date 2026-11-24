@@ -1,8 +1,11 @@
 import { isImeKey, matchShortcut } from '@mgit/ui';
 import type { Action } from './actions';
+import { TERMINAL_COMMANDS } from './command-keymap';
+import { captureCommandTarget, resolveCommand } from './command-registry';
+import { notifyHub } from './store/notify';
 
 /** 팔레트 단축키 (레지스트리 밖: 팔레트 자체를 연다) */
-export const PALETTE_SHORTCUT = 'mod+shift+p';
+export const PALETTE_SHORTCUT = 'mod+shift+a';
 
 /**
  * Esc 가 보는 활성 문서의 종류 (결정 8번): `diff`·`conflict` 는 세션 diff·충돌 문서(작업 트리·커밋·범위 파일 diff 탭, 충돌
@@ -71,6 +74,8 @@ export function handleGlobalKey(e: KeyboardEvent, ctx: GlobalKeyContext): void {
   const target = e.target as HTMLElement | null;
   // 입력란 안에서는 글자 단축키를 가로채지 않는다 (수정키 조합만)
   const typing = target?.closest?.('input, textarea, [contenteditable="true"], .cm-content');
+  const terminal = target?.closest?.('[data-terminal], .xterm');
+  if (terminal && !terminalPassKey(e, ctx.actions)) return;
   if (e.key === 'Escape' && !isBoundEscape(e, ctx.actions)) {
     if (ctx.searchOpen) {
       ctx.closeSearch();
@@ -87,23 +92,63 @@ export function handleGlobalKey(e: KeyboardEvent, ctx: GlobalKeyContext): void {
     }
     return;
   }
-  if (matchShortcut(e, PALETTE_SHORTCUT)) {
+  if (!ctx.actions.some((a) => a.id === 'app.palette') && matchShortcut(e, PALETTE_SHORTCUT)) {
     e.preventDefault();
+    captureCommandTarget();
     ctx.openPalette();
     return;
   }
-  for (const a of ctx.actions) {
-    if (a.shortcut && matchShortcut(e, a.shortcut)) {
-      // 입력란에서는 글자 단축키와 ⌘Z/⌘⇧Z(텍스트 undo) 를 가로채지 않는다. Esc 조합은 글자가 아니다
-      const text = !a.shortcut.includes('mod') && e.key !== 'Escape';
-      if (typing && (text || a.shortcut.endsWith('+z'))) {
-        return;
-      }
-      e.preventDefault();
-      if (a.enabled) {
-        a.run();
-      }
+  const action = matchingAction(e, ctx.actions);
+  if (!action) return;
+  // 복사·붙여넣기·선택·텍스트 undo와 커서 이동은 입력기의 몫이다.
+  const textKey = e.key.toLowerCase();
+  if (
+    typing &&
+    (e.metaKey || e.ctrlKey) &&
+    !e.altKey &&
+    ((!e.shiftKey && ['c', 'v', 'x', 'a', 'z', 'y'].includes(textKey)) ||
+      (e.shiftKey && ['v', 'z', 'y'].includes(textKey)))
+  )
+    return;
+  if (typing && action.input !== 'allow') {
+    if (
+      action.input === 'deny' ||
+      (!e.metaKey && !e.ctrlKey && !e.altKey && e.key !== 'Escape') ||
+      ['c', 'v', 'x', 'a', 'z', 'y'].includes(e.key.toLowerCase())
+    )
       return;
-    }
   }
+  e.preventDefault();
+  if (action.id === 'app.palette') captureCommandTarget();
+  const handler =
+    action.scope && action.scope !== 'global' ? resolveCommand(action.id, target) : undefined;
+  const enabled = handler ? handler.enabled() : action.enabled;
+  const reason = handler ? handler.reason?.() : action.disabledReason;
+  if (enabled) handler ? handler.run() : action.run();
+  else if (reason) notifyHub.notify({ kind: 'info', title: action.title, message: reason });
+}
+
+/** 사용자 키 → 구체 영역 → 전역 순으로 하나만 고른다. 비활성이어도 다음 후보로 넘어가지 않는다. */
+export function matchingAction(e: KeyboardEvent, actions: readonly Action[]): Action | undefined {
+  return actions
+    .filter(
+      (a) =>
+        a.shortcut &&
+        matchShortcut(e, a.shortcut) &&
+        (!a.scope ||
+          a.scope === 'global' ||
+          resolveCommand(a.id, e.target instanceof HTMLElement ? e.target : undefined)),
+    )
+    .sort(
+      (a, b) =>
+        Number(!!b.customized) - Number(!!a.customized) ||
+        Number(!!b.scope && b.scope !== 'global') - Number(!!a.scope && a.scope !== 'global'),
+    )[0];
+}
+
+/** xterm과 전역 키 처리기가 공유하는 전달 정책. 일반 셸 키는 기본적으로 남긴다. */
+export function terminalPassKey(e: KeyboardEvent, actions: readonly Action[]): boolean {
+  if (isImeKey(e) || isModalOpen()) return false;
+  const action = matchingAction(e, actions);
+  return !!action && TERMINAL_COMMANDS.has(action.id);
 }

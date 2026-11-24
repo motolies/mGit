@@ -570,3 +570,18 @@ describe('왼쪽 도구 창 (WS-04·05)', () => {
     expect(store.getState().leftTool).toBe('commit');
   });
 });
+
+describe('취소된 저장소 열기의 포커스', () => {
+  it('늦게 완료된 탭 열기는 활성 탭을 바꾸지 않는다', async () => {
+    const { client } = fakeClient();
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    const first = await app.getState().openRepositoryAt('/first');
+    let active = true;
+    const open = app.getState().openRepositoryAt('/late', null, { activate: () => active });
+    active = false;
+    const late = await open;
+    expect(late).not.toBeNull();
+    expect(app.getState().activeSessionId).toBe(first);
+    expect(late === null ? null : app.getState().sessions[late]?.path).toBe('/late');
+  });
+});

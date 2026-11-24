@@ -748,3 +748,138 @@ async fn worktree_wips_lists_dirty_worktrees() {
     assert_eq!(wips[0].summary.untracked, 1);
     assert_eq!(wips[0].head, repo.head());
 }
+
+/// 원격 tip 자체뿐 아니라 그 조상과 다른 원격의 브랜치에 포함된 메시지 수정도 백업 전에 거부한다.
+#[tokio::test]
+async fn reword_refuses_published_head_ancestor_and_other_remote_without_changes() {
+    for case in ["head", "ancestor", "other-remote"] {
+        let core = core().await;
+        let mut repo = build(Scenario::Linear(1));
+        let ancestor = repo.commit("published ancestor");
+        let head = repo.commit("published tip");
+        repo.add_bare_remote();
+        let target = match case {
+            "other-remote" => {
+                repo.add_bare_remote_named("review");
+                repo.git_ok(["push", "-q", "origin", "HEAD~2:refs/heads/main"]);
+                repo.git_ok(["push", "-q", "review", "HEAD:refs/heads/topic"]);
+                head
+            }
+            "ancestor" => {
+                repo.git_ok(["push", "-q", "origin", "HEAD:refs/heads/main"]);
+                ancestor
+            }
+            _ => {
+                repo.git_ok(["push", "-q", "origin", "HEAD:refs/heads/main"]);
+                head
+            }
+        };
+        let refs = repo.git_ok(["show-ref"]);
+        let history = repo.git_ok(["log", "--format=%H%x00%B"]);
+        let index = repo.git_ok(["status", "--porcelain=v1"]);
+        let (sink, mut rx) = collector();
+        let opened = core.open_repo(repo.path(), sink).await.unwrap();
+        wait_finished(&mut rx, opened.session).await;
+        let err = core
+            .reword_commit(opened.session, &target, "not allowed")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Invalid(_)), "{case}: {err:?}");
+        assert_eq!(repo.head(), head, "{case}: HEAD changed");
+        assert_eq!(
+            repo.git_ok(["show-ref"]),
+            refs,
+            "{case}: a ref or backup was created"
+        );
+        assert_eq!(
+            repo.git_ok(["log", "--format=%H%x00%B"]),
+            history,
+            "{case}: history changed"
+        );
+        assert_eq!(repo.git_ok(["status", "--porcelain=v1"]), index);
+        assert!(core.backup_refs(opened.session).await.unwrap().is_empty());
+        assert!(core.repo_state(opened.session).unwrap().op.is_none());
+        core.close_repo(opened.session).unwrap();
+    }
+}
+
+/// 로컬 branch·tag가 가리켜도 원격 브랜치에서 닿지 않는 HEAD·과거 커밋은 기존대로 수정한다.
+#[tokio::test]
+async fn reword_allows_local_only_commits_with_local_branch_and_tag() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.add_bare_remote();
+    repo.git_ok(["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    let ancestor = repo.commit("local ancestor");
+    repo.branch("local-copy");
+    repo.tag("local-tag", true);
+    let head = repo.commit("local head");
+    let remote = repo.git_ok(["rev-parse", "refs/remotes/origin/main"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    core.reword_commit(opened.session, &head, "new local head")
+        .await
+        .unwrap();
+    core.reword_commit(opened.session, &ancestor, "new local ancestor")
+        .await
+        .unwrap();
+    assert_eq!(
+        subjects(&mut repo),
+        ["new local head", "new local ancestor", "commit 1"]
+    );
+    assert_eq!(
+        repo.git_ok(["rev-parse", "refs/remotes/origin/main"]),
+        remote
+    );
+    core.close_repo(opened.session).unwrap();
+}
+
+/// 포함 브랜치 조회가 실패하면 허용으로 간주하지 않고 amend·rebase·백업을 전부 막는다.
+#[cfg(unix)]
+#[tokio::test]
+async fn reword_fails_closed_when_remote_reachability_query_fails() {
+    use mgit_core::{Core, CoreConfig};
+    use mgit_git::{LocateConfig, RunnerConfig, TokioGitRunner};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let real = TokioGitRunner::new(RunnerConfig::default())
+        .await
+        .unwrap()
+        .git_path()
+        .clone();
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("git");
+    let real = real.to_string_lossy().replace('\'', "'\\''");
+    std::fs::write(&script, format!("#!/bin/sh\nfor a in \"$@\"; do\ncase \"$a\" in --contains=*) echo 'cannot inspect reachability' >&2; exit 128;; esac\ndone\nexec '{real}' \"$@\"\n")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let runner = TokioGitRunner::new(RunnerConfig {
+        locate: LocateConfig {
+            configured_path: Some(script),
+        },
+        ..RunnerConfig::default()
+    })
+    .await
+    .unwrap();
+    let core = Core::new(Arc::new(runner), CoreConfig::default());
+    let mut repo = build(Scenario::Linear(3));
+    let head = repo.head();
+    let ancestor =
+        mgit_core::Oid::from_hex(repo.git_ok(["rev-parse", "HEAD~1"]).trim().as_bytes()).unwrap();
+    let refs = repo.git_ok(["show-ref"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    for target in [head, ancestor] {
+        assert!(
+            core.reword_commit(opened.session, &target, "new message")
+                .await
+                .is_err()
+        );
+        assert_eq!(repo.head(), head);
+        assert_eq!(repo.git_ok(["show-ref"]), refs);
+        assert!(core.backup_refs(opened.session).await.unwrap().is_empty());
+    }
+    core.close_repo(opened.session).unwrap();
+}

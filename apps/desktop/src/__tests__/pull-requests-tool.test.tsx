@@ -621,13 +621,13 @@ describe('왼쪽 띠와 도구 창 자리 (WS-17, WS-05)', () => {
 
   it('⌘1·⌘0 은 Pull Requests 를 보던 중에도 그대로다 (Project·Commit 을 열고 포커스)', async () => {
     await mountRepo();
-    press('1', MOD);
+    press('1', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(leftTool()).toBe('project');
     expect(document.activeElement?.closest('[data-panel="project"]')).not.toBeNull();
     act(() => useAppStore.getState().setLeftTool('pullRequests'));
     await tick();
-    press('0', MOD);
+    press('0', /Mac/.test(navigator.platform ?? '') ? { metaKey: true } : { altKey: true });
     await tick();
     expect(leftTool()).toBe('commit');
     expect(document.activeElement?.closest('[data-panel="commit"]')).not.toBeNull();

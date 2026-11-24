@@ -1,5 +1,6 @@
 export { Button, type ButtonProps } from './Button';
 export { ConfirmDialog, type ConfirmDialogProps } from './ConfirmDialog';
+export { captureFocusReturn } from './focus-return';
 export {
   type CommitDateWords,
   formatBytes,
@@ -20,6 +21,7 @@ export {
   isPrimaryModifier,
   type KeyLike,
   matchShortcut,
+  normalizeShortcut,
   primaryModifierLabel,
   shortcutFromEvent,
 } from './keys';

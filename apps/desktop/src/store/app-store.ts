@@ -381,6 +381,7 @@ export interface AppStore {
   paletteOpen: boolean;
   /** 설정 대화상자 (`⌘,`: 화면 언어·외부 앱) */
   settingsOpen: boolean;
+  settingsPage: 'general' | 'shortcuts';
   /** 앱 내 토스트 (UX-09) */
   toasts: Toast[];
   /** 단축키 재지정 (UX-04): 동작 id → 단축키 (null 이면 해제) */
@@ -425,10 +426,12 @@ export interface AppStore {
   /** 외부 앱으로 연다. 성공 여부를 돌려주고, 같은 대상을 여는 중이면 다시 부르지 않고 false */
   openExternal(kind: ExternalKind, path: string): Promise<boolean>;
   externalAppsGet(): Promise<ExternalApps>;
+  /** 저장 실패는 lastError에 기록하고 호출자에게 거부로 전달한다. */
   externalAppsSet(apps: ExternalApps): Promise<void>;
   /** 자동 fetch 간격 (분, 0 = 끔). 읽지 못하면 기본값 5 */
   autoFetchGet(): Promise<number>;
   /** 자동 fetch 간격을 저장하고 곧바로 적용한다 (저장소 탭·폴더 탭 공용). 실패하면 사유를 `lastError` 에 둔다 */
+  /** 저장 실패는 lastError에 기록하고 호출자에게 거부로 전달한다. */
   autoFetchSet(minutes: number): Promise<void>;
 
   /** 시작 시 git 버전을 읽고 테마를 적용하고, 탭을 복원하고, 시작 인자·앱 이벤트를 처리한다 */
@@ -437,7 +440,11 @@ export interface AppStore {
   openRepository(): Promise<void>;
   /** 주어진 경로를 연다: 저장소면 저장소 탭, 멀티 저장소 폴더면 폴더 탭 (REPO-01) */
   /** 저장소를 탭으로 연다. 열린(또는 이미 열려 있던) 세션 id 를 돌려주고 실패하면 null */
-  openRepositoryAt(path: string, parent?: SessionId | null): Promise<SessionId | null>;
+  openRepositoryAt(
+    path: string,
+    parent?: SessionId | null,
+    options?: { activate: () => boolean },
+  ): Promise<SessionId | null>;
   /** 멀티 저장소 폴더를 연다 (MR-01) */
   openFolderAt(path: string): Promise<void>;
   /**
@@ -828,11 +835,11 @@ export function createAppStore(deps: AppStoreDeps) {
     };
 
     /** 탭을 등록하고 활성화한다 */
-    const addTab = (meta: SessionMeta) => {
+    const addTab = (meta: SessionMeta, activate = true) => {
       set({
         sessions: { ...get().sessions, [meta.id]: meta },
         sessionOrder: [...get().sessionOrder.filter((s) => s !== meta.id), meta.id],
-        activeSessionId: meta.id,
+        activeSessionId: activate ? meta.id : get().activeSessionId,
       });
       persistTabs();
     };
@@ -1276,6 +1283,7 @@ export function createAppStore(deps: AppStoreDeps) {
       conflictLeave: null,
       paletteOpen: false,
       settingsOpen: false,
+      settingsPage: 'general',
       toasts: [],
       shortcutOverrides: readPref<Record<string, string | null>>(PREF_SHORTCUTS, {}),
       shortcutsOpen: false,
@@ -1312,7 +1320,7 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       setSettingsOpen(open) {
-        set({ settingsOpen: open });
+        set({ settingsOpen: open, shortcutsOpen: false, settingsPage: 'general' });
       },
 
       notice(notice) {
@@ -1341,7 +1349,7 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       setShortcutsOpen(open) {
-        set({ shortcutsOpen: open });
+        set({ shortcutsOpen: open, settingsOpen: open, settingsPage: 'shortcuts' });
       },
 
       setAppDialog(dialog) {
@@ -1502,10 +1510,12 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       async externalAppsSet(apps) {
+        set({ lastError: null });
         try {
           await deps.client.externalAppsSet(apps);
         } catch (e) {
           set({ lastError: describeError(e) });
+          throw e;
         }
       },
 
@@ -1518,10 +1528,12 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       async autoFetchSet(minutes) {
+        set({ lastError: null });
         try {
           await deps.client.autoFetchSet(minutes);
         } catch (e) {
           set({ lastError: describeError(e) });
+          throw e;
         }
       },
 
@@ -1580,14 +1592,16 @@ export function createAppStore(deps: AppStoreDeps) {
         await get().openRepositoryAt(path);
       },
 
-      async openRepositoryAt(path, parent = null) {
+      async openRepositoryAt(path, parent = null, options) {
         set({ isOpening: true, lastError: null });
         const { onEvent, flush } = bufferedEvents();
         try {
           const opened = await deps.client.openRepo(path, onEvent);
           const id = opened.session;
           if (opened.alreadyOpen && get().sessions[id]) {
-            set({ activeSessionId: id });
+            if (options?.activate() !== false) {
+              set({ activeSessionId: id });
+            }
             return id;
           }
           const hidden = getSessionStore(id);
@@ -1606,13 +1620,16 @@ export function createAppStore(deps: AppStoreDeps) {
           }
           const wsStore = createRepoWorkspace(id, get);
           registerWorkspace(id, wsStore);
-          addTab({
-            id,
-            kind: 'repo',
-            path: opened.info.workTree,
-            name: repoNameOf(opened.info.workTree),
-            parent,
-          });
+          addTab(
+            {
+              id,
+              kind: 'repo',
+              path: opened.info.workTree,
+              name: repoNameOf(opened.info.workTree),
+              parent,
+            },
+            options?.activate() !== false,
+          );
           // 탭을 더하면 세션 문서가 파생된다. 승격한 세션에 폴더에서 연 문서가 있으면 그것을 보인다 — 옛 화면은 그 세션의
           // 마지막 열기(diff·충돌)를 보였다. 충돌을 열면 diff 슬롯이 비므로 둘 다 있으면 diff 가 나중에 연 것이다
           const opening = wsStore.getState().sessionDocs[0];
@@ -1626,7 +1643,9 @@ export function createAppStore(deps: AppStoreDeps) {
           const err = toIpcError(e);
           if (err.kind === 'multiRepoFolder') {
             set({ isOpening: false });
-            await get().openFolderAt(err.path);
+            if (options?.activate() !== false) {
+              await get().openFolderAt(err.path);
+            }
             return null;
           }
           set({ lastError: describeError(e) });

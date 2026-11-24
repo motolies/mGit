@@ -423,9 +423,16 @@ describe('로그 탭의 행 선택: 저장소 경로 식별자 (W7)', () => {
       // 우클릭 메뉴: 해시 복사, 제목 복사, 저장소 탭으로 열기, 이 저장소만 보기 (W17, LG-09)
       fireEvent.contextMenu(screen.getByText('web 의 커밋'));
       await tick();
-      expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
+      expect(
+        screen.getAllByRole('menuitem').map((m) => {
+          const label = m.cloneNode(true) as HTMLElement;
+          label.querySelector('kbd')?.remove();
+          return label.textContent;
+        }),
+      ).toEqual([
         S.menu.copyHash,
         S.menu.copySubject,
+        S.menu.reword,
         S.folder.timeline.openInRepo,
         S.folder.timeline.onlyThisRepo,
       ]);

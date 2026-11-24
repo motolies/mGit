@@ -8,14 +8,16 @@ import {
   type ActionSession,
   buildActions,
   openTagsDoc,
+  showCommitChanges,
   type TagsDocRequestInput,
 } from './actions';
+import { captureCommandTarget } from './command-registry';
 import { ActionErrorBar } from './components/ActionErrorBar';
+import { CommandContext } from './components/command-context';
 import { Toasts } from './components/Toasts';
 import { useDialogs } from './components/use-dialogs';
 import { CloseSessionDialog, CredentialDialog, SettingsDialog } from './features/app/AppDialogs';
 import { RepoSettingsDialog } from './features/app/RepoSettingsDialog';
-import { ShortcutsDialog } from './features/app/ShortcutsDialog';
 import { BranchQuickSwitch } from './features/branch/BranchQuickSwitch';
 import { HintDialogs } from './features/branch/HintDialogs';
 import {
@@ -207,6 +209,17 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
         session: isRepoTab ? session : null,
         tabKind,
         openQuickSwitch,
+        openPalette: () => {
+          captureCommandTarget();
+          useAppStore.getState().setPaletteOpen(true);
+        },
+        prepareCommit: () => {
+          showCommitChanges(useAppStore.getState());
+          setTimeout(
+            () => document.querySelector<HTMLElement>('[data-commit-message]')?.focus(),
+            0,
+          );
+        },
         startClone,
         startInit,
         promptBranch,
@@ -362,14 +375,16 @@ function CenterPane({ actions }: { actions: readonly Action[] }) {
  */
 export function AppBody({ actions }: { actions: readonly Action[] }) {
   return (
-    <div className={styles.body}>
-      <StripePane />
-      <div className={styles.main}>
-        <BottomDock>
-          <CenterPane actions={actions} />
-        </BottomDock>
+    <CommandContext.Provider value={actions}>
+      <div className={styles.body}>
+        <StripePane />
+        <div className={styles.main}>
+          <BottomDock>
+            <CenterPane actions={actions} />
+          </BottomDock>
+        </div>
       </div>
-    </div>
+    </CommandContext.Provider>
   );
 }
 
@@ -411,7 +426,6 @@ export function App() {
       {isRepoTab ? <ConflictRulesDialog /> : null}
       {isRepoTab ? <ReviewDialog /> : null}
       {isRepoTab ? <RepoSettingsDialog /> : null}
-      <ShortcutsDialog actions={actions} />
       <AccountsDialog />
       <ProfilesDialog />
       <SshKeysDialog />
@@ -425,7 +439,7 @@ export function App() {
       <CloseSessionDialog />
       <FolderCloseDialog />
       <ConflictLeaveDialog />
-      <SettingsDialog />
+      <SettingsDialog actions={actions} />
       {dialogElement}
     </div>
   );

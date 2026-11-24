@@ -32,6 +32,7 @@ import {
   type CommitRow,
   commitTreeRows,
   expandableRowIds,
+  fileTarget,
   opensStaged,
   repoRowId,
   rowToggle,
@@ -124,13 +125,15 @@ export function FolderCommitTool() {
   const repoName = (path: string) => repos.find((r) => r.path === path)?.name ?? path;
 
   /** 줄의 체크를 누른다: stage·unstage 를 부르고 결과(실패·건너뛴 충돌)를 알린다 */
-  const toggleCheck = async (row: CommitRow) => {
+  const toggleCheck = async (row: CommitRow, requestedOp?: 'stage' | 'unstage') => {
     const toggle = rowToggle(row);
     if (toggle === null || locked || busyRepos.has(toggle.repoPath)) {
       return;
     }
     setClicked((prev) => ({ ...prev, [toggle.repoPath]: row.id }));
-    const outcome = await f.writeIndex(toggle.repoPath, toggle.op, toggle.target);
+    const op = requestedOp ?? toggle.op;
+    const target = row.kind === 'file' ? fileTarget(row.entry, op) : toggle.target;
+    const outcome = await f.writeIndex(toggle.repoPath, op, target);
     setClicked(({ [toggle.repoPath]: _done, ...rest }) => rest);
     const name = repoName(toggle.repoPath);
     if (outcome.kind === 'failed') {
@@ -219,7 +222,11 @@ export function FolderCommitTool() {
             ]
           : [];
       return joinGroups([
-        [{ label: S.project.menu.open, onSelect: () => open(row) }, openTab, ...unresolve],
+        [
+          { label: S.menu.showDiff, commandId: 'file.showDiff', onSelect: () => open(row) },
+          openTab,
+          ...unresolve,
+        ],
         ...fileGroups(row),
       ]);
     }
@@ -305,6 +312,14 @@ export function FolderCommitTool() {
               onToggleCheck={(row) => void toggleCheck(row)}
               onToggleExpand={toggleExpand}
               onOpen={open}
+              onIndex={(row, op) => void toggleCheck(row, op)}
+              onDiscard={(row) =>
+                fileActions.actions.rollback(
+                  rollbackGroups([{ repoPath: row.repoPath, path: row.entry.path }], () => [
+                    row.entry,
+                  ]),
+                )
+              }
               menu={menu}
               initialScrollTop={ws.scrollTop()}
               onScrollTopChange={ws.rememberScroll}

@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react';
 import { focusPanel } from '../../actions';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { GitLogSplit, isLogEnter, useGitLogSide } from '../../layout/GitLogSplit';
 import { getFolderStore, getSessionStore, repoNameOf, useAppStore, useFolder } from '../../store';
@@ -20,6 +21,7 @@ import {
   type TimelineSelection,
   timelineRepoPath,
 } from '../../store/folder-store';
+import { requestRepoReword } from '../../store/reword-request';
 import { BranchToolbar } from '../branches/BranchToolbar';
 import { BranchTree } from '../branches/BranchTree';
 import { isFavorite, useBranchFavorites } from '../branches/branch-favorites';
@@ -172,6 +174,7 @@ export function FolderTimeline() {
     timelineAnchor: st.timelineAnchor,
   }));
   const openRepositoryAt = useAppStore((s) => s.openRepositoryAt);
+  const logRef = useRef<HTMLDivElement>(null);
   const [expansion, setExpansion] = useState<BranchTreeExpansion>({});
   const [favorites, setFavorites] = useBranchFavorites(f?.path ?? null);
   // 브랜치 목록 칸의 펼침 (사용자의 선택 + 좁은 폭 자동 접힘, WS-06)
@@ -218,6 +221,29 @@ export function FolderTimeline() {
     (row: GraphRow) => sameTimelineRow(selectedRow, row, info),
     [selectedRow, info],
   );
+
+  useEffect(() => {
+    const element = logRef.current;
+    if (!element) return;
+    const unregister = [
+      registerCommand('log.reword', element, {
+        enabled: () => selectedRow !== null && folderId !== null,
+        run: () => {
+          if (selectedRow && folderId !== null)
+            void requestRepoReword(folderId, selectedRow.repoPath, selectedRow.oid);
+        },
+      }),
+      registerCommand('log.copyHash', element, {
+        enabled: () => selectedRow !== null,
+        run: () => {
+          if (selectedRow) void navigator.clipboard.writeText(selectedRow.oid).catch(() => {});
+        },
+      }),
+    ];
+    return () => {
+      for (const remove of unregister) remove();
+    };
+  }, [selectedRow, folderId]);
 
   /** 그 저장소를 하위 탭으로 열고 커밋으로 이동한다 (행 우클릭 "저장소 탭으로 열기", LG-09) */
   const openInRepo = useCallback(
@@ -427,10 +453,18 @@ export function FolderTimeline() {
       // 이름 변경: 로컬 branch 만 (원격 branch 는 이름을 바꾸지 않는다)
       const rename: MenuItem[] = branch.remote
         ? []
-        : [{ label: S.menu.rename, disabled: running, onSelect: () => void renameBranch(branch) }];
+        : [
+            {
+              label: S.menu.rename,
+              commandId: 'branch.rename',
+              disabled: running,
+              onSelect: () => void renameBranch(branch),
+            },
+          ];
       return [
         {
           label: S.branches.menu.checkout,
+          commandId: 'branch.checkout',
           disabled: node.current === true || running,
           onSelect: () => checkout(node),
         },
@@ -545,6 +579,7 @@ export function FolderTimeline() {
         // 폴더가 바뀌면 검색어와 커서를 새로 시작한다
         <BranchTree
           key={f.id}
+          multiselectable
           nodes={nodes}
           selectedIds={selectedIds}
           expansion={expansion}
@@ -558,7 +593,7 @@ export function FolderTimeline() {
         />
       }
       log={
-        <>
+        <div ref={logRef} style={{ display: 'contents' }}>
           {/* 필터 바 (LG-06·08, W17): branch 드롭다운은 브랜치 트리와 같은 상태(질의의 ref 범위)다 */}
           <FolderLogFilter branchNodes={nodes} branchRepos={branchRepos} />
           {/* 다시 읽기 실패: 이전 결과가 있으면 그 위에 알리고 다시 시도를 준다 */}
@@ -661,11 +696,20 @@ export function FolderTimeline() {
                 return [
                   {
                     label: S.menu.copyHash,
+                    commandId: 'log.copyHash',
                     onSelect: () => void navigator.clipboard.writeText(row.oid).catch(() => {}),
                   },
                   {
                     label: S.menu.copySubject,
                     onSelect: () => void navigator.clipboard.writeText(row.subject).catch(() => {}),
+                  },
+                  {
+                    label: S.menu.reword,
+                    commandId: 'log.reword',
+                    disabled: repoPath === null,
+                    onSelect: () => {
+                      if (repoPath !== null) void requestRepoReword(f.id, repoPath, row.oid);
+                    },
                   },
                   {
                     label: t.openInRepo,
@@ -714,7 +758,7 @@ export function FolderTimeline() {
               />
             </ContextMenuArea>
           )}
-        </>
+        </div>
       }
     >
       {flows.dialogs.element}

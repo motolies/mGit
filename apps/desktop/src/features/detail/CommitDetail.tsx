@@ -1,6 +1,7 @@
 import type { CommitDetail as CommitDetailData } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { registerCommand } from '../../command-registry';
 import { ContextMenuArea } from '../../components/ContextMenu';
 import { useRovingToolbar } from '../../components/roving';
 import { useSession } from '../../store';
@@ -22,6 +23,17 @@ function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
     openPath: st.selectedFile?.commit === st.selectedCommit ? st.selectedFile?.path : null,
   }));
   const roving = useRovingToolbar<HTMLUListElement>('vertical', { wrap: false });
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!roving.ref.current) return;
+    const file = d.files.find((file) => file.path === focusedPath);
+    return registerCommand('file.showDiff', roving.ref.current, {
+      enabled: () => file !== undefined,
+      run: () => {
+        if (file) void s.openCommitFile(d.oid, file.path, file.oldPath ?? null);
+      },
+    });
+  }, [d, focusedPath, s.openCommitFile, roving.ref]);
   return (
     <>
       <div className={styles.filesHeader}>{S.detail.files(d.files.length)}</div>
@@ -39,6 +51,7 @@ function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
             return [
               {
                 label: S.menu.showDiff,
+                commandId: 'file.showDiff',
                 onSelect: () => void s.openCommitFile(d.oid, path, file?.oldPath ?? null),
               },
               {
@@ -60,7 +73,13 @@ function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
             ref={roving.ref}
             className={styles.files}
             onKeyDown={roving.onKeyDown}
-            onFocus={roving.onFocus}
+            data-command-scope="files"
+            onFocus={(e) => {
+              roving.onFocus(e);
+              setFocusedPath(
+                (e.target as HTMLElement).closest('[data-path]')?.getAttribute('data-path') ?? null,
+              );
+            }}
           >
             {d.files.map((f) => (
               <li

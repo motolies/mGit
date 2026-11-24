@@ -75,7 +75,12 @@ async function mountFolder() {
 async function press(key: string, mods: { shift?: boolean } = {}) {
   const target = document.activeElement ?? document.body;
   act(() => {
-    fireEvent.keyDown(target, { key, ctrlKey: true, shiftKey: mods.shift ?? false });
+    fireEvent.keyDown(target, {
+      key,
+      ctrlKey: !['0', '1', '9'].includes(key),
+      altKey: ['0', '1', '9'].includes(key),
+      shiftKey: mods.shift ?? false,
+    });
   });
   await tick();
 }
@@ -96,6 +101,7 @@ afterEach(() => {
   removeDialogStub();
   act(() =>
     useAppStore.setState({
+      shortcutOverrides: {},
       sessions: {},
       sessionOrder: [],
       activeSessionId: null,
@@ -163,7 +169,7 @@ describe('폴더 화면의 이름과 Tab 정지 (W19 ③)', () => {
       tabStops().filter((el) => el.closest(selector) !== null).length;
     expect(stopsIn('[role="tree"]')).toBe(2); // 프로젝트 트리 + 브랜치 트리 (각각 트리 자신)
     expect(stopsIn('tbody')).toBe(1); // 개요 표의 줄
-    expect(stopsIn('[role="tablist"]')).toBe(2); // 에디터 탭 막대 + Git 도구 창 탭
+    expect(stopsIn('[role="tablist"]')).toBe(3); // 에디터 탭 막대 + Git 도구 창 탭
     expect(stopsIn(`[role="toolbar"][aria-label="${S.workspace.stripe}"]`)).toBe(1);
     expect(stopsIn(`[role="toolbar"][aria-label="${S.branches.toolbar.label}"]`)).toBe(1);
   });

@@ -1,5 +1,6 @@
 import { Button, isImeKey, S } from '@mgit/ui';
 import { useEffect, useRef, useState } from 'react';
+import { useCommandTitle } from '../../components/use-command-shortcut';
 import { useSession } from '../../store';
 import styles from './GraphSearch.module.css';
 
@@ -11,6 +12,8 @@ function orNull(text: string): string | null {
 
 /** 그래프 검색 바 (GRAPH-06 + GRAPH-07 고급): 입력 → 코어 검색 → n/N 이동 */
 export function GraphSearch() {
+  const previousTitle = useCommandTitle('log.searchPrevious', S.search.prev);
+  const nextTitle = useCommandTitle('log.searchNext', S.search.next);
   const s = useSession((st) => ({
     search: st.search,
     runSearch: st.runSearch,
@@ -115,10 +118,14 @@ export function GraphSearch() {
           {S.search.count(s.search.cursor, s.search.total)}
           {s.search.truncated ? ` ${S.search.truncated}` : ''}
         </span>
-        <Button onClick={() => s.step(-1)} disabled={s.search.rows.length === 0}>
+        <Button
+          title={previousTitle}
+          onClick={() => s.step(-1)}
+          disabled={s.search.rows.length === 0}
+        >
           {S.search.prev}
         </Button>
-        <Button onClick={() => s.step(1)} disabled={s.search.rows.length === 0}>
+        <Button title={nextTitle} onClick={() => s.step(1)} disabled={s.search.rows.length === 0}>
           {S.search.next}
         </Button>
         <Button

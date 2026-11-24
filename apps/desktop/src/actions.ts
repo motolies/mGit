@@ -1,4 +1,6 @@
 import { S } from '@mgit/ui';
+import { COMMAND_SCOPES, type CommandScope, defaultShortcut } from './command-keymap';
+import { commandTarget, executeCommand, resolveCommand } from './command-registry';
 import { type AppStore, effectiveDock, type LeftTool, type TabKind } from './store/app-store';
 import type { SessionState } from './store/session-store';
 import { type TagsDocRequest, tagsDoc, type WorkspaceState } from './store/workspace-store';
@@ -10,6 +12,12 @@ export interface Action {
   group: keyof typeof S.palette.groups;
   /** `mod+shift+p` 꼴. 없으면 팔레트에서만 */
   shortcut?: string;
+  defaultShortcut?: string;
+  scope?: CommandScope;
+  input?: 'allow' | 'deny';
+  customized?: boolean;
+  disabledReason?: string;
+  origin?: 'intellij' | 'mgit';
   enabled: boolean;
   run: () => void;
 }
@@ -75,6 +83,8 @@ export interface ActionContext {
   tabKind: TabKind | null;
   /** 빠른 branch 전환 열기 (App 의 로컬 상태) */
   openQuickSwitch: () => void;
+  openPalette?: () => void;
+  prepareCommit?: () => void;
   /** 홈 화면의 clone/init 흐름 */
   startClone: () => void;
   startInit: () => void;
@@ -155,7 +165,7 @@ export function focusIsIn(name: PanelName): boolean {
   if (typeof document === 'undefined') {
     return false;
   }
-  return document.activeElement?.closest?.(`[data-panel="${name}"]`) != null;
+  return commandTarget()?.closest?.(`[data-panel="${name}"]`) != null;
 }
 
 /** 아래 도구 창 슬롯 표시 (`BottomDock` 의 도구 창 자리) */
@@ -265,18 +275,45 @@ export function focusLogFilter(part: LogFilterPart): void {
 /** 사용자 재지정(UX-04)을 적용한다: null 은 해제 */
 function applyOverrides(list: Action[], overrides: Record<string, string | null>): Action[] {
   return list.map((a) => {
-    const o = overrides[a.id];
-    if (o === undefined) {
-      return a;
-    }
-    const { shortcut: _drop, ...rest } = a;
-    return o === null ? rest : { ...rest, shortcut: o };
+    const base = defaultShortcut(a.id, a.shortcut);
+    const override = overrides[a.id];
+    const shortcut = override === undefined ? base : (override ?? undefined);
+    return {
+      ...a,
+      shortcut,
+      defaultShortcut: base,
+      scope: a.scope ?? 'global',
+      customized: override !== undefined,
+      origin: a.origin ?? (defaultShortcut(a.id, '__mgit__') !== '__mgit__' ? 'intellij' : 'mgit'),
+    };
   });
 }
 
 /** 동작 목록을 만든다. 순서가 팔레트 표시 순서 */
 export function buildActions(ctx: ActionContext): Action[] {
-  return applyOverrides(buildDefaultActions(ctx), ctx.app.shortcutOverrides ?? {});
+  const list = applyOverrides(
+    [...buildDefaultActions(ctx), ...contextActions()],
+    ctx.app.shortcutOverrides ?? {},
+  );
+  return list.map((a) => {
+    if (!COMMAND_SCOPES[a.id])
+      return { ...a, disabledReason: a.enabled ? undefined : S.shortcuts.notReady };
+    return {
+      ...a,
+      get enabled() {
+        return resolveCommand(a.id)?.enabled() ?? false;
+      },
+      get disabledReason() {
+        const handler = resolveCommand(a.id);
+        return handler
+          ? (handler.reason?.() ?? (handler.enabled() ? undefined : S.shortcuts.notReady))
+          : S.shortcuts.selectTarget;
+      },
+      run: () => {
+        executeCommand(a.id);
+      },
+    };
+  });
 }
 
 /** 기본 단축키가 달린 동작 목록 */
@@ -358,7 +395,10 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
         if (ctx.tabKind !== null && ctx.closeEditorDoc && focusIsIn('editor')) {
           // 닫힌 탭과 함께 포커스가 사라지므로 화면이 바뀐 뒤 에디터 공간(다음 활성 문서)에 다시 준다
           if (ctx.closeEditorDoc()) {
-            focusPanelSoon('editor');
+            setTimeout(() => {
+              if (document.activeElement === document.body || focusIsIn('editor'))
+                focusPanel('editor');
+            }, 0);
           }
           return;
         }
@@ -414,7 +454,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.actions.pull,
       group: 'sync',
       shortcut: 'mod+shift+l',
-      enabled: hasRepo && !!current?.upstream && !busy && !inOp,
+      enabled: hasRepo && !!current?.upstream && !current.upstreamGone && !busy && !inOp,
       run: () => void session?.pull(),
     },
     {
@@ -448,7 +488,20 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       group: 'view',
       shortcut: 'mod+shift+j',
       enabled: true,
-      run: () => app.toggleDock('terminal'),
+      run: () => {
+        if (commandTarget()?.closest('[data-terminal]')) {
+          app.hideDock();
+          focusPanelSoon('editor');
+          return;
+        }
+        if (app.dock.tool !== 'terminal') app.toggleDock('terminal');
+        setTimeout(() => {
+          const target =
+            document.querySelector<HTMLElement>('[data-terminal] .xterm-helper-textarea') ??
+            document.querySelector<HTMLElement>('[data-terminal] button');
+          target?.focus();
+        }, 0);
+      },
     },
     {
       // 폴더 탭 = 로그 필터 바의 첫 드롭다운, 저장소 탭 = 필터 바의 텍스트 칸 (5.7절, 동작 id 유지). 저장소 탭은 필터 바가
@@ -749,5 +802,52 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
         ctx.openTagsDoc?.({ kind: 'pushAll', remote: null });
       },
     },
+    {
+      id: 'app.palette',
+      title: S.actions.palette,
+      group: 'app',
+      enabled: true,
+      input: 'allow',
+      run: () => ctx.openPalette?.(),
+    },
+    {
+      id: 'commit.prepare',
+      title: S.actions.commitPrepare,
+      group: 'repo',
+      enabled: hasRepo || inFolder,
+      input: 'allow',
+      run: () => ctx.prepareCommit?.(),
+    },
   ];
+}
+
+/** 화면별 명령은 안정적 ID와 메타데이터를 갖고, 구현은 화면 수명에 맞춰 등록한다. */
+function contextActions(): Action[] {
+  const definitions: [string, string, Action['group']][] = [
+    ['log.reword', S.actions.reword, 'repo'],
+    ['log.copyHash', S.actions.copyHash, 'repo'],
+    ['log.searchNext', S.actions.searchNext, 'view'],
+    ['log.searchPrevious', S.actions.searchPrevious, 'view'],
+    ['file.showDiff', S.actions.showDiff, 'view'],
+    ['diff.nextHunk', S.actions.nextHunk, 'view'],
+    ['diff.previousHunk', S.actions.previousHunk, 'view'],
+    ['commit.execute', S.actions.commitExecute, 'repo'],
+    ['file.stage', S.actions.stage, 'repo'],
+    ['file.unstage', S.actions.unstage, 'repo'],
+    ['file.discard', S.actions.discard, 'repo'],
+    ['editor.pin', S.actions.pin, 'view'],
+    ['branch.rename', S.actions.renameBranch, 'branch'],
+    ['branch.checkout', S.actions.checkoutBranch, 'branch'],
+  ];
+  return definitions.map(([id, title, group]) => ({
+    id,
+    title,
+    group,
+    scope: COMMAND_SCOPES[id],
+    enabled: false,
+    run: () => {
+      executeCommand(id);
+    },
+    input: id === 'commit.execute' || id.startsWith('log.search') ? 'allow' : 'deny',
+  }));
 }

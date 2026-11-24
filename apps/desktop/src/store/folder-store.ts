@@ -1454,8 +1454,15 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           // 범위를 바꾸는 요청이 돌고 있지 않으면 코어의 범위로 맞춘다 (재스캔으로 범위가 풀린 경우 등)
           const scope = scopeOfInfo(info);
           const current = get().timeline.scope;
-          if (!timelineScopePending(info, current)) scopeAwaitingData = false;
-          const syncScope = scopeInflight === 0 && !scopeAwaitingData && !samePaths(scope, current);
+          const sameEffectiveScope = !timelineScopePending(info, current);
+          if (sameEffectiveScope) scopeAwaitingData = false;
+          // 전체 명시 선택과 빈 범위는 같은 결과다. 응답의 축약 표현으로 사용자가 고른 체크를 지우지 않는다.
+          // 재스캔으로 선택한 저장소가 사라졌거나 실제 범위가 달라졌을 때만 코어 범위로 맞춘다.
+          const knownPaths = new Set(info.repos.map((repo) => repo.path));
+          const syncScope =
+            scopeInflight === 0 &&
+            !scopeAwaitingData &&
+            (!sameEffectiveScope || current.some((path) => !knownPaths.has(path)));
           if (syncScope) confirmedScope = scope;
           patchTimeline({ info, ...(syncScope ? { scope } : {}) });
         } catch {

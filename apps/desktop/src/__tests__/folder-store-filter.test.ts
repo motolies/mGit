@@ -40,7 +40,7 @@ function info(scope: string[] = []): TimelineInfo {
       truncated: false,
       inScope: scope.length === 0 || scope.includes(path),
     })),
-    scoped: scope.length > 0,
+    scoped: scope.length > 0 && [API, WEB].some((path) => !scope.includes(path)),
   };
 }
 
@@ -217,12 +217,28 @@ describe('저장소 범위 (W17, folderTimelineScopeSet)', () => {
     await store.getState().setTimelineScope([API, WEB]);
     reloaded(store, 2);
     await tick();
-    expect(store.getState().timeline.info?.scoped).toBe(true);
+    expect(store.getState().timeline.info?.scoped).toBe(false);
     expect(store.getState().timeline.info?.repos.map((r) => r.inScope)).toEqual([true, true]);
+    expect(store.getState().timeline.scope).toEqual([API, WEB]);
+    await store.getState().setTimelineScope([API]);
+    await store.getState().refreshTimelineInfo();
     // 재스캔으로 범위가 풀린 경우: 코어의 정보가 전부를 말한다
     c.folderTimelineInfo.mockResolvedValue(info());
     reloaded(store, 3);
     await tick();
+    expect(store.getState().timeline.scope).toEqual([]);
+  });
+
+  it('전체 명시 선택 뒤 재스캔으로 사라진 저장소는 체크에서 제거한다', async () => {
+    const c = client();
+    const store = await opened(c);
+    await store.getState().setTimelineScope([API, WEB]);
+    await store.getState().refreshTimelineInfo();
+    c.folderTimelineInfo.mockResolvedValue({
+      ...info(),
+      repos: info().repos.filter((repo) => repo.path === API),
+    });
+    await store.getState().refreshTimelineInfo();
     expect(store.getState().timeline.scope).toEqual([]);
   });
 

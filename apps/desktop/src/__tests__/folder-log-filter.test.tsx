@@ -204,6 +204,58 @@ describe('브랜치 트리 ↔ branch 드롭다운 (같은 상태: 질의의 ref
 });
 
 describe('저장소 범위 (folderTimelineScopeSet)', () => {
+  it('전체 선택은 로드·정보 갱신 후에도 유지되어 하나만 해제하고 다시 열 수 있다', async () => {
+    const { store, spies } = await setup();
+    const paths = (store.getState().timeline.info?.repos ?? []).map((repo) => repo.path);
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    act(() =>
+      fireEvent.click(
+        within(popover() as HTMLElement).getByRole('button', { name: S.selection.all }),
+      ),
+    );
+    await tick();
+    await tick();
+    await act(() => store.getState().refreshTimelineInfo());
+    expect(store.getState().timeline.info?.scoped).toBe(false);
+    expect(store.getState().timeline.scope).toEqual(paths);
+    expect(
+      within(popover() as HTMLElement)
+        .getAllByRole('option')
+        .every((el) => el.getAttribute('aria-selected') === 'true'),
+    ).toBe(true);
+    closePopover();
+    act(() => fireEvent.click(dropButton(S.filterBar.repo)));
+    expect(option('web-console').getAttribute('aria-selected')).toBe('true');
+    act(() => fireEvent.click(option('web-console')));
+    await tick();
+    await tick();
+    expect(spies.scopeSet).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      paths.filter((path) => path !== WEB),
+    );
+    expect(store.getState().timeline.scope).toEqual(paths.filter((path) => path !== WEB));
+    expect(option('web-console').getAttribute('aria-selected')).toBe('false');
+    expect(option('api-gateway').getAttribute('aria-selected')).toBe('true');
+    expect(store.getState().timeline.info?.repos.find((repo) => repo.path === WEB)?.inScope).toBe(
+      false,
+    );
+    act(() =>
+      fireEvent.click(
+        within(popover() as HTMLElement).getByRole('button', { name: S.selection.none }),
+      ),
+    );
+    await tick();
+    await tick();
+    await act(() => store.getState().refreshTimelineInfo());
+    expect(store.getState().timeline.scope).toEqual([]);
+    expect(store.getState().timeline.info?.scoped).toBe(false);
+    expect(
+      within(popover() as HTMLElement)
+        .getAllByRole('option')
+        .every((el) => el.getAttribute('aria-selected') === 'false'),
+    ).toBe(true);
+  });
+
   it('드롭다운에서 둘만 체크 → 닫기 전에 범위 적용 → inScope 갱신, 행은 그 둘만이고 색은 그대로다', async () => {
     const { store, spies } = await setup();
     const colors = Object.fromEntries(

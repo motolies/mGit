@@ -22,6 +22,7 @@ import {
   shownDock,
 } from '../store/app-store';
 import { clearSessionRegistry, getSessionCache, getSessionStore } from '../store/session-registry';
+import { DEFAULT_GRAPH_QUERY } from '../store/session-store';
 
 /** 이벤트를 수동으로 흘려보낼 수 있는 가짜 클라이언트 */
 function fakeClient() {
@@ -127,6 +128,92 @@ describe('AppStore', () => {
     expect(session?.getState().loadState).toBe('complete');
     expect(session?.getState().totalRows).toBe(1234);
     expect(getSessionCache(1)?.isComplete()).toBe(true);
+  });
+
+  it('화면 재연결은 코어의 완료 상태와 기존 필터를 복원한다', async () => {
+    const { client } = fakeClient();
+    const opened = await client.openRepo('/tmp/repo', () => {});
+    const query = { ...DEFAULT_GRAPH_QUERY, revs: { kind: 'head' as const }, hideRemotes: true };
+    client.graphQuery = vi.fn(async () => query);
+    vi.mocked(client.openRepo).mockImplementationOnce(async (_path, onEvent) => {
+      onEvent({
+        type: 'graphLoadFinished',
+        session: opened.session,
+        generation: 3,
+        rows: 42,
+        laneCount: 2,
+        elapsedMs: 0,
+        commitGraphSuggested: false,
+      });
+      return { ...opened, alreadyOpen: true };
+    });
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    await app.getState().openRepositoryAt('/tmp/repo');
+    const st = getSessionStore(opened.session)?.getState();
+    expect(st?.loadState).toBe('complete');
+    expect(st?.totalRows).toBe(42);
+    expect(st?.graphQuery).toEqual(query);
+    expect(getSessionCache(opened.session)?.isComplete()).toBe(true);
+  });
+
+  it('이미 열린 탭을 재선택해도 새 채널의 버퍼와 이후 이벤트를 계속 반영한다', async () => {
+    const { client } = fakeClient();
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    await app.getState().openRepositoryAt('/tmp/repo');
+    const opened = await vi.mocked(client.openRepo).mock.results[0]?.value;
+    let send: ((event: SessionEvent) => void) | undefined;
+    vi.mocked(client.openRepo).mockImplementationOnce(async (_path, onEvent) => {
+      send = onEvent;
+      onEvent({
+        type: 'graphLoadFinished',
+        session: 1,
+        generation: 1,
+        rows: 2,
+        laneCount: 1,
+        elapsedMs: 0,
+        commitGraphSuggested: false,
+      });
+      return { ...opened, alreadyOpen: true };
+    });
+    const original = getSessionStore(1);
+    await app.getState().openRepositoryAt('/tmp/repo');
+    expect(getSessionStore(1)).toBe(original);
+    expect(original?.getState().loadState).toBe('complete');
+    expect(app.getState().sessionOrder).toEqual([1]);
+    send?.({ type: 'graphReloaded', session: 1, generation: 2, rows: 4, laneCount: 1 });
+    expect(original?.getState().totalRows).toBe(4);
+  });
+
+  it('재연결 이벤트의 순서가 섞여도 완료 상태와 새 세대가 과거로 돌아가지 않는다', async () => {
+    const { client, emit } = fakeClient();
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    await app.getState().openRepositoryAt('/tmp/repo');
+    const session = getSessionStore(1);
+    emit(1, {
+      type: 'graphLoadFinished',
+      session: 1,
+      generation: 1,
+      rows: 2,
+      laneCount: 1,
+      elapsedMs: 0,
+      commitGraphSuggested: false,
+    });
+    emit(1, { type: 'graphLoadStarted', session: 1, generation: 1 });
+    emit(1, { type: 'graphFirstChunk', session: 1, generation: 1, rows: 1 });
+    expect(session?.getState().loadState).toBe('complete');
+    expect(session?.getState().totalRows).toBe(2);
+    emit(1, {
+      type: 'graphLoadFinished',
+      session: 1,
+      generation: 2,
+      rows: 5,
+      laneCount: 1,
+      elapsedMs: 0,
+      commitGraphSuggested: false,
+    });
+    emit(1, { type: 'graphReloaded', session: 1, generation: 1, rows: 2, laneCount: 1 });
+    expect(session?.getState().generation).toBe(2);
+    expect(session?.getState().totalRows).toBe(5);
   });
 
   it('구세대 이벤트와 닫힌 세션의 이벤트는 무시한다', async () => {

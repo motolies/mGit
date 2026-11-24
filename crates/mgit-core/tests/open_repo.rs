@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{collector, core, wait_finished};
+use common::{collector, core, wait_finished, wait_for};
 use mgit_core::{CoreError, CoreEvent, GitError, HeadState, LoadState};
 use mgit_testkit::{Scenario, build};
 
@@ -96,6 +96,53 @@ async fn reopening_same_work_tree_returns_existing_session() {
     assert_eq!(a.session, b.session);
     assert!(b.already_open);
     assert_eq!(core.sessions(), vec![a.session]);
+}
+
+/// 완료된 저장소를 새 채널로 다시 열면 상태를 즉시 복구하고 이후 갱신도 새 채널에 보냅니다.
+#[tokio::test]
+async fn reopening_finished_repo_replays_state_and_moves_future_events() {
+    for (scenario, expected_rows) in [(Scenario::Linear(2), 2), (Scenario::Empty, 0)] {
+        let core = std::sync::Arc::new(core().await);
+        let repo = build(scenario);
+        let (sink, mut old_rx) = collector();
+        let first = core.open_repo(repo.path(), sink).await.unwrap();
+        wait_finished(&mut old_rx, first.session).await;
+        let (sink, mut rx) = collector();
+        let reader = core.clone();
+        let session = first.session;
+        // 재전송 콜백이 같은 세션을 조회해도 life·graph 잠금에 막히지 않아야 합니다.
+        let sink = std::sync::Arc::new(move |event: CoreEvent| {
+            assert_eq!(
+                reader.graph_window(session, 0, 1).unwrap().total_rows,
+                expected_rows
+            );
+            sink.emit(event);
+        });
+        let again = core.open_repo(repo.path(), sink).await.unwrap();
+        assert_eq!(again.session, first.session);
+        assert!(again.already_open && !again.promoted);
+        let events = wait_finished(&mut rx, first.session).await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, CoreEvent::GraphLoadStarted { .. }))
+        );
+        assert!(
+            matches!(events.last(), Some(CoreEvent::GraphLoadFinished { rows, .. }) if *rows == expected_rows)
+        );
+
+        core.reload_graph(first.session).unwrap();
+        wait_for(
+            &mut rx,
+            std::time::Duration::from_secs(5),
+            |e| matches!(e, CoreEvent::GraphReloaded { rows, .. } if *rows == expected_rows),
+        )
+        .await;
+        while let Ok(event) = old_rx.try_recv() {
+            assert!(!matches!(event, CoreEvent::GraphReloaded { .. }));
+        }
+        core.close_repo(first.session).unwrap();
+    }
 }
 
 #[tokio::test]

@@ -1038,6 +1038,8 @@ const EMPTY_SEARCH: SearchState = {
 
 /** 세션 스토어 생성 옵션 */
 export interface SessionStoreOptions {
+  /** 코어의 기존 전체 세션에 재연결할 때 복원할 그래프 필터 */
+  initialGraphQuery?: GraphQuery | undefined;
   /**
    * 프로필 (W13). `light` 면 그래프 API 를 부르지 않고 생성 때 읽기를 `STARTUP_LOADS` 의 `light` 항목만 돌린다.
    * 기본은 `full`(저장소 탭)
@@ -1628,7 +1630,7 @@ export function createSessionStore(
       stashes: [],
       stashView: null,
       diffOptions: readPref(PREF_DIFF_OPTIONS, DEFAULT_DIFF_OPTIONS),
-      graphQuery: DEFAULT_GRAPH_QUERY,
+      graphQuery: options.initialGraphQuery ?? DEFAULT_GRAPH_QUERY,
       filterError: null,
       graphAuthors: { state: 'idle', list: null, error: null },
       layoutPrefs: readPref(PREF_GRAPH_LAYOUT, DEFAULT_LAYOUT_PREFS),
@@ -1706,21 +1708,32 @@ export function createSessionStore(
         };
         switch (event.type) {
           case 'graphLoadStarted':
-            if (event.generation < s.generation) {
+            if (
+              event.generation < s.generation ||
+              (event.generation === s.generation &&
+                (s.loadState === 'complete' || s.loadState === 'error'))
+            ) {
               return;
             }
             set({ generation: event.generation, loadState: 'streaming' });
             return;
           case 'graphFirstChunk':
           case 'graphProgress':
-            if (event.generation < s.generation || s.loadState === 'complete') {
+            if (
+              event.generation < s.generation ||
+              s.loadState === 'complete' ||
+              (event.generation === s.generation && s.loadState === 'error')
+            ) {
               return;
             }
             cache.setTotalRows(event.rows, false);
             set({ generation: event.generation, totalRows: event.rows, loadState: 'streaming' });
             return;
           case 'graphLoadFinished':
-            if (event.generation < s.generation || s.loadState === 'complete') {
+            if (
+              event.generation < s.generation ||
+              (event.generation === s.generation && s.loadState === 'complete')
+            ) {
               return;
             }
             cache.setTotalRows(event.rows, true);
@@ -1740,6 +1753,7 @@ export function createSessionStore(
             set({ generation: event.generation, loadState: 'error', error: event.message });
             return;
           case 'graphReloaded':
+            if (event.generation < s.generation) return;
             cache.setTotalRows(event.rows, true);
             cache.invalidateAll();
             set({

@@ -1598,10 +1598,16 @@ export function createAppStore(deps: AppStoreDeps) {
         try {
           const opened = await deps.client.openRepo(path, onEvent);
           const id = opened.session;
+          // 화면만 재연결된 경우 코어에 남아 있는 필터를 새 스토어에도 복원한다.
+          const initialGraphQuery =
+            opened.alreadyOpen && !getSessionStore(id)
+              ? await deps.client.graphQuery(id)
+              : undefined;
           if (opened.alreadyOpen && get().sessions[id]) {
             if (options?.activate() !== false) {
               set({ activeSessionId: id });
             }
+            flush();
             return id;
           }
           const hidden = getSessionStore(id);
@@ -1615,7 +1621,10 @@ export function createAppStore(deps: AppStoreDeps) {
             const cache = new GraphRangeCache(tauriGraphSource(deps.client, id));
             registerSession(id, {
               cache,
-              store: createSessionStore(opened, deps.client, cache, sessionRevealHooks(get, id)),
+              store: createSessionStore(opened, deps.client, cache, {
+                ...sessionRevealHooks(get, id),
+                initialGraphQuery,
+              }),
             });
           }
           const wsStore = createRepoWorkspace(id, get);

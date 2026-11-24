@@ -1918,6 +1918,27 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
             continue;
           }
           if (entry.profile === 'full') {
+            // 실제 코어처럼 재연결한 화면으로 현재 상태와 이후 이벤트를 보낸다.
+            entry.emit = onEvent;
+            const snapshot = await entry.source.fetchWindow(0, 0);
+            onEvent(
+              snapshot.finished
+                ? {
+                    type: 'graphLoadFinished',
+                    session: open,
+                    generation: snapshot.generation,
+                    rows: snapshot.totalRows,
+                    laneCount: snapshot.laneCount,
+                    elapsedMs: 0,
+                    commitGraphSuggested: snapshot.totalRows >= 20_000,
+                  }
+                : {
+                    type: 'graphFirstChunk',
+                    session: open,
+                    generation: snapshot.generation,
+                    rows: snapshot.totalRows,
+                  },
+            );
             return openedOf(open, entry, true);
           }
           // 코어처럼 같은 id 를 전체 프로필로 올린다: 잡음이 사라지고, 이벤트는 이 호출의 채널로 가며,

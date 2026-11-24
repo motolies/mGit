@@ -542,10 +542,17 @@ async fn one_session_per_work_tree() {
     let (sink, mut rx) = collector();
     let tab = core.open_repo(&paths[1], sink).await.unwrap();
     wait_finished(&mut rx, tab.session).await;
-    let (borrowed, _rx3) = open_light(&core, fid, &paths[1]).await;
+    let (borrowed, mut rx3) = open_light(&core, fid, &paths[1]).await;
     assert_eq!(borrowed.session, tab.session);
     assert!(borrowed.already_open && !borrowed.promoted);
     assert_eq!(borrowed.profile, SessionProfile::Full);
+    // 폴더의 빌리기는 탭의 이벤트 채널을 가져가지 않습니다.
+    core.reload_graph(tab.session).unwrap();
+    wait_for(&mut rx, Duration::from_secs(5), |e| {
+        matches!(e, CoreEvent::GraphReloaded { .. })
+    })
+    .await;
+    assert!(!drain(&mut rx3).iter().any(is_graph_event));
     // 탭의 세션은 세지 않으므로 a 에 더해 둘을 더 열 수 있다
     open_light(&core, fid, &paths[2]).await;
     open_light(&core, fid, &paths[3]).await;

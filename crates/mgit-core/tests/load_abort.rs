@@ -81,11 +81,21 @@ async fn failed_reload_after_aborted_initial_load_ends_loading() {
         CoreConfig::default(),
     );
     let repo = build(Scenario::Linear(2));
-    let (sink, mut rx) = collector();
+    let (sink, _rx) = collector();
     let opened = core.open_repo(repo.path(), sink).await.unwrap();
     while !runner.started.load(Ordering::SeqCst) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+
+    // 로드 중 재연결도 현재 행 수를 알리고, 뒤의 실패 이벤트를 새 채널로 전달합니다.
+    let (sink, mut reconnected) = collector();
+    let again = core.open_repo(repo.path(), sink).await.unwrap();
+    assert_eq!(again.session, opened.session);
+    wait_for(&mut reconnected, Duration::from_secs(5), |e| {
+        matches!(e, CoreEvent::GraphFirstChunk { rows: 0, .. })
+    })
+    .await;
+    let mut rx = reconnected;
 
     runner.fail.store(true, Ordering::SeqCst);
     core.reload_graph(opened.session).unwrap();
@@ -102,6 +112,14 @@ async fn failed_reload_after_aborted_initial_load_ends_loading() {
             .any(|e| matches!(e, CoreEvent::GraphLoadFailed { .. })),
         "프런트가 streaming 에서 벗어나도록 초기 로드 실패도 알린다: {events:?}"
     );
+
+    // 실패한 상태를 다시 열면 무한 로딩 대신 원래 실패를 새 채널로 재전송합니다.
+    let (sink, mut reconnected) = collector();
+    core.open_repo(repo.path(), sink).await.unwrap();
+    wait_for(&mut reconnected, Duration::from_secs(5), |e| {
+        matches!(e, CoreEvent::GraphLoadFailed { message, .. } if message.contains("재로드 실패"))
+    }).await;
+    let mut rx = reconnected;
 
     // 실패 상태의 그래프를 재배치로 완료처럼 보이게 하지 않고 다시 읽기를 시도한다
     core.relayout_graph(opened.session).unwrap();

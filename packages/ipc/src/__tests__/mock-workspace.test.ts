@@ -1275,3 +1275,35 @@ describe('모듈·서브모듈·하위 저장소·상위 저장소 (W25 Project 
     expect((await sub.openRepo('/mock/checkout-service', ignore)).superproject).toBeNull();
   });
 });
+
+describe('전체 저장소 세션 재연결', () => {
+  it('기존 그래프 상태를 새 채널로 재전송하고 이후 재로드도 새 채널로 보낸다', async () => {
+    const { client, path } = await start('repo');
+    const oldEvents = vi.fn();
+    const opened = await client.openRepo(path, oldEvents);
+    oldEvents.mockClear();
+    const newEvents = vi.fn();
+    const again = await client.openRepo(path, newEvents);
+    expect(again.session).toBe(opened.session);
+    expect(again.alreadyOpen).toBe(true);
+    expect(newEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'graphLoadFinished',
+        session: opened.session,
+        rows: ROWS,
+      }),
+    );
+    await client.setGraphQuery(opened.session, {
+      ...(await client.graphQuery(opened.session)),
+      hideRemotes: true,
+    });
+    expect(newEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'graphReloaded',
+        session: opened.session,
+      }),
+    );
+    expect(oldEvents).not.toHaveBeenCalled();
+    await client.closeRepo(opened.session);
+  });
+});

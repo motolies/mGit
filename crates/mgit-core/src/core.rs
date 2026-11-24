@@ -406,7 +406,8 @@ impl Core {
     /// 저장소를 연다: 판별 → HEAD·ref·status 로드 → 세션 등록 → 감시 시작 → 그래프 로드 태스크 시작 → 즉시 반환.
     /// 같은 작업 트리가 이미 열려 있으면 그 세션을 `already_open = true` 로 돌려준다. 그 세션이 가벼운
     /// 세션이면 같은 id 로 전체 프로필로 올리고(`promoted`), 이벤트 대상을 이 `sink` 로 바꾸며, 그래프 로드와
-    /// 자동 fetch 를 시작한다. 이벤트는 이 함수가 반환하기 전에도 `sink` 로 올 수 있다.
+    /// 자동 fetch 를 시작한다. 전체 세션을 다시 열면 채널을 교체하고 그래프 상태를 재전송한다.
+    /// 이벤트는 이 함수가 반환하기 전에도 `sink` 로 올 수 있다.
     pub async fn open_repo(
         &self,
         path: &Path,
@@ -633,6 +634,7 @@ impl Core {
     /// 이미 있는 세션에 합류한다. 닫힌 세션이면 `None`(호출자가 다시 본다).
     /// - 탭으로 열 때 가벼운 세션이면 승격한다: `life` 를 쥔 채 이벤트 대상을 바꾸고, `Full` 로 바꾸고,
     ///   자동 fetch 와 초기 그래프 로드를 띄운다. 잡았던 폴더들의 잡음은 사라진다(폴더 상한 집계에서 빠짐).
+    /// - 탭으로 전체 세션을 다시 열면 이벤트 대상을 바꾸고 현재 그래프 상태를 재전송한다.
     /// - 폴더가 열 때 가벼운 세션이면 잡은 폴더에 더한다(상한 검사). 탭의 세션이면 그대로 빌려 준다(잡지
     ///   않고 상한에 세지 않는다 — 탭이 닫으면 폴더는 다음에 필요할 때 새로 연다).
     fn join_existing(
@@ -652,7 +654,11 @@ impl Core {
             let mut life = existing.life();
             match (&mut *life, how) {
                 (Life::Closed, _) => return Ok(None),
-                (Life::Full, _) => (SessionProfile::Full, false),
+                (Life::Full, OpenAs::Tab) => {
+                    existing.switch_sink(Arc::clone(sink));
+                    (SessionProfile::Full, false)
+                }
+                (Life::Full, OpenAs::Light { .. }) => (SessionProfile::Full, false),
                 (Life::Light { .. }, OpenAs::Tab) => {
                     existing.switch_sink(Arc::clone(sink));
                     *life = Life::Full;
@@ -674,6 +680,9 @@ impl Core {
                 }
             }
         };
+        if how == OpenAs::Tab && !promoted {
+            self.replay_graph_state(existing, sink);
+        }
         Ok(Some(OpenedRepo {
             session: existing.id,
             already_open: true,
@@ -684,6 +693,36 @@ impl Core {
             profile,
             promoted,
         }))
+    }
+
+    /// 재연결한 탭에 그래프 상태를 보낸다. 콜백 재진입을 허용하려고 상태를 복사한 뒤 잠금을 풀고 전송한다.
+    fn replay_graph_state(&self, session: &RepoSession, sink: &Arc<dyn EventSink>) {
+        let graph = session.graph();
+        let rows = graph.layout.len() as u32;
+        let event = match &graph.state {
+            // 완료 뒤 Started를 재전송하면 이미 열린 프런트의 상태가 streaming으로 되돌아갈 수 있다.
+            LoadState::Finished => CoreEvent::GraphLoadFinished {
+                session: session.id,
+                generation: graph.generation,
+                rows,
+                lane_count: graph.layout.lane_count(),
+                elapsed_ms: 0,
+                commit_graph_suggested: !session.info.commit_graph.present
+                    && rows >= self.inner.cfg.commit_graph_suggest_threshold,
+            },
+            LoadState::Loading => CoreEvent::GraphFirstChunk {
+                session: session.id,
+                generation: graph.generation,
+                rows,
+            },
+            LoadState::Failed(message) => CoreEvent::GraphLoadFailed {
+                session: session.id,
+                generation: graph.generation,
+                message: message.clone(),
+            },
+        };
+        drop(graph);
+        sink.emit(event);
     }
 
     /// 초기 그래프 로드를 띄운다 (새 탭·승격 공용). ref 가 하나도 없으면 git 을 부르지 않고 0행으로 끝낸다

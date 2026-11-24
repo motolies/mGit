@@ -34,7 +34,7 @@ pub(crate) enum Life {
     Closed,
 }
 
-/// 세션 이벤트를 보낼 곳. 승격하면 탭이 넘긴 새 채널로 바꾼다. `run_load`·`LineEventSink` 처럼 sink 를
+/// 세션 이벤트를 보낼 곳. 승격하거나 탭을 다시 열면 새 채널로 바꾼다. `run_load`·`LineEventSink` 처럼 sink 를
 /// 복제해 쥐고 있는 곳도 이 래퍼를 쥐므로 바꾼 뒤의 이벤트는 모두 새 채널로 간다
 struct SwitchSink(RwLock<Arc<dyn EventSink>>);
 

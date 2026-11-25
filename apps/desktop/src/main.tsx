@@ -1,6 +1,7 @@
 import '@mgit/ui/tokens.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { installFileEditorLifecycle } from './file-editor-lifecycle';
 import { Root } from './Root';
 import { mockRowCount, useAppStore } from './store';
 import { applyTheme, resolveTheme, watchSystemTheme } from './store/theme';
@@ -26,6 +27,7 @@ async function bootstrap(): Promise<void> {
     }
   });
   void useAppStore.getState().bootstrap();
+  await installFileEditorLifecycle(mockRowCount() === 0);
   // 폴더·파일 드래그앤드롭으로 열기 (REPO-01). 목 모드는 Tauri API 가 없다
   if (mockRowCount() === 0) {
     void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>

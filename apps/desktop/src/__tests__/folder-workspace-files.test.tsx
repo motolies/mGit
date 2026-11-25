@@ -1,6 +1,9 @@
+import { undo } from '@codemirror/commands';
+import { EditorView } from '@codemirror/view';
 import {
   createNullClient,
   type FsDirListing,
+  type FsEditableFile,
   type FsEntry,
   type FsFile,
   type IpcClient,
@@ -14,6 +17,7 @@ import { focusPanel } from '../actions';
 import { StatusBar } from '../layout/StatusBar';
 import { DEFAULT_TIMELINE_QUERY, getFolderStore, getWorkspaceStore, useAppStore } from '../store';
 import { DEFAULT_DOCK, type SessionMeta } from '../store/app-store';
+import { fileEditors } from '../store/file-editor-store';
 import { createFolderStore } from '../store/folder-store';
 import {
   clearSessionRegistry,
@@ -84,11 +88,16 @@ const SUMMARIES = [
 function folderClient() {
   const reads: { path: string; resolve: (file: FsFile) => void }[] = [];
   let manualReads = false;
+  const savedFiles = new Map<string, string>();
   const fsReadFile = vi.fn(
     (_session: number, path: string): Promise<FsFile> =>
       manualReads
         ? new Promise<FsFile>((resolve) => reads.push({ path, resolve }))
-        : Promise.resolve({ kind: 'text', text: `// ${path}\nbody`, size: 20 }),
+        : Promise.resolve({
+            kind: 'text',
+            text: savedFiles.get(path) ?? `// ${path}\nbody`,
+            size: 20,
+          }),
   );
   const fsListDir = vi.fn(
     async (_session: number, dir: string): Promise<FsDirListing> => ({
@@ -104,6 +113,22 @@ function folderClient() {
     folderSummaries: async () => SUMMARIES,
     fsListDir,
     fsReadFile,
+    fsReadEditableFile: async (session, path): Promise<FsEditableFile> => {
+      const file = await fsReadFile(session, path);
+      return file.kind === 'text'
+        ? {
+            ...file,
+            fileKey: `${session}:${path}`,
+            revision: file.text,
+            lineEnding: 'lf',
+            bom: false,
+          }
+        : file;
+    },
+    fsSaveFile: vi.fn(async (_session, path, _revision, text) => {
+      savedFiles.set(path, text);
+      return { kind: 'saved' as const, revision: text };
+    }),
   };
   return {
     client,
@@ -146,6 +171,7 @@ async function mount() {
   );
   act(() => {
     useAppStore.setState({
+      client: fake.client,
       sessions: { [FOLDER_ID]: FOLDER_META },
       sessionOrder: [FOLDER_ID],
       activeSessionId: FOLDER_ID,
@@ -196,8 +222,10 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await fileEditors.discard();
+  fileEditors.releaseSession(FOLDER_ID);
   act(() =>
     useAppStore.setState({
       sessions: {},
@@ -270,7 +298,9 @@ describe('활성 저장소 (WS-07)', () => {
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(tab.getAttribute('title')).toContain('web/index.ts');
     expect(tab.parentElement?.getAttribute('data-preview')).toBe('true');
-    expect(screen.getByTestId('file-text').textContent).toContain('// web/index.ts');
+    expect(screen.getByTestId('file-editor').querySelector('.cm-content')?.textContent).toContain(
+      '// web/index.ts',
+    );
 
     await expand('api');
     await expand('src');
@@ -323,6 +353,43 @@ describe('활성 저장소 (WS-07)', () => {
   });
 });
 
+describe('파일 편집 탭', () => {
+  it('첫 입력으로 미리보기를 고정하고 탭 전환 뒤 Undo·커서를 보존하며 즉시 저장한다', async () => {
+    const fake = await mount();
+    await expand('docs');
+    fireEvent.click(row('guide.md'));
+    await tick();
+    const first = EditorView.findFromDOM(
+      screen.getByTestId('file-editor').firstElementChild as HTMLElement,
+    );
+    expect(first).not.toBeNull();
+    act(() =>
+      first?.dispatch({ changes: { from: 0, insert: 'draft ' }, selection: { anchor: 3 } }),
+    );
+    expect(ws()?.docs.find((doc) => doc.id === 'file:docs/guide.md')?.pinned).toBe(true);
+    expect(fileEditors.hasDirty(FOLDER_ID, 'docs/guide.md')).toBe(true);
+    fireEvent.click(editor().getByRole('tab', { name: S.workspace.overview }));
+    await tick();
+    fireEvent.click(tabOf('guide.md'));
+    await tick();
+    const restored = EditorView.findFromDOM(
+      screen.getByTestId('file-editor').firstElementChild as HTMLElement,
+    );
+    expect(restored?.state.selection.main.anchor).toBe(3);
+    expect(restored?.state.doc.toString()).toContain('draft ');
+    act(() => {
+      if (restored) undo(restored);
+    });
+    expect(restored?.state.doc.toString()).toBe('// docs/guide.md\nbody');
+    act(() => restored?.dispatch({ changes: { from: 0, insert: 'saved ' } }));
+    fireEvent.click(screen.getByRole('button', { name: S.fileEditor.save }));
+    await tick();
+    expect(fake.client.fsSaveFile).toHaveBeenCalledOnce();
+    expect(fileEditors.hasDirty(FOLDER_ID, 'docs/guide.md')).toBe(false);
+    expect(restored?.state.doc.toString()).toContain('saved ');
+  });
+});
+
 describe('파일 보기 탭 다시 읽기 (ED-04)', () => {
   it('파일 트리가 다시 읽으면 내용을 보인 채 다시 읽고, 늦게 온 옛 응답은 버린다', async () => {
     const fake = await mount();
@@ -333,13 +400,13 @@ describe('파일 보기 탭 다시 읽기 (ED-04)', () => {
     expect(screen.getByText(S.fileView.loading)).toBeTruthy();
     act(() => fake.reads.shift()?.resolve({ kind: 'text', text: 'v1', size: 2 }));
     await tick();
-    expect(screen.getByTestId('file-text').textContent).toBe('1v1');
+    expect(screen.getByTestId('file-editor').querySelector('.cm-content')?.textContent).toBe('v1');
 
     // 새로고침: 다시 읽는 동안 이전 내용을 그대로 보인다
     fireEvent.click(project().getByRole('button', { name: S.folder.refresh }));
     await tick();
     expect(fake.reads).toHaveLength(1);
-    expect(screen.getByTestId('file-text').textContent).toBe('1v1');
+    expect(screen.getByTestId('file-editor').querySelector('.cm-content')?.textContent).toBe('v1');
     // 한 번 더: 앞 요청의 응답이 뒤에 와도 버린다
     fireEvent.click(project().getByRole('button', { name: S.folder.refresh }));
     await tick();
@@ -348,7 +415,7 @@ describe('파일 보기 탭 다시 읽기 (ED-04)', () => {
     await tick();
     act(() => older?.resolve({ kind: 'text', text: 'v2', size: 2 }));
     await tick();
-    expect(screen.getByTestId('file-text').textContent).toBe('1v3');
+    expect(screen.getByTestId('file-editor').querySelector('.cm-content')?.textContent).toBe('v3');
   });
 
   it('읽기 실패는 다시 시도할 수 있다', async () => {
@@ -359,7 +426,9 @@ describe('파일 보기 탭 다시 읽기 (ED-04)', () => {
     expect(screen.getByText(S.fileView.failed('세션이 닫혔습니다'))).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: S.fileView.retry }));
     await tick();
-    expect(screen.getByTestId('file-text').textContent).toContain('// README.md');
+    expect(screen.getByTestId('file-editor').querySelector('.cm-content')?.textContent).toContain(
+      '// README.md',
+    );
   });
 });
 

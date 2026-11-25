@@ -5,6 +5,7 @@ import { registerCommand } from '../../command-registry';
 import { ContextMenuArea } from '../../components/ContextMenu';
 import { useRovingToolbar } from '../../components/roving';
 import { useSession } from '../../store';
+import { useCurrentFile } from '../workspace/use-current-file';
 import styles from './CommitDetail.module.css';
 import { CommitDetailView } from './CommitDetailView';
 import { changeLetter } from './change-letter';
@@ -15,7 +16,10 @@ import { changeLetter } from './change-letter';
  * 로그의 Enter·⌘3(`focusTargetIn`)이 이 목록에 닿는다 — 폴더 탭의 변경 파일 트리와 같은 자리
  */
 function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
+  const editCurrent = useCurrentFile();
   const s = useSession((st) => ({
+    repoPath: st.path,
+    repoName: st.name,
     openCommitFile: st.openCommitFile,
     openBlame: st.openBlame,
     openFileHistory: st.openFileHistory,
@@ -49,6 +53,10 @@ function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
             const file = d.files.find((f) => f.path === path);
             const deleted = file?.change.kind === 'deleted';
             return [
+              {
+                label: S.fileView.editCurrent,
+                onSelect: () => editCurrent(s.repoPath, path, s.repoName),
+              },
               {
                 label: S.menu.showDiff,
                 commandId: 'file.showDiff',

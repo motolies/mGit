@@ -2,13 +2,17 @@ import { S, shortHash } from '@mgit/ui';
 import { ContextMenuArea } from '../../components/ContextMenu';
 import { useSession } from '../../store';
 import { EMPTY_TREE } from '../../store/squash-range';
+import { useCurrentFile } from '../workspace/use-current-file';
 import styles from './CommitDetail.module.css';
 import { changeLetter } from './change-letter';
 import own from './RangeDetail.module.css';
 
 /** 우측 패널: ⇧+클릭으로 고른 commit 범위의 결합 diff 파일 목록 (GRAPH-10) */
 export function RangeDetail() {
+  const editCurrent = useCurrentFile();
   const s = useSession((st) => ({
+    repoPath: st.path,
+    repoName: st.name,
     range: st.range,
     clear: st.clearRange,
     openRangeFile: st.openRangeFile,
@@ -50,6 +54,10 @@ export function RangeDetail() {
                   ?.getAttribute('data-path') ?? null
               }
               items={(path) => [
+                {
+                  label: S.fileView.editCurrent,
+                  onSelect: () => editCurrent(s.repoPath, path, s.repoName),
+                },
                 {
                   label: S.menu.difftool,
                   onSelect: () =>

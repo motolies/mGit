@@ -89,8 +89,8 @@ pub use folder_branches::{FolderBranch, FolderBranchIn, FolderBranchRepo, Folder
 pub use folder_index::{IndexTarget, IndexWriteResult, SkipReason, SkippedPath};
 pub use folder_timeline::{TimelineInfo, TimelineRepoInfo};
 pub use fs_tree::{
-    FS_LIST_DEFAULT_LIMIT, FS_LIST_MAX_LIMIT, FS_READ_MAX_BYTES, FsEntry, FsEntryKind, FsFile,
-    FsListing,
+    FS_IMAGE_MAX_BYTES, FS_LIST_DEFAULT_LIMIT, FS_LIST_MAX_LIMIT, FS_READ_MAX_BYTES,
+    FsEditableFile, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing, FsSaveResult,
 };
 pub use history::EMPTY_TREE;
 pub use hosting::{HostingAccount, OauthConfig, Profile, SshKeyInfo, account_id};

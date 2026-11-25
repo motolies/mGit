@@ -8,6 +8,7 @@ import {
   useRef,
 } from 'react';
 import { registerCommand } from '../../command-registry';
+import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { hasModifier, rovingIndex } from '../../components/roving';
 import { captureFocusReturn } from '../../components/use-modal';
 import { ToolButton } from '../../layout/ToolButton';
@@ -36,6 +37,10 @@ export interface EditorAreaProps<D extends EditorTabDoc> {
   onClose: (id: string) => void;
   /** 미리보기 탭을 고정 탭으로 (탭 더블클릭) */
   onPin: (id: string) => void;
+  /** 문서 종류별 탭 우클릭 메뉴 */
+  tabMenu?: (doc: D) => MenuItem[];
+  /** 저장하지 않은 변경 여부 */
+  dirtyOf?: (doc: D) => boolean;
   /** 탭이 하나도 없을 때 보일 것 */
   empty: ReactNode;
 }
@@ -57,6 +62,8 @@ export function EditorArea<D extends EditorTabDoc>({
   onActivate,
   onClose,
   onPin,
+  tabMenu,
+  dirtyOf,
   empty,
 }: EditorAreaProps<D>) {
   const baseId = useId();
@@ -159,51 +166,70 @@ export function EditorArea<D extends EditorTabDoc>({
 
   return (
     <div ref={areaRef} className={styles.area} tabIndex={-1}>
-      <div ref={tabsRef} className={styles.tabs} role="tablist" aria-label={S.workspace.editorTabs}>
-        {docs.map((doc, index) => {
-          const title = titleOf(doc);
-          const detail = detailOf?.(doc);
-          const tooltip = tooltipOf?.(doc) ?? (detail ? `${title} ${detail}` : title);
-          const selected = doc.id === activeId;
-          // 활성 탭이 없으면 첫 탭이 Tab 정지다
-          const stop = activeIndex >= 0 ? selected : index === 0;
-          return (
-            <div
-              key={doc.id}
-              className={styles.tab}
-              role="presentation"
-              data-active={selected ? 'true' : 'false'}
-              data-preview={doc.pinned ? 'false' : 'true'}
-            >
-              <button
-                type="button"
-                id={tabId(index)}
-                className={styles.tabTitle}
-                role="tab"
-                aria-selected={selected}
-                aria-controls={selected ? panelId : undefined}
-                tabIndex={stop ? 0 : -1}
-                title={doc.pinned ? tooltip : `${tooltip} — ${S.workspace.pinHint}`}
-                onClick={() => onActivate(doc.id)}
-                onDoubleClick={() => onPin(doc.id)}
-                onKeyDown={(e) => onKeyDown(e, doc, index)}
+      <ContextMenuArea<D>
+        className={styles.tabsMenu}
+        resolveTarget={(event) => {
+          const id = (event.target as HTMLElement | null)
+            ?.closest('[data-editor-doc]')
+            ?.getAttribute('data-editor-doc');
+          const doc = docs.find((item) => item.id === id);
+          return doc && tabMenu?.(doc).length ? doc : null;
+        }}
+        items={(doc) => tabMenu?.(doc) ?? []}
+      >
+        <div
+          ref={tabsRef}
+          className={styles.tabs}
+          role="tablist"
+          aria-label={S.workspace.editorTabs}
+        >
+          {docs.map((doc, index) => {
+            const title = titleOf(doc);
+            const detail = detailOf?.(doc);
+            const tooltip = tooltipOf?.(doc) ?? (detail ? `${title} ${detail}` : title);
+            const selected = doc.id === activeId;
+            // 활성 탭이 없으면 첫 탭이 Tab 정지다
+            const stop = activeIndex >= 0 ? selected : index === 0;
+            return (
+              <div
+                key={doc.id}
+                data-editor-doc={doc.id}
+                className={styles.tab}
+                role="presentation"
+                data-active={selected ? 'true' : 'false'}
+                data-preview={doc.pinned ? 'false' : 'true'}
               >
-                {title}
-                {detail ? <span className={styles.tabDetail}>{detail}</span> : null}
-              </button>
-              <ToolButton
-                icon="close"
-                label={S.workspace.closeTab(title)}
-                tabIndex={-1}
-                onClick={() => {
-                  refocus.current = true;
-                  onClose(doc.id);
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
+                <button
+                  type="button"
+                  id={tabId(index)}
+                  className={styles.tabTitle}
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls={selected ? panelId : undefined}
+                  tabIndex={stop ? 0 : -1}
+                  title={doc.pinned ? tooltip : `${tooltip} — ${S.workspace.pinHint}`}
+                  onClick={() => onActivate(doc.id)}
+                  onDoubleClick={() => onPin(doc.id)}
+                  onKeyDown={(e) => onKeyDown(e, doc, index)}
+                >
+                  {title}
+                  {dirtyOf?.(doc) ? ' ●' : ''}
+                  {detail ? <span className={styles.tabDetail}>{detail}</span> : null}
+                </button>
+                <ToolButton
+                  icon="close"
+                  label={S.workspace.closeTab(title)}
+                  tabIndex={-1}
+                  onClick={() => {
+                    refocus.current = true;
+                    onClose(doc.id);
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </ContextMenuArea>
       {active ? (
         <div
           id={panelId}

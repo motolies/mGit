@@ -37,7 +37,10 @@ import type {
   FolderSettings,
   FoundRepo,
   FsDirListing,
+  FsEditableFile,
   FsFile,
+  FsImage,
+  FsSaveResult,
   GitignoreTemplate,
   GitVersionInfo,
   GraphLayoutPrefs,
@@ -625,6 +628,17 @@ export interface IpcClient {
    * 링크 대상은 읽지 않는다) / `missing` / `denied`
    */
   fsReadFile(session: SessionId, path: string): Promise<FsFile>;
+  /** 세션 루트의 5 MiB 이하 이미지를 data URL로 읽는다. */
+  fsReadImage(session: SessionId, path: string): Promise<FsImage>;
+  /** 원문·파일 식별 키·revision을 조회한다. */
+  fsReadEditableFile(session: SessionId, path: string): Promise<FsEditableFile>;
+  /** 현재 revision과 같을 때만 작업 파일을 원자 교체한다. */
+  fsSaveFile(
+    session: SessionId,
+    path: string,
+    expectedRevision: string,
+    text: string,
+  ): Promise<FsSaveResult>;
 
   // 서브모듈 관리 (C2)
   submodulePointerLog(
@@ -1089,6 +1103,10 @@ export function createTauriClient(): IpcClient {
       ),
     fsListDir: (session, dir, limit) => call(() => commands.fsListDir(session, dir, limit ?? null)),
     fsReadFile: (session, path) => call(() => commands.fsReadFile(session, path)),
+    fsReadImage: (session, path) => call(() => commands.fsReadImage(session, path)),
+    fsReadEditableFile: (session, path) => call(() => commands.fsReadEditableFile(session, path)),
+    fsSaveFile: (session, path, expectedRevision, text) =>
+      call(() => commands.fsSaveFile(session, path, expectedRevision, text)),
     submodulePointerLog: (session, path, old, newOid) =>
       call(() => commands.submodulePointerLog(session, path, old, newOid)),
     submoduleAdd: (session, url, path, branch) =>

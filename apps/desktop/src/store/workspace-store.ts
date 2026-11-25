@@ -664,6 +664,8 @@ export interface WorkspaceState extends EditorTabs {
 export type WorkspaceStore = StoreApi<WorkspaceState>;
 
 export interface WorkspaceDeps {
+  /** 일반 파일은 저장 완료 또는 명시적 초안 폐기 뒤에만 닫는다. */
+  beforeCloseFile?: (path: string) => Promise<boolean>;
   /** 문서가 열렸을 때. 아래 도구 창이 본문을 덮고 있으면(최대화) 풀어야 문서가 보인다 (WS-03) */
   onDocOpened?: () => void;
   /**
@@ -715,6 +717,7 @@ export function activeRepoInList(
 
 /** 워크스페이스 스토어를 만든다. 앱 스토어가 탭을 열 때 만들고 닫을 때 버린다 */
 export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {}): WorkspaceStore {
+  const closingFiles = new Set<string>();
   // 문서별 스크롤 위치. 닫힌 문서의 것은 탭이 바뀔 때 버린다
   const scrolls = new Map<string, number>();
   // Commit 도구 창 변경 트리의 스크롤 위치 (다시 그릴 값이 아니라 구독 상태 밖에 둔다)
@@ -775,6 +778,21 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
 
     closeDoc(id) {
       const before = get();
+      const file = before.docs.find((doc) => doc.id === id && doc.kind === 'file');
+      if (file?.kind === 'file' && deps.beforeCloseFile) {
+        if (closingFiles.has(id)) return;
+        closingFiles.add(id);
+        void deps
+          .beforeCloseFile(file.path)
+          .then((allowed) => {
+            if (!allowed) return;
+            const current = get();
+            const tabs = docClosed(tabsOf(current), id);
+            set(applyTabs(tabs, followActive(current, tabs)));
+          })
+          .finally(() => closingFiles.delete(id));
+        return;
+      }
       const session = before.sessionDocs.find((d) => d.id === id);
       if (session) {
         // 파생 문서: 그 세션의 슬롯을 비우면 앱 스토어가 목록을 다시 만든다 (`setSessionDocs`)

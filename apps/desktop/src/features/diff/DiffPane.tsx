@@ -3,12 +3,15 @@ import { S, shortHash } from '@mgit/ui';
 import { useEffect } from 'react';
 import { useDialogs } from '../../components/use-dialogs';
 import { type SessionState, useSession, useSessionOf } from '../../store';
+import { useCurrentFile } from '../workspace/use-current-file';
 import { DiffPaneView } from './DiffPaneView';
 import { subprojectPointers } from './subproject';
 
 /** diff 화면이 읽는 세션 상태와 동작 */
 function pickDiff(st: SessionState) {
   return {
+    repoPath: st.path,
+    repoName: st.name,
     target: st.selectedFile,
     diff: st.diff,
     document: st.diffDocument,
@@ -40,6 +43,7 @@ type DiffSlice = ReturnType<typeof pickDiff>;
  */
 function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
   const dialogs = useDialogs();
+  const editCurrent = useCurrentFile();
   // 서브모듈 포인터 diff 면 그 사이의 commit 목록을 읽는다 (SUB-04)
   const pointers = subprojectPointers(s.diff);
   const targetPath = s.target?.path ?? null;
@@ -130,6 +134,7 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
         onLoadFull={() => void s.loadFull()}
         onBack={repoName === undefined ? s.closeFile : undefined}
         onDifftool={difftool}
+        onEditCurrent={() => editCurrent(s.repoPath, path, s.repoName)}
         submoduleLog={submoduleLog}
         actions={
           readOnly || s.loading || s.busy || !s.document

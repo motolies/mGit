@@ -7,6 +7,11 @@
   background: var(--bg);
 }
 
+.tabsMenu {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 /* 탭 막대. 높이는 도구 창 머리와 같다 */
 .tabs {
   display: flex;

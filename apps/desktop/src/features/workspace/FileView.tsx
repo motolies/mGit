@@ -96,7 +96,7 @@ function useLineHighlight(
     if (!enabled) {
       return;
     }
-    void parserFor(path).then((parser) => {
+    void parserFor(path, [lines.join('\n')]).then((parser) => {
       if (live && parser) {
         setSpans(tokenize(parser, lines.join('\n')));
       }

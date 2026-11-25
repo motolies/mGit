@@ -794,6 +794,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       await tick();
       expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
         S.menu.showDiff,
+        S.fileView.editCurrent,
         S.menu.blame,
         S.menu.fileHistory,
         S.menu.difftool,
@@ -808,6 +809,44 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       fireEvent.click(screen.getByRole('menuitem', { name: S.menu.showDiff }));
       await tick();
       expect(tabs()).toEqual([S.workspace.overview, '[two.ts @a1b2c3d4]']);
+    } finally {
+      restore();
+    }
+  });
+
+  it('폴더 히스토리 메뉴·diff 도구 모음·파일 히스토리는 같은 현재 파일 탭을 열고 diff를 유지한다', async () => {
+    const { workspace, restore } = await setup();
+    try {
+      act(() => view().onSelectRow?.(row(OID, 1)));
+      await tick();
+      fireEvent.click(fileRow('two.ts'));
+      await tick();
+      const diffId = workspace.getState().activeDocId;
+      fireEvent.click(
+        within(editorArea() as HTMLElement).getByRole('button', { name: S.fileView.editCurrent }),
+      );
+      await tick();
+      const fileId = 'file:web/src/a/two.ts';
+      expect(workspace.getState().activeDocId).toBe(fileId);
+      expect(workspace.getState().docs.some((doc) => doc.id === diffId)).toBe(true);
+      fireEvent.contextMenu(fileRow('two.ts'));
+      await tick();
+      fireEvent.click(screen.getByRole('menuitem', { name: S.fileView.editCurrent }));
+      await tick();
+      expect(workspace.getState().docs.filter((doc) => doc.id === fileId)).toHaveLength(1);
+      fireEvent.contextMenu(fileRow('two.ts'));
+      await tick();
+      fireEvent.click(screen.getByRole('menuitem', { name: S.menu.fileHistory }));
+      await tick();
+      const dialog = document.querySelector<HTMLElement>('dialog[open]');
+      expect(dialog).not.toBeNull();
+      fireEvent.click(
+        within(dialog as HTMLElement).getByRole('button', { name: S.fileView.editCurrent }),
+      );
+      await tick();
+      expect(workspace.getState().activeDocId).toBe(fileId);
+      expect(workspace.getState().docs.filter((doc) => doc.id === fileId)).toHaveLength(1);
+      expect(document.querySelector('dialog[open]')).toBeNull();
     } finally {
       restore();
     }

@@ -90,7 +90,11 @@ describe('탭 닫기 보호', () => {
     registerSession(id, {
       cache: { dispose() {} } as never,
       store: {
-        getState: () => ({ conflictDrafts: { 'a.txt': { text: 'x', ranges: [], key: 'k' } } }),
+        subscribe: () => () => {},
+        getState: () => ({
+          conflictDrafts: { 'a.txt': { text: 'x', ranges: [], key: 'k' } },
+          fileTree: { subscribe: () => () => {} },
+        }),
       } as never,
     });
   }

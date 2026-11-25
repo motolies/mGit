@@ -2723,6 +2723,7 @@ dependencies = [
 name = "mgit-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "httpmock",
  "keyring",
  "libc",
@@ -2737,6 +2738,7 @@ dependencies = [
  "mgit-testkit",
  "mgit-watch",
  "proptest",
+ "quick-xml",
  "regex",
  "serde",
  "serde_json",

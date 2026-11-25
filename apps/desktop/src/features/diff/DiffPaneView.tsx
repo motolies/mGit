@@ -59,6 +59,8 @@ export interface DiffPaneViewProps {
   onBack?: () => void;
   /** 있으면 외부 diff 도구 버튼 (저장소 세션이 필요하다) */
   onDifftool?: () => void;
+  /** 현재 디스크의 파일을 별도 편집 탭으로 연다 */
+  onEditCurrent?: () => void;
   /** 있으면 hunk·줄 단위 stage·되돌리기 (쓰기 동작). 읽기 전용 diff 는 주지 않는다 */
   actions?: DiffActions;
   /** 서브모듈 포인터 diff 면 그 사이의 commit 목록 (SUB-04) */
@@ -86,6 +88,7 @@ export function DiffPaneView({
   onLoadFull,
   onBack,
   onDifftool,
+  onEditCurrent,
   actions,
   submoduleLog,
 }: DiffPaneViewProps) {
@@ -106,6 +109,7 @@ export function DiffPaneView({
         {onDifftool ? <Button onClick={onDifftool}>{S.history.difftool}</Button> : null}
       </header>
       <div className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
+        {onEditCurrent ? <Button onClick={onEditCurrent}>{S.fileView.editCurrent}</Button> : null}
         <span className={styles.segment}>
           <Button aria-pressed={mode === 'split'} onClick={() => onModeChange('split')}>
             {S.diff.split}

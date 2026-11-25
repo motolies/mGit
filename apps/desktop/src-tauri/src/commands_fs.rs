@@ -2,7 +2,10 @@
 //! (어휘 검증·구성요소 확인·정규화 재검사·열기 대조)는 모두 코어(`mgit-core` 의 `fs_tree.rs`)가 한다.
 //! 거부는 `IpcError::Internal`, 없음·권한 없음 등 정상 상태는 결과의 `kind` 로 나간다
 
-use mgit_core::{FsEntry, FsEntryKind, FsFile, FsListing, SessionId};
+use mgit_core::{
+    FsEditableFile, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing, FsSaveResult,
+    SessionId,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -160,6 +163,211 @@ impl From<FsFile> for FsFileDto {
     }
 }
 
+/// 로컬 이미지 조회 결과. SVG도 앱 DOM 대신 이미지 문맥에서만 사용한다.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FsImageDto {
+    Image {
+        mime: String,
+        data_url: String,
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+    },
+    Missing,
+    Denied,
+    Unsupported,
+    TooLarge {
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+        #[specta(type = specta_typescript::Number)]
+        limit: u64,
+    },
+}
+
+impl From<FsImage> for FsImageDto {
+    /// 코어 이미지 결과를 wire 형식으로 옮긴다.
+    fn from(image: FsImage) -> Self {
+        match image {
+            FsImage::Image {
+                mime,
+                data_url,
+                size,
+            } => Self::Image {
+                mime,
+                data_url,
+                size,
+            },
+            FsImage::Missing => Self::Missing,
+            FsImage::Denied => Self::Denied,
+            FsImage::Unsupported => Self::Unsupported,
+            FsImage::TooLarge { size, limit } => Self::TooLarge { size, limit },
+        }
+    }
+}
+
+/// 세션 루트의 이미지를 정규 파일과 5 MiB 상한 안에서 읽는다.
+#[tauri::command]
+#[specta::specta]
+pub async fn fs_read_image(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+) -> Result<FsImageDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .fs_read_image(SessionId(session), &path)
+        .await?
+        .into())
+}
+
+/// 원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FsEditableFileDto {
+    Text {
+        text: String,
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+        file_key: String,
+        revision: String,
+        line_ending: FsLineEndingDto,
+        bom: bool,
+    },
+    Binary {
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+    },
+    NotUtf8 {
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+    },
+    TooLarge {
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+        #[specta(type = specta_typescript::Number)]
+        limit: u64,
+    },
+    Unsupported {
+        file_kind: FsEntryKindDto,
+    },
+    Missing,
+    Denied,
+    MixedLineEndings,
+}
+
+/// 저장할 줄 끝 형식이다.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum FsLineEndingDto {
+    Lf,
+    Crlf,
+}
+
+impl From<FsEditableFile> for FsEditableFileDto {
+    /// 코어의 원문과 상태를 손실 없이 wire 형태로 옮긴다.
+    fn from(file: FsEditableFile) -> Self {
+        match file {
+            FsEditableFile::Text {
+                text,
+                size,
+                file_key,
+                revision,
+                line_ending,
+                bom,
+            } => Self::Text {
+                text,
+                size,
+                file_key,
+                revision,
+                line_ending: match line_ending {
+                    FsLineEnding::Lf => FsLineEndingDto::Lf,
+                    FsLineEnding::Crlf => FsLineEndingDto::Crlf,
+                },
+                bom,
+            },
+            FsEditableFile::MixedLineEndings => Self::MixedLineEndings,
+            FsEditableFile::Unavailable(file) => match file {
+                FsFile::Binary { size } => Self::Binary { size },
+                FsFile::NotUtf8 { size } => Self::NotUtf8 { size },
+                FsFile::TooLarge { size, limit } => Self::TooLarge { size, limit },
+                FsFile::Unsupported { kind } => Self::Unsupported {
+                    file_kind: kind.into(),
+                },
+                FsFile::Missing => Self::Missing,
+                FsFile::Denied => Self::Denied,
+                FsFile::Text { .. } => unreachable!("편집 가능한 텍스트는 Text로 반환한다"),
+            },
+        }
+    }
+}
+
+/// 저장 응답에는 본문을 싣지 않아 늦은 응답이 새 초안을 덮어쓰지 않는다.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FsSaveResultDto {
+    Saved { revision: String },
+    Conflict,
+    Failed { message: String },
+}
+
+impl From<FsSaveResult> for FsSaveResultDto {
+    /// 코어 저장 결과를 wire로 옮긴다.
+    fn from(result: FsSaveResult) -> Self {
+        match result {
+            FsSaveResult::Saved { revision } => Self::Saved { revision },
+            FsSaveResult::Conflict => Self::Conflict,
+            FsSaveResult::Failed { message } => Self::Failed { message },
+        }
+    }
+}
+
+/// 안전한 원문 편집 조회를 세션 루트에 한정한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn fs_read_editable_file(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+) -> Result<FsEditableFileDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .fs_read_editable_file(SessionId(session), &path)
+        .await?
+        .into())
+}
+
+/// expected revision과 현재 파일이 같을 때만 원문을 저장한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn fs_save_file(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+    expected_revision: String,
+    text: String,
+) -> Result<FsSaveResultDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .fs_save_file(SessionId(session), &path, &expected_revision, &text)
+        .await?
+        .into())
+}
+
 /// 세션 루트 기준 상대 디렉터리 하나의 항목 (FS-01~05·09). `dir` 이 빈 문자열이면 루트, `limit` 이 없으면
 /// 2,000 (1~50,000 으로 맞춘다). 루트 밖·`..`·절대 경로·`.git`·링크 나열·경로 중간의 링크는 거부한다
 #[tauri::command]
@@ -256,6 +464,29 @@ mod tests {
         for (file, want) in cases {
             assert_eq!(serde_json::to_value(FsFileDto::from(file)).unwrap(), want);
         }
+    }
+
+    /// 이미지 응답은 camelCase 필드와 상태 태그를 유지한다.
+    #[test]
+    fn image_dto_preserves_payload_and_failure_states() {
+        assert_eq!(
+            serde_json::to_value(FsImageDto::from(FsImage::Image {
+                mime: "image/png".into(),
+                data_url: "data:image/png;base64,AA==".into(),
+                size: 1,
+            }))
+            .unwrap(),
+            serde_json::json!({"kind":"image", "mime":"image/png", "dataUrl":"data:image/png;base64,AA==", "size":1})
+        );
+        assert_eq!(
+            serde_json::to_value(FsImageDto::from(FsImage::Unsupported)).unwrap(),
+            serde_json::json!({"kind":"unsupported"})
+        );
+        assert_eq!(
+            serde_json::to_value(FsImageDto::from(FsImage::TooLarge { size: 8, limit: 7 }))
+                .unwrap(),
+            serde_json::json!({"kind":"tooLarge", "size":8, "limit":7})
+        );
     }
 
     /// 거부(코어 `Invalid`)는 wire 에서 `internal` 이고 문구는 그대로다 (절대 경로 없음은 코어가 지킨다)

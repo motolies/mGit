@@ -15,6 +15,8 @@ export const enWorkspace: Pick<
   | 'branches'
   | 'filterBar'
   | 'project'
+  | 'markdown'
+  | 'fileEditor'
   | 'fileView'
   | 'repoSession'
   | 'opBand'
@@ -344,7 +346,64 @@ export const enWorkspace: Pick<
       rollbackConfirm: 'Roll back',
     },
   },
+  markdown: {
+    diagram: 'Mermaid diagram',
+    renderingDiagram: 'Rendering diagram…',
+    diagramSource: 'View Mermaid source',
+    edit: 'Edit',
+    preview: 'Preview',
+    split: 'Split',
+    viewMode: 'Markdown view',
+    resize: 'Resize Markdown split',
+    tooLarge: 'Automatic preview is skipped for documents over 5,000 lines or 128 Ki characters.',
+    loading: 'Loading…',
+    image: 'Image',
+    imageFailed: 'Image could not be loaded',
+    imagePath: 'Image path is outside the root or unsupported',
+    localLink: 'Links to other local documents are not supported',
+    imageErrors: {
+      missing: 'File not found',
+      denied: 'Access denied',
+      unsupported: 'Unsupported image format',
+      tooLarge: 'Image exceeds 5 MiB',
+    },
+  },
+  fileEditor: {
+    content: 'Edit file content',
+    title: 'Edit current file',
+    saved: 'Saved',
+    pending: 'Save pending',
+    saving: 'Saving',
+    error: 'Save failed',
+    conflict: 'External change detected',
+    autoSave: 'Auto save',
+    save: 'Save',
+    findReplace: 'Find and replace',
+    wrap: 'Wrap lines',
+    noHighlight: 'Syntax highlighting skipped',
+    history: 'History',
+    retrySave: 'Retry save',
+    reload: 'Reload from disk',
+    overwrite: 'Overwrite with my content',
+    overwriteConfirm: 'Replace the current file on disk with your draft.',
+    reloadConfirm: 'Discard your unsaved draft and reload the current file from disk.',
+    overwriteAction: 'Overwrite',
+    reloadAction: 'Discard draft and reload',
+    externalChanged: 'The file changed on disk. Your draft is preserved and auto save is paused.',
+    unreadable:
+      'The current file cannot be read. Check whether it was deleted or its format changed.',
+    reloadUnreadable: 'The current file cannot be read as editable text.',
+    overwriteUnreadable: 'The current file cannot be read and cannot be overwritten.',
+    editedSinceConfirm:
+      'New input was entered after confirmation. Your draft is preserved; confirm again.',
+    mixedLineEndings:
+      'Files with mixed line endings cannot be edited. Convert to LF or CRLF and reopen.',
+    closeTitle: 'Unsaved changes',
+    closeMessage: 'Some files could not be saved. Retry saving or discard changes before closing.',
+    discardChanges: 'Discard unsaved changes',
+  },
   fileView: {
+    editCurrent: 'Edit current file',
     content: 'File contents',
     loading: 'Loading…',
     emptyFile: 'Empty file',

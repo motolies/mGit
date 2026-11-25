@@ -8,7 +8,15 @@
 // 구분한다 (macOS 의 실제 파일 시스템과 다르다)
 
 import { IpcClientError } from '../client';
-import type { FsDirListing, FsEntry, FsEntryKind, FsFile } from '../types';
+import type {
+  FsDirListing,
+  FsEditableFile,
+  FsEntry,
+  FsEntryKind,
+  FsFile,
+  FsImage,
+  FsSaveResult,
+} from '../types';
 import { pick } from './mock-l10n';
 
 /** 나열 항목 수 기본 상한 (코어 `FS_LIST_DEFAULT_LIMIT`) */
@@ -39,6 +47,7 @@ interface MockFile {
   mtimeMs: number;
   size: number;
   read(): FsFile;
+  image?: Extract<FsImage, { kind: 'image' }>;
 }
 
 /** 링크·FIFO·소켓 등 (내용 없음) */
@@ -80,6 +89,9 @@ export interface MockFsLayout {
 export interface MockFs {
   list(root: string, dir: string, limit?: number | null): FsDirListing;
   read(root: string, path: string): FsFile;
+  readImage(root: string, path: string): FsImage;
+  readEditable(root: string, path: string): FsEditableFile;
+  save(root: string, path: string, expectedRevision: string, text: string): FsSaveResult;
   /** 파일·링크 하나를 지운다 (Rollback 흉내). 디렉터리나 없는 경로는 그대로 둔다 */
   remove(root: string, path: string): void;
 }
@@ -281,6 +293,20 @@ function stateFile(
   return { kind: 'file', mtimeMs: mtimeOf(path), size, read };
 }
 
+/** 실제 PNG 바이트가 있는 이미지 표본을 만든다. 파일 조회에서는 바이너리다. */
+function imageFile(path: string): MockFile {
+  const data =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const size = 68;
+  return {
+    kind: 'file',
+    mtimeMs: mtimeOf(path),
+    size,
+    read: () => ({ kind: 'binary', size }),
+    image: { kind: 'image', mime: 'image/png', dataUrl: `data:image/png;base64,${data}`, size },
+  };
+}
+
 /** 링크·소켓 노드 */
 function special(path: string, kind: 'symlink' | 'other'): MockSpecial {
   return { kind, mtimeMs: mtimeOf(path) };
@@ -441,7 +467,7 @@ function repoBasics(name: string): [string, MockNode][] {
 /** 저장소 장면의 상태 표본: 바이너리·너무 큼·UTF-8 아님·링크·읽는 순간 사라짐·소켓·긴 문서·한글 이름 */
 function repoShowcase(): [string, MockNode][] {
   return [
-    ['public/images/logo.png', stateFile('public/images/logo.png', 18_432, 'binary')],
+    ['public/images/logo.png', imageFile('public/images/logo.png')],
     ['dist/app.js.map', stateFile('dist/app.js.map', 3_482_113, 'tooLarge')],
     ['legacy/주문내역-euc-kr.csv', stateFile('legacy/주문내역-euc-kr.csv', 2_816, 'notUtf8')],
     ['config/current.json', special('config/current.json', 'symlink')],
@@ -486,7 +512,7 @@ function repoTree(
 /** 폴더 장면의 상태 표본 (`samples/` 아래) */
 function folderSamples(): [string, MockNode][] {
   return [
-    ['samples/logo.png', stateFile('samples/logo.png', 18_432, 'binary')],
+    ['samples/logo.png', imageFile('samples/logo.png')],
     ['samples/heap-dump.hprof', stateFile('samples/heap-dump.hprof', 48_234_496, 'tooLarge')],
     ['samples/legacy-euc-kr.csv', stateFile('samples/legacy-euc-kr.csv', 2_816, 'notUtf8')],
     ['samples/current', special('samples/current', 'symlink')],
@@ -596,6 +622,33 @@ export function createMockFs(layout: MockFsLayout): MockFs {
     return tree;
   };
 
+  let nextRevision = 0;
+  const revisions = new WeakMap<MockNode, string>();
+  /** 실제 트리를 공유하는 저장소·폴더는 같은 노드 revision과 경로 키를 사용한다. */
+  const editable = (root: string, path: string): FsEditableFile => {
+    const node = walk(rootOf(root), parseRel(path), path);
+    if (typeof node === 'string') return { kind: node };
+    if (node.kind !== 'file') return { kind: 'unsupported', fileKind: node.kind };
+    const file = node.read();
+    if (file.kind !== 'text') return file;
+    if (file.text.includes('\0')) return { kind: 'binary', size: file.size };
+    const plain = file.text.replaceAll('\r\n', '');
+    if (plain.includes('\r') || (file.text.includes('\r\n') && plain.includes('\n')))
+      return { kind: 'mixedLineEndings' };
+    let revision = revisions.get(node);
+    if (!revision) {
+      revision = `mock-${++nextRevision}`;
+      revisions.set(node, revision);
+    }
+    return {
+      ...file,
+      fileKey: `${root}/${path}`,
+      revision,
+      lineEnding: file.text.includes('\r\n') ? 'crlf' : 'lf',
+      bom: file.text.startsWith('\ufeff'),
+    };
+  };
+
   return {
     list(root, dir, limit) {
       const parts = dir === '' ? [] : parseRel(dir);
@@ -628,6 +681,39 @@ export function createMockFs(layout: MockFsLayout): MockFs {
         return { kind: node };
       }
       return node.kind === 'file' ? node.read() : { kind: 'unsupported', fileKind: node.kind };
+    },
+    readImage(root, path) {
+      const node = walk(rootOf(root), parseRel(path), path);
+      if (typeof node === 'string') return { kind: node };
+      if (node.kind !== 'file') return { kind: 'unsupported' };
+      if (node.size > 5 * 1024 * 1024)
+        return { kind: 'tooLarge', size: node.size, limit: 5 * 1024 * 1024 };
+      const state = node.read();
+      if (state.kind === 'missing' || state.kind === 'denied') return state;
+      return node.image ?? { kind: 'unsupported' };
+    },
+    readEditable: editable,
+    save(root, path, expectedRevision, text) {
+      const current = editable(root, path);
+      if (current.kind !== 'text' || current.revision !== expectedRevision)
+        return { kind: 'conflict' };
+      if (utf8Length(text) > MOCK_FS_READ_MAX_BYTES)
+        return { kind: 'failed', message: 'File exceeds 1 MiB' };
+      const plain = text.replaceAll('\r\n', '');
+      if (
+        text.includes('\0') ||
+        plain.includes('\r') ||
+        (text.includes('\r\n') && plain.includes('\n'))
+      )
+        return { kind: 'failed', message: 'Unsupported text format' };
+      const node = walk(rootOf(root), parseRel(path), path);
+      if (typeof node === 'string' || node.kind !== 'file') return { kind: 'conflict' };
+      node.size = utf8Length(text);
+      node.mtimeMs += 1;
+      node.read = () => ({ kind: 'text', text, size: node.size });
+      const revision = `mock-${++nextRevision}`;
+      revisions.set(node, revision);
+      return { kind: 'saved', revision };
     },
     remove(root, path) {
       const parts = parseRel(path);

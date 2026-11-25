@@ -1,5 +1,5 @@
 import { S } from '@mgit/ui';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Action } from '../../actions';
 import { WorkspaceShell } from '../../layout/WorkspaceShell';
 import {
@@ -11,6 +11,7 @@ import {
   useShownLeftTool,
   useWorkspace,
 } from '../../store';
+import { fileEditors } from '../../store/file-editor-store';
 import { parseNoteRowId } from '../../store/file-tree';
 import {
   baseName,
@@ -40,6 +41,7 @@ import { editorHints } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, folderTreeMenu, menuTargets } from './folder-tree-menu';
 import { useRepoSessionActions } from './repo-session-actions';
+import { currentFileTabMenu, useCurrentFile } from './use-current-file';
 import { WorktreeDiffDoc } from './WorktreeDiffDoc';
 
 /**
@@ -96,6 +98,8 @@ export interface FolderWorkspaceProps {
  * 갱신된다. 파일 상태 색을 위해 변경 목록을 한 번 읽어 두면 그 뒤로는 폴더 스토어의 갱신이 함께 다시 읽는다
  */
 export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
+  const editCurrent = useCurrentFile();
+  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const f = useFolder((st) => ({
     id: st.id,
     path: st.path,
@@ -407,6 +411,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
         }
         editor={
           <EditorArea
+            dirtyOf={(doc) => doc.kind === 'file' && fileEditors.hasDirty(f.id, doc.path)}
             key={f.id}
             docs={docs}
             activeId={ws.activeDocId}
@@ -417,6 +422,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
             onActivate={ws.activateDoc}
             onClose={ws.closeDoc}
             onPin={ws.pinDoc}
+            tabMenu={(doc) => currentFileTabMenu(doc, editCurrent)}
             empty={
               <EditorEmptyState
                 hints={hints}

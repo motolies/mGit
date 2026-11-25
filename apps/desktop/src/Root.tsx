@@ -1,4 +1,5 @@
 import { App } from './App';
+import { FileEditorCloseDialog } from './features/workspace/FileEditorCloseDialog';
 import { useAppStore } from './store';
 
 /**
@@ -7,5 +8,10 @@ import { useAppStore } from './store';
  */
 export function Root() {
   const uiLocale = useAppStore((s) => s.uiLocale);
-  return <App key={uiLocale} />;
+  return (
+    <>
+      <App key={uiLocale} />
+      <FileEditorCloseDialog />
+    </>
+  );
 }

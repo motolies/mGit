@@ -3,6 +3,7 @@ import { IpcClientError } from '../client';
 import { EMPTY_COMMIT_FILTER, isEmptyCommitFilter } from '../commit-filter';
 import type {
   ContainingRefs,
+  FileDiff,
   GraphQuery,
   HeadState,
   IndexTarget,
@@ -599,6 +600,50 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
     return root;
   };
 
+  const editedFiles = new Map<string, { before: string; after: string }>();
+  /** 저장한 목 원문은 작업 트리 diff에 반영하고 staged diff 재료는 그대로 둔다. */
+  const editedDiff = (session: SessionId, path: string): FileDiff | undefined => {
+    const edit = editedFiles.get(`${fsRootOf(session)}/${path}`);
+    if (!edit) return undefined;
+    const linesOf = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
+    const old = linesOf(edit.before);
+    const next = linesOf(edit.after);
+    return {
+      oldPath: path,
+      newPath: path,
+      change: { kind: 'modified' },
+      binary: null,
+      truncated: false,
+      totalLines: old.length + next.length,
+      nonUtf8: false,
+      hunks: [
+        {
+          oldStart: old.length ? 1 : 0,
+          oldLines: old.length,
+          newStart: next.length ? 1 : 0,
+          newLines: next.length,
+          section: '',
+          lines: [
+            ...old.map((text, i) => ({
+              kind: 'del' as const,
+              oldNo: i + 1,
+              newNo: null,
+              text,
+              noNewline: i === old.length - 1 && !edit.before.endsWith('\n'),
+            })),
+            ...next.map((text, i) => ({
+              kind: 'add' as const,
+              oldNo: null,
+              newNo: i + 1,
+              text,
+              noNewline: i === next.length - 1 && !edit.after.endsWith('\n'),
+            })),
+          ],
+        },
+      ],
+    };
+  };
+
   /** 파일 내용 (blame 재료). 장면이 없거나 텍스트가 아니면 null */
   const textOf = (session: SessionId, path: string): string | null => {
     if (!scene) {
@@ -1004,6 +1049,7 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
             mockContainingRefs(entryOf(session).source.graph, dataOf(session).repoState.refs, oid),
           ),
         workTreeDiff: async (session, path, staged) =>
+          (!staged ? editedDiff(session, path) : undefined) ??
           mockWorkTreeDiff(dataOf(session), path, staged),
         listStashes: async (session) => dataOf(session).listStashes,
         stashFiles: async (session) => dataOf(session).stashFiles,
@@ -1814,6 +1860,65 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         async fsReadFile(session, path) {
           countMockCall('fsReadFile');
           return scene.fs.read(fsRootOf(session), path);
+        },
+        async fsReadImage(session, path) {
+          countMockCall('fsReadImage');
+          return scene.fs.readImage(fsRootOf(session), path);
+        },
+        async fsReadEditableFile(session, path) {
+          countMockCall('fsReadEditableFile');
+          return scene.fs.readEditable(fsRootOf(session), path);
+        },
+        async fsSaveFile(session, path, expectedRevision, text) {
+          countMockCall('fsSaveFile');
+          const root = fsRootOf(session);
+          const before = scene.fs.read(root, path);
+          const result = scene.fs.save(root, path, expectedRevision, text);
+          if (result.kind !== 'saved' || before.kind !== 'text') return result;
+          const absolute = `${root}/${path}`;
+          editedFiles.set(absolute, {
+            before: editedFiles.get(absolute)?.before ?? before.text,
+            after: text,
+          });
+          /** 저장된 경로의 작업 트리 상태만 바꾸고 index 값은 보존한다. */
+          const changed = (entries: StatusEntry[], relative: string): StatusEntry[] => {
+            const found = entries.find((entry) => entry.path === relative);
+            if (!found)
+              return [...entries, { path: relative, index: 'unmodified', worktree: 'modified' }];
+            return entries.map((entry) =>
+              entry !== found
+                ? entry
+                : { ...entry, worktree: entry.worktree === 'untracked' ? 'untracked' : 'modified' },
+            );
+          };
+          for (const [id, entry] of sessions) {
+            if (!entry.data || !absolute.startsWith(`${entry.path}/`)) continue;
+            const relative = absolute.slice(entry.path.length + 1);
+            entry.data.repoState = mockStatusWith(
+              entry.data.repoState,
+              changed(entry.data.repoState.status.entries, relative),
+            );
+            entry.emit({
+              type: 'statusChanged',
+              session: id,
+              status: entry.data.repoState.status,
+              op: entry.data.repoState.op ?? null,
+            });
+          }
+          for (const [id, folder] of folders) {
+            for (const repo of folder.data.openFolder) {
+              if (!absolute.startsWith(`${repo.path}/`)) continue;
+              const relative = absolute.slice(repo.path.length + 1);
+              setMockFolderEntries(
+                folder.data,
+                repo.path,
+                changed(mockFolderEntries(folder.data, repo.path), relative),
+                false,
+              );
+              folder.emit({ type: 'folderChanged', session: id, refs: false, repo: repo.path });
+            }
+          }
+          return result;
         },
 
         /**

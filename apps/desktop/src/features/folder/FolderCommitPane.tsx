@@ -10,6 +10,7 @@ import { ChangedFilesTree } from '../detail/ChangedFilesTree';
 import { CommitDetailView } from '../detail/CommitDetailView';
 import type { ContainingLine } from '../detail/ContainingBranches';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
+import { useCurrentFile } from '../workspace/use-current-file';
 import styles from './FolderCommitPane.module.css';
 
 /** 변경 파일 트리 | 커밋 상세 세로 분할의 저장 id (앱 전역 1벌). 키는 `react-resizable-panels:git-detail` */
@@ -43,6 +44,7 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
     showContaining: st.showContaining,
     retryContaining: st.retryContaining,
   }));
+  const editCurrent = useCurrentFile();
   const openDoc = useWorkspace((w) => w.openDoc);
   // Blame·파일 히스토리·외부 도구는 그 커밋의 저장소 세션으로 연다 (W13 — 요청할 때만 열린다)
   const repoActions = useRepoSessionActions();
@@ -128,6 +130,13 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
           : [];
       return [
         { label: S.menu.showDiff, onSelect: () => open(d, file, 'pinned') },
+        {
+          label: S.fileView.editCurrent,
+          disabled: repoPath === null,
+          onSelect: () => {
+            if (repoPath !== null) editCurrent(repoPath, file.path, repoName);
+          },
+        },
         ...session,
         {
           label: S.menu.copyPath,

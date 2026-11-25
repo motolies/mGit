@@ -154,7 +154,7 @@ describe('파일 API 목 (W10) — folder 장면', () => {
     expect(kindOf('agent.sock')).toMatchObject({ kind: 'other', openable: false });
     expect(kindOf('vanished.log')).toMatchObject({ kind: 'file', openable: true });
     const read = (path: string) => client.fsReadFile(session, `samples/${path}`);
-    expect(await read('logo.png')).toEqual({ kind: 'binary', size: 18_432 });
+    expect(await read('logo.png')).toEqual({ kind: 'binary', size: 68 });
     expect(await read('heap-dump.hprof')).toEqual({
       kind: 'tooLarge',
       size: 48_234_496,
@@ -340,5 +340,90 @@ describe('파일 API 목 (W10) — repo·conflict 장면', () => {
     const client = createMockClient({ rows: 50, progressIntervalMs: 0 });
     const opened = await client.openRepo('/mock/repo-50', ignore);
     await expect(client.fsListDir(opened.session, '')).rejects.toThrow();
+  });
+});
+
+describe('현재 파일 편집 API 목', () => {
+  it('폴더와 저장소에서 같은 키를 공유하고 오래된 revision 저장을 거부한다', async () => {
+    const { client, session, path } = await open('folder');
+    const repo = (await client.openRepo(`${path}/api-gateway`, ignore)).session;
+    const fromFolder = await client.fsReadEditableFile(session, 'api-gateway/README.md');
+    const fromRepo = await client.fsReadEditableFile(repo, 'README.md');
+    expect(fromFolder.kind).toBe('text');
+    if (fromFolder.kind !== 'text' || fromRepo.kind !== 'text') throw new Error('텍스트여야 한다');
+    expect(fromRepo.fileKey).toBe(fromFolder.fileKey);
+    expect(fromRepo.revision).toBe(fromFolder.revision);
+    const stagedBefore = (await client.repoState(repo)).status.entries.filter(
+      (entry) => entry.index !== 'unmodified',
+    );
+    const text = '\ufeff한글😀\r\n끝';
+    const saved = await client.fsSaveFile(repo, 'README.md', fromRepo.revision, text);
+    expect(saved.kind).toBe('saved');
+    expect(
+      (await client.repoState(repo)).status.entries.filter((entry) => entry.index !== 'unmodified'),
+    ).toEqual(stagedBefore);
+    expect(
+      (await client.workTreeDiff(repo, 'README.md', false, false))?.hunks[0]?.lines.some(
+        (line) => line.kind === 'add' && line.text.includes('한글😀'),
+      ),
+    ).toBe(true);
+    expect(await client.fsReadFile(session, 'api-gateway/README.md')).toMatchObject({
+      kind: 'text',
+      text,
+    });
+    expect(
+      await client.fsSaveFile(session, 'api-gateway/README.md', fromFolder.revision, 'late'),
+    ).toEqual({ kind: 'conflict' });
+    expect(await client.fsReadEditableFile(repo, 'README.md')).toMatchObject({
+      kind: 'text',
+      bom: true,
+      lineEnding: 'crlf',
+      text,
+    });
+  });
+
+  it('용량·혼합 줄 끝·경로 제한을 유지하며 실패 시 원문을 보존한다', async () => {
+    const { client, session } = await open('folder');
+    const file = await client.fsReadEditableFile(session, 'README.md');
+    if (file.kind !== 'text') throw new Error('텍스트여야 한다');
+    for (const text of ['x'.repeat(1024 * 1024 + 1), 'a\nb\r\n', 'a\0b']) {
+      expect(await client.fsSaveFile(session, 'README.md', file.revision, text)).toMatchObject({
+        kind: 'failed',
+      });
+    }
+    expect(await client.fsReadEditableFile(session, 'README.md')).toEqual(file);
+    expect(await rejectionKind(client.fsSaveFile(session, '../x', file.revision, 'bad'))).toBe(
+      'internal',
+    );
+    expect(await rejectionKind(client.fsReadEditableFile(99999, 'README.md'))).toBe(
+      'sessionNotFound',
+    );
+  });
+});
+
+describe('이미지 조회', () => {
+  it('실제 이미지 data URL과 상태를 반환하고 세션·경로 경계를 유지한다', async () => {
+    const { client, session } = await open('folder');
+    expect(await client.fsReadImage(session, 'samples/logo.png')).toMatchObject({
+      kind: 'image',
+      mime: 'image/png',
+      size: 68,
+      dataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+    });
+    expect(await client.fsReadImage(session, 'samples/current')).toEqual({ kind: 'unsupported' });
+    expect(await client.fsReadImage(session, 'README.md')).toEqual({ kind: 'unsupported' });
+    expect(await client.fsReadImage(session, 'private/credentials.json')).toEqual({
+      kind: 'denied',
+    });
+    expect(await client.fsReadImage(session, 'gone.png')).toEqual({ kind: 'missing' });
+    expect(await client.fsReadImage(session, 'samples/heap-dump.hprof')).toMatchObject({
+      kind: 'tooLarge',
+      limit: 5 * 1024 * 1024,
+    });
+    expect(await rejectionKind(client.fsReadImage(session, '../secret.png'))).toBe('internal');
+    expect(await rejectionKind(client.fsReadImage(session, '.git/image.png'))).toBe('internal');
+    expect(await rejectionKind(client.fsReadImage(9999, 'samples/logo.png'))).toBe(
+      'sessionNotFound',
+    );
   });
 });

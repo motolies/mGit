@@ -1,5 +1,5 @@
 import type { RepoChanges, RepoKind, RepoSummary } from '@mgit/ipc';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { type Action, LEFT_TOOL_PANEL } from '../../actions';
 import { WorkspaceShell } from '../../layout/WorkspaceShell';
 import {
@@ -13,6 +13,7 @@ import {
   useShownLeftTool,
   useWorkspace,
 } from '../../store';
+import { fileEditors } from '../../store/file-editor-store';
 import { baseName, innermostRepo, joinRoot, relativeTo, rootToRepo } from '../../store/fs-path';
 import { allDocs, fileViewDoc } from '../../store/workspace-store';
 import { ChangesPanel } from '../changes/ChangesPanel';
@@ -35,6 +36,7 @@ import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
 import { repoTreeMenu } from './repo-tree-menu';
+import { currentFileTabMenu, useCurrentFile } from './use-current-file';
 import docStyles from './WorktreeDiffDoc.module.css';
 
 /** 에디터 문서가 가리키는 작업 트리 파일의 루트(작업 트리) 기준 경로 (트리에서 찾기). 없으면 null */
@@ -126,6 +128,8 @@ export interface RepoWorkspaceProps {
  *   디렉터리처럼 펼침이고, 저장소 탭으로 열기는 행 메뉴에 있다 (폴더 탭 W11 과 같은 규칙)
  */
 export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
+  const editCurrent = useCurrentFile();
+  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const tabId = useActiveTab()?.id ?? null;
   const s = useSession(pickRepo);
   const tree = useFileTree((t) => ({
@@ -442,6 +446,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
       }
       editor={
         <EditorArea
+          dirtyOf={(doc) => doc.kind === 'file' && fileEditors.hasDirty(tabId, doc.path)}
           key={tabId}
           docs={docs}
           activeId={ws.activeDocId}
@@ -452,6 +457,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
           onActivate={ws.activateDoc}
           onClose={ws.closeDoc}
           onPin={ws.pinDoc}
+          tabMenu={(doc) => currentFileTabMenu(doc, editCurrent)}
           empty={<EditorEmptyState hints={hints} action={emptyAction} />}
         />
       }

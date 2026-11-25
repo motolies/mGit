@@ -5,7 +5,8 @@ export {
   DiffView,
   type DiffViewProps,
 } from './DiffView';
-export { highlightHunk, parserFor, plainSpans, tokenize } from './highlight';
+export { codeHighlighter, highlightHunk, parserFor, plainSpans, tokenize } from './highlight';
+export { isMarkdownPath, languagePath, loadLanguage } from './languages';
 export {
   buildContextRows,
   buildDocumentRows,

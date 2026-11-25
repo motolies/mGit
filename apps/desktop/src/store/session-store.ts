@@ -410,6 +410,8 @@ export interface SessionState {
   fileTree: FileTreeStore;
   /** 파일 트리의 펼친 디렉터리를 다시 나열한다. 트리를 아직 연 적이 없으면 아무것도 하지 않는다 */
   reloadFiles(): Promise<void>;
+  /** 내용만 저장되어 Git 상태 목록이 같아도 열린 작업 트리 diff를 다시 읽는다. */
+  reloadWorkingFile(path: string): Promise<void>;
   refs: RepoRefs;
   status: WorkTreeStatus;
   op: InProgressOp | null;
@@ -2055,6 +2057,13 @@ export function createSessionStore(
         set({ selectedFile: target, diff: null });
         options.onRevealDoc?.('diff');
         await loadDiff(target, false);
+      },
+
+      async reloadWorkingFile(path) {
+        const target = get().selectedFile;
+        if (target?.path === path && !target.staged && !target.commit && !target.range) {
+          await loadDiff(target, diffFull);
+        }
       },
 
       async openCommitFile(oid, path, oldPath = null) {

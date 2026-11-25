@@ -25,6 +25,8 @@ import { getLocale, type Locale, S } from '@mgit/ui';
 import { create, type StoreApi } from 'zustand';
 import { commitRevealStep, EMPTY_COMMIT_REVEAL } from './commit-reveal';
 import { describeError } from './errors';
+import { guardFileEditorClose } from './file-editor-close';
+import { fileEditors } from './file-editor-store';
 import { createFolderStore } from './folder-store';
 import {
   applyLanguage,
@@ -799,6 +801,7 @@ export function createRepoWorkspace(
   app: () => RepoWorkspaceApp,
 ): WorkspaceStore {
   return createWorkspaceStore('repo', {
+    beforeCloseFile: (path) => guardFileEditorClose([{ session, path }]),
     onDocOpened: () => app().setDockMaximized(false),
     closeSessionDoc: (doc) =>
       doc.kind === 'conflict'
@@ -1679,6 +1682,7 @@ export function createAppStore(deps: AppStoreDeps) {
           // 문서가 열리면 본문을 덮은 아래 도구 창(최대화)을 푼다 (WS-03). 범위 세션이 바쁘면 활성 저장소를 잠근다.
           // 세션 문서를 닫으면 그 저장소 세션의 슬롯을 비운다 (W14 작업 트리 diff, W15 충돌 — 초안이 있으면 확인)
           const wsStore = createWorkspaceStore('folder', {
+            beforeCloseFile: (path) => guardFileEditorClose([{ session: id, path }]),
             onDocOpened: () => get().setDockMaximized(false),
             activeRepoLocked: () => folderActiveRepoLocked(id),
             closeSessionDoc: (doc) =>
@@ -1826,6 +1830,8 @@ export function createAppStore(deps: AppStoreDeps) {
         if (!meta) {
           return;
         }
+        const closingIds = [id, ...sessionOrder.filter((child) => sessions[child]?.parent === id)];
+        if (!(await guardFileEditorClose(closingIds.map((session) => ({ session }))))) return;
         // 폴더 탭을 닫으면 거기서 연 하위 저장소 탭도 닫는다
         if (meta.kind === 'folder') {
           for (const child of sessionOrder) {
@@ -1854,6 +1860,7 @@ export function createAppStore(deps: AppStoreDeps) {
         });
         persistTabs();
         disposeWorkspace(id);
+        fileEditors.releaseSession(id);
         folderRepoWatches.get(id)?.();
         folderRepoWatches.delete(id);
         for (const session of held) {

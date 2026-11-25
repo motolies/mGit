@@ -39,7 +39,7 @@ mod state;
 
 use std::path::Path;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_specta::{Builder, collect_commands};
 
 /// specta 빌더. 커맨드 목록의 단일 출처이며 run() 과 바인딩 export 테스트가 공유한다
@@ -259,6 +259,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_folder::folder_commit_file_diff_document,
             commands_fs::fs_list_dir,
             commands_fs::fs_read_file,
+            commands_fs::fs_read_image,
+            commands_fs::fs_read_editable_file,
+            commands_fs::fs_save_file,
             commands_submodule::submodule_pointer_log,
             commands_submodule::submodule_add,
             commands_submodule::submodule_adopt,
@@ -357,11 +360,61 @@ pub fn run() {
             app_state.set_startup_paths(existing_paths(argv.iter(), &cwd));
             app.manage(app_state);
             app.manage(pty::PtyState::default());
+            install_quit_guard(app.handle())?;
             Ok(())
         })
         .invoke_handler(builder.invoke_handler())
-        .run(tauri::generate_context!())
-        .expect("mGit 실행 실패");
+        .build(tauri::generate_context!())
+        .expect("mGit 실행 실패")
+        .run(|app, event| {
+            // 메뉴 종료·Cmd+Q도 프런트의 초안 저장 보호를 거친다. 보호가 끝나 창을 파괴하면 종료를 허용한다.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event
+                && let Some(window) = app.get_webview_window("main")
+            {
+                api.prevent_exit();
+                let _ = window.emit("mgit-close-requested", ());
+            }
+        });
+}
+
+/// 네이티브 기본 Quit은 macOS의 terminate:로 곧바로 종료하므로 같은 제목의 일반 메뉴로 교체한다.
+/// 일반 메뉴 이벤트는 창 닫기와 같은 프런트 저장 확인을 거치고, OS 편집 메뉴는 그대로 유지한다.
+fn install_quit_guard(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+    let menu = Menu::default(app)?;
+    let native_quit = PredefinedMenuItem::quit(app, None)?;
+    let quit_text = native_quit.text()?;
+    let guarded_quit = MenuItem::with_id(
+        app,
+        "mgit-guarded-quit",
+        &quit_text,
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    for item in menu.items()? {
+        let MenuItemKind::Submenu(submenu) = item else {
+            continue;
+        };
+        for (position, child) in submenu.items()?.into_iter().enumerate() {
+            if let MenuItemKind::Predefined(predefined) = child
+                && predefined.text()? == quit_text
+            {
+                submenu.remove(&predefined)?;
+                submenu.insert(&guarded_quit, position)?;
+            }
+        }
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "mgit-guarded-quit" {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.emit("mgit-close-requested", ());
+            } else {
+                app.exit(0);
+            }
+        }
+    });
+    Ok(())
 }
 
 /// 인자 중 존재하는 경로만 절대 경로로 (상대 경로는 `cwd` 기준). 플래그는 버린다
@@ -407,8 +460,8 @@ mod tests {
         );
     }
 
-    /// FS-13: 웹뷰 권한 스냅샷. 파일 API(W10)는 코어 커맨드로만 열고 Tauri capability·CSP·fs 플러그인은
-    /// 건드리지 않는다. 이 값을 바꿔야 한다면 계획의 FS-13 을 함께 개정하고 이유를 남긴다
+    /// 파일 API는 코어 경계로 제한한다. 저장 보호가 끝난 뒤에만 창을 파괴하도록 destroy 권한을 추가한다.
+    /// 파일 시스템 플러그인 권한은 유지하고 CSP는 미리보기 이미지에만 HTTP(S)를 허용한다.
     #[test]
     fn webview_capability_and_csp_are_pinned() {
         let cap: serde_json::Value =
@@ -416,7 +469,12 @@ mod tests {
         assert_eq!(cap["windows"], serde_json::json!(["main"]));
         assert_eq!(
             cap["permissions"],
-            serde_json::json!(["core:default", "dialog:allow-open", "notification:default"])
+            serde_json::json!([
+                "core:default",
+                "core:window:allow-destroy",
+                "dialog:allow-open",
+                "notification:default"
+            ])
         );
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
         let mut files: Vec<String> = std::fs::read_dir(dir)
@@ -431,12 +489,12 @@ mod tests {
         let security = &conf["app"]["security"];
         assert_eq!(
             security["csp"],
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+            "default-src 'self'; img-src 'self' data: http: https:; style-src 'self' 'unsafe-inline'; \
              connect-src ipc: http://ipc.localhost"
         );
         assert_eq!(
             security["devCsp"],
-            "default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; \
+            "default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline'; \
              style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost \
              ws://localhost:1420"
         );

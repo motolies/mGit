@@ -522,6 +522,12 @@ export const commands = {
 	fsListDir: (session: number, dir: string, limit: number | null) => __TAURI_INVOKE<FsDirListingDto_Serialize>("fs_list_dir", { session, dir, limit }),
 	/**  세션 루트 기준 상대 경로의 파일 하나를 텍스트로 읽는다 (FS-01~08). 상한은 1 MiB */
 	fsReadFile: (session: number, path: string) => __TAURI_INVOKE<FsFileDto>("fs_read_file", { session, path }),
+	/**  세션 루트의 이미지를 정규 파일과 5 MiB 상한 안에서 읽는다. */
+	fsReadImage: (session: number, path: string) => __TAURI_INVOKE<FsImageDto>("fs_read_image", { session, path }),
+	/**  안전한 원문 편집 조회를 세션 루트에 한정한다. */
+	fsReadEditableFile: (session: number, path: string) => __TAURI_INVOKE<FsEditableFileDto>("fs_read_editable_file", { session, path }),
+	/**  expected revision과 현재 파일이 같을 때만 원문을 저장한다. */
+	fsSaveFile: (session: number, path: string, expectedRevision: string, text: string) => __TAURI_INVOKE<FsSaveResultDto>("fs_save_file", { session, path, expectedRevision, text }),
 	/**  포인터 변경 사이의 commit (SUB-04) */
 	submodulePointerLog: (session: number, path: string, old: string | null, newOid: string) => __TAURI_INVOKE<SubmodulePointerLogDto>("submodule_pointer_log", { session, path, old, newOid }),
 	/**  서브모듈 추가 (SUB-05) */
@@ -1486,6 +1492,9 @@ export type FsDirListingDto_Serialize =
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
 
+/**  원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. */
+export type FsEditableFileDto = { kind: "text"; text: string; size: number; fileKey: string; revision: string; lineEnding: FsLineEndingDto; bom: boolean } | { kind: "binary"; size: number } | { kind: "notUtf8"; size: number } | { kind: "tooLarge"; size: number; limit: number } | { kind: "unsupported"; fileKind: FsEntryKindDto } | { kind: "missing" } | { kind: "denied" } | { kind: "mixedLineEndings" };
+
 /**  디렉터리 항목 하나 */
 export type FsEntryDto = FsEntryDto_Serialize | FsEntryDto_Deserialize;
 
@@ -1534,6 +1543,15 @@ export type FsFileDto =
 { kind: "missing" } | 
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
+
+/**  로컬 이미지 조회 결과. SVG도 앱 DOM 대신 이미지 문맥에서만 사용한다. */
+export type FsImageDto = { kind: "image"; mime: string; dataUrl: string; size: number } | { kind: "missing" } | { kind: "denied" } | { kind: "unsupported" } | { kind: "tooLarge"; size: number; limit: number };
+
+/**  저장할 줄 끝 형식이다. */
+export type FsLineEndingDto = "lf" | "crlf";
+
+/**  저장 응답에는 본문을 싣지 않아 늦은 응답이 새 초안을 덮어쓰지 않는다. */
+export type FsSaveResultDto = { kind: "saved"; revision: string } | { kind: "conflict" } | { kind: "failed"; message: string };
 
 /**  실패한 쓰기 명령의 힌트 */
 export type GitHint = { kind: "dirtyWorkTree"; files: string[] } | { kind: "branchCheckedOutElsewhere"; path: string } | { kind: "notFullyMerged" } | { kind: "conflicts" } | { kind: "indexLock" } | { kind: "nonFastForward" } | { kind: "authFailed" } | { kind: "staleInfo" } | { kind: "detachedHead" } | { kind: "nothingToCommit" } | { kind: "hookFailed" } | { kind: "noUpstream" } | { kind: "remoteTagExists" } | { kind: "remoteRejected"; reason: string };

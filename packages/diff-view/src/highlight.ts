@@ -1,28 +1,30 @@
-import { LanguageDescription } from '@codemirror/language';
-import { languages } from '@codemirror/language-data';
 import type { Parser } from '@lezer/common';
-import { classHighlighter, highlightCode } from '@lezer/highlight';
+import {
+  classHighlighter,
+  type Highlighter,
+  highlightCode,
+  tagHighlighter,
+  tags,
+} from '@lezer/highlight';
 import type { Hunk } from '@mgit/ipc';
 import type { Span } from './word-diff';
 
-const parserCache = new Map<string, Promise<Parser | null>>();
+export { parserFor } from './languages';
 
-/** 파일명으로 언어 파서를 찾아 lazy 로드한다. 모르는 확장자면 null */
-export function parserFor(path: string): Promise<Parser | null> {
-  const desc = LanguageDescription.matchFilename(languages, path);
-  if (!desc) {
-    return Promise.resolve(null);
-  }
-  let cached = parserCache.get(desc.name);
-  if (!cached) {
-    cached = desc
-      .load()
-      .then((support) => support.language.parser)
-      .catch(() => null);
-    parserCache.set(desc.name, cached);
-  }
-  return cached;
-}
+const markdownHighlighter = tagHighlighter([
+  { tag: tags.monospace, class: 'tok-monospace' },
+  { tag: tags.strikethrough, class: 'tok-strikethrough' },
+]);
+
+/** 기본 토큰 클래스에 Markdown 인라인 코드·취소선만 보완해 모든 화면에서 공유한다. */
+export const codeHighlighter: Highlighter = {
+  style(tags) {
+    return (
+      [classHighlighter.style(tags), markdownHighlighter.style(tags)].filter(Boolean).join(' ') ||
+      null
+    );
+  },
+};
 
 /** 텍스트를 파싱해 줄별 구문 조각으로 바꾼다 (`tok-*` 클래스) */
 export function tokenize(parser: Parser, text: string): Span[][] {
@@ -31,7 +33,7 @@ export function tokenize(parser: Parser, text: string): Span[][] {
   highlightCode(
     text,
     tree,
-    classHighlighter,
+    codeHighlighter,
     (code, cls) => {
       lines[lines.length - 1]?.push({ text: code, cls });
     },

@@ -2,6 +2,7 @@ import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
 import { ActionErrorBar } from '../../components/ActionErrorBar';
 import { useModal } from '../../components/use-modal';
 import { useSession } from '../../store';
+import { useCurrentFile } from '../workspace/use-current-file';
 import { useFolderDialogTarget } from './folder-target';
 import styles from './history.module.css';
 
@@ -10,7 +11,10 @@ import styles from './history.module.css';
  * 보이고, 해시를 누르면 그래프 대신 로그 선택과 커밋 diff 탭으로 간다
  */
 export function FileHistoryDialog() {
+  const editCurrent = useCurrentFile();
   const s = useSession((st) => ({
+    repoPath: st.path,
+    repoName: st.name,
     h: st.fileHistory,
     close: st.closeFileHistory,
     openCommitFile: st.openCommitFile,
@@ -45,6 +49,14 @@ export function FileHistoryDialog() {
           ) : null}
           <span className={styles.muted}>{S.history.limit(h.entries.length)}</span>
           <span className={styles.spacer} />
+          <Button
+            onClick={() => {
+              s.close();
+              editCurrent(s.repoPath, h.path, s.repoName);
+            }}
+          >
+            {S.fileView.editCurrent}
+          </Button>
           <Button onClick={s.close}>{S.history.close}</Button>
         </header>
         <ActionErrorBar />

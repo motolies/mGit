@@ -1,6 +1,7 @@
 //! 파일 트리·파일 보기 API (W10: FS-01~10, PT-01·03·09, ED-04). 세션의 루트 아래만 읽는다 — 저장소
 //! 세션은 작업 트리, 폴더 세션은 폴더 경로이고, API 는 루트·절대 경로를 받지 않는다 (FS-01).
-//! git 을 실행하지 않고 파일을 만들거나 고치지 않는다 (FS-10). 파일 시스템 호출은 블로킹이므로
+//! 조회 API는 git 을 실행하지 않고 파일을 만들거나 고치지 않는다 (FS-10). 편집·저장은 `edit` 모듈에서
+//! 별도 revision 계약으로 처리한다. 파일 시스템 호출은 블로킹이므로
 //! `spawn_blocking` 에서 돈다 (항목이 수만 개인 디렉터리도 비동기 런타임을 막지 않는다).
 //!
 //! 경로 하나는 이 순서로 다룬다:
@@ -40,6 +41,11 @@ use crate::conflict::has_nul_in_probe;
 use crate::core::Core;
 use crate::error::CoreError;
 use crate::events::SessionId;
+
+mod edit;
+mod image;
+pub use edit::{FsEditableFile, FsLineEnding, FsSaveResult};
+pub use image::{FS_IMAGE_MAX_BYTES, FsImage};
 
 /// 나열 항목 수의 기본 상한 (FS-09, PT-03)
 pub const FS_LIST_DEFAULT_LIMIT: u32 = 2_000;

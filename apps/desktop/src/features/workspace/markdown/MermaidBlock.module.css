@@ -1,0 +1,27 @@
+.block {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-block: 12px;
+  overflow: auto;
+}
+.block img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 12px;
+}
+.block summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.block pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.block [role="alert"] {
+  color: var(--danger);
+  white-space: pre-wrap;
+  margin-bottom: 8px;
+}

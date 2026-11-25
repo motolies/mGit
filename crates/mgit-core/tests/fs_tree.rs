@@ -927,3 +927,30 @@ async fn names_order_and_metadata() {
         assert!(src.mtime_ms.is_some());
     }
 }
+
+/// 이미지 조회도 저장소·폴더 세션의 루트만 사용하고 닫힌 세션을 거부한다.
+#[tokio::test]
+async fn images_use_repo_and_folder_session_roots() {
+    for root in roots().await {
+        write(&root.path.join("docs/한글 그림.svg"), "<svg/>");
+        assert!(matches!(
+            root.core
+                .fs_read_image(root.session, "docs/한글 그림.svg")
+                .await
+                .unwrap(),
+            mgit_core::FsImage::Image { size: 6, .. }
+        ));
+        assert!(matches!(
+            root.core
+                .fs_read_image(root.session, ".git/mgit-marker")
+                .await,
+            Err(CoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            root.core
+                .fs_read_image(SessionId(u32::MAX), "docs/한글 그림.svg")
+                .await,
+            Err(CoreError::SessionNotFound(_))
+        ));
+    }
+}

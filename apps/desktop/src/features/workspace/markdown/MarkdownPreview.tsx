@@ -1,0 +1,317 @@
+import { languagePath, parserFor, type Span, tokenize } from '@mgit/diff-view';
+import type { FsImage, IpcClient, SessionId } from '@mgit/ipc';
+import { S } from '@mgit/ui';
+import {
+  Children,
+  isValidElement,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { canHighlight, countLines } from '../FileView';
+import styles from './MarkdownPreview.module.css';
+import { MermaidBlock } from './MermaidBlock';
+import { localImagePath, type MarkdownViewState } from './preview-state';
+
+export interface PreviewSource {
+  client: IpcClient;
+  session: SessionId;
+  path: string;
+}
+type ImageCache = Map<string, Promise<FsImage>>;
+
+/** 코드 블록도 소스 편집기와 동일한 파서·토큰을 사용한다. */
+function CodeBlock({ source, language }: { source: string; language: string }) {
+  const [result, setResult] = useState<{
+    source: string;
+    language: string;
+    spans: Span[][];
+  } | null>(null);
+  useEffect(() => {
+    let live = true;
+    const path = languagePath(language);
+    if (path)
+      void parserFor(path, [source]).then((parser) => {
+        if (live && parser) setResult({ source, language, spans: tokenize(parser, source) });
+      });
+    return () => {
+      live = false;
+    };
+  }, [source, language]);
+  const spans = result?.source === source && result.language === language ? result.spans : null;
+  return (
+    <pre>
+      <code>
+        {spans
+          ? spans.map((line, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 파싱 결과의 줄과 조각은 위치로 식별한다.
+              <span key={index}>
+                {index ? '\n' : ''}
+                {line.map((span, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 같은 줄의 토큰 위치다.
+                  <span key={i} className={span.cls || undefined}>
+                    {span.text}
+                  </span>
+                ))}
+              </span>
+            ))
+          : source}
+      </code>
+    </pre>
+  );
+}
+
+/** 로컬 요청을 공유하며 브라우저 이미지 실패에도 대체 텍스트와 이유를 표시한다. */
+function PreviewImage({
+  src,
+  alt,
+  title,
+  source,
+  cache,
+}: {
+  src: string;
+  alt: string;
+  title?: string;
+  source: PreviewSource;
+  cache: ImageCache;
+}) {
+  const remote = /^https?:\/\//i.test(src);
+  const path = remote ? null : localImagePath(source.path, src);
+  const [result, setResult] = useState<FsImage | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setResult(null);
+    setFailed(false);
+    if (!remote && path) {
+      let request = cache.get(path);
+      if (!request) {
+        request = source.client
+          .fsReadImage(source.session, path)
+          .catch((): FsImage => ({ kind: 'denied' }));
+        cache.set(path, request);
+      }
+      void request.then((image) => {
+        if (live) setResult(image);
+      });
+    }
+    return () => {
+      live = false;
+    };
+  }, [remote, path, source.client, source.session, cache]);
+  const reason = failed
+    ? S.markdown.imageFailed
+    : !remote && !path
+      ? S.markdown.imagePath
+      : result && result.kind !== 'image'
+        ? S.markdown.imageErrors[result.kind]
+        : null;
+  if (reason)
+    return (
+      <span className={styles.error} role="status">
+        {alt || S.markdown.image}: {reason}
+      </span>
+    );
+  const url = remote ? src : result?.kind === 'image' ? result.dataUrl : null;
+  return url ? (
+    <img
+      src={url}
+      alt={alt}
+      title={title}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  ) : (
+    <span>
+      {alt || S.markdown.image} · {S.markdown.loading}
+    </span>
+  );
+}
+
+/** 제목 안의 강조·링크도 앵커 이름의 텍스트에 포함한다. */
+function plainText(node: ReactNode): string {
+  return Children.toArray(node)
+    .map((child) =>
+      isValidElement<{ children?: ReactNode }>(child)
+        ? plainText(child.props.children)
+        : String(child),
+    )
+    .join('');
+}
+
+/** 실제 적용 테마 속성을 관찰하므로 시스템 테마 변경도 반영한다. */
+function usePreviewTheme(): 'light' | 'dark' {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() =>
+      setTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'),
+    );
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
+/** HTML은 실행하지 않고 현재 초안을 GFM으로 표시한다. 캐시는 새로고침·진입·포커스마다 교체한다. */
+export function MarkdownPreview({
+  text,
+  source,
+  viewState,
+  refreshKey,
+}: {
+  text: string;
+  source: PreviewSource;
+  viewState: MarkdownViewState;
+  refreshKey: string;
+}) {
+  const host = useRef<HTMLElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const restoreTarget = useRef<number | null>(viewState.scrollTop);
+  const { client, session, path } = source;
+  const stableSource = useMemo(() => ({ client, session, path }), [client, session, path]);
+  const theme = usePreviewTheme();
+  const [focusEpoch, setFocusEpoch] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 파일 새로고침과 포커스는 로컬 이미지 캐시 교체 신호다.
+  const cache = useMemo<ImageCache>(
+    () => new Map(),
+    [source.client, source.session, source.path, refreshKey, focusEpoch],
+  );
+  useEffect(() => {
+    const refresh = () => setFocusEpoch((value) => value + 1);
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+  useLayoutEffect(() => {
+    restoreTarget.current = viewState.scrollTop;
+    const restore = () => {
+      if (!host.current || restoreTarget.current === null) return;
+      host.current.scrollTop = restoreTarget.current;
+    };
+    restore();
+    const observer = new ResizeObserver(restore);
+    if (content.current) observer.observe(content.current);
+    return () => observer.disconnect();
+  }, [viewState]);
+  // 코드·이미지 컴포넌트를 초안 갱신마다 다시 마운트하지 않아 늦은 결과와 스크롤을 보존한다.
+  const baseComponents = useMemo<Components>(
+    () => ({
+      pre({ children }) {
+        const child = Children.toArray(children)[0];
+        if (!isValidElement<{ className?: string; children?: ReactNode }>(child))
+          return <pre>{children}</pre>;
+        const language = /language-([^\s]+)/.exec(child.props.className ?? '')?.[1] ?? '';
+        const body = plainText(child.props.children).replace(/\n$/, '');
+        return language.toLowerCase() === 'mermaid' ? (
+          <MermaidBlock source={body} theme={theme} />
+        ) : (
+          <CodeBlock source={body} language={language} />
+        );
+      },
+      img({ src, alt, title }) {
+        return (
+          <PreviewImage
+            key={`${src}-${refreshKey}-${focusEpoch}`}
+            src={typeof src === 'string' ? src : ''}
+            alt={alt ?? ''}
+            title={title}
+            source={stableSource}
+            cache={cache}
+          />
+        );
+      },
+      a({ href, children }) {
+        const anchor = href?.startsWith('#');
+        const external = /^https?:\/\//i.test(href ?? '');
+        if (!anchor && !external) return <span title={S.markdown.localLink}>{children}</span>;
+        return (
+          <a
+            href={href}
+            onClick={(event) => {
+              event.preventDefault();
+              restoreTarget.current = null;
+              if (external && href) void stableSource.client.openUrl(href);
+              else if (href) {
+                let id = href.slice(1);
+                try {
+                  id = decodeURIComponent(id);
+                } catch {
+                  return;
+                }
+                const target = [...(host.current?.querySelectorAll('[id]') ?? [])].find(
+                  (element) => element.id === id,
+                );
+                target?.scrollIntoView({ block: 'start' });
+              }
+            }}
+          >
+            {children}
+          </a>
+        );
+      },
+    }),
+    [stableSource, cache, theme, refreshKey, focusEpoch],
+  );
+  const headings = new Map<string, number>();
+  const components = { ...baseComponents };
+  for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const) {
+    components[tag] = ({ children }) => {
+      const slug = plainText(children)
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+        .replace(/\s/g, '-');
+      const count = headings.get(slug) ?? 0;
+      headings.set(slug, count + 1);
+      const Tag = tag;
+      return <Tag id={`${slug}${count ? `-${count}` : ''}`}>{children}</Tag>;
+    };
+  }
+  return (
+    <section
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: 미리보기 스크롤과 문서 저장 단축키를 위해 포커스를 받는다.
+      tabIndex={0}
+      className={styles.preview}
+      ref={host}
+      aria-label={S.markdown.preview}
+      onPointerDown={() => {
+        restoreTarget.current = null;
+      }}
+      onWheel={() => {
+        restoreTarget.current = null;
+      }}
+      onKeyDown={() => {
+        restoreTarget.current = null;
+      }}
+      onScroll={(event) => {
+        if (restoreTarget.current === null) viewState.scrollTop = event.currentTarget.scrollTop;
+        else if (Math.abs(event.currentTarget.scrollTop - restoreTarget.current) > 1)
+          event.currentTarget.scrollTop = restoreTarget.current;
+      }}
+    >
+      <div ref={content}>
+        {canHighlight(countLines(text), text.length) ? (
+          <ReactMarkdown
+            skipHtml
+            remarkPlugins={[remarkGfm]}
+            components={components}
+            urlTransform={(url, key) => (key === 'src' ? url : defaultUrlTransform(url))}
+          >
+            {text}
+          </ReactMarkdown>
+        ) : (
+          <p role="status">{S.markdown.tooLarge}</p>
+        )}
+      </div>
+    </section>
+  );
+}

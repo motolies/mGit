@@ -1,0 +1,78 @@
+.preview {
+  height: 100%;
+  overflow: auto;
+  overflow-anchor: none;
+  padding: 20px 28px;
+  box-sizing: border-box;
+  color: var(--fg);
+  background: var(--bg);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.preview > div > :first-child {
+  margin-top: 0;
+}
+.preview h1,
+.preview h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25em;
+}
+.preview h1 {
+  font-size: 1.8em;
+}
+.preview h2 {
+  font-size: 1.45em;
+}
+.preview h3 {
+  font-size: 1.2em;
+}
+.preview pre {
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-panel);
+  border-radius: 5px;
+}
+.preview code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-panel);
+}
+.preview pre code {
+  line-height: 20px;
+}
+.preview blockquote {
+  border-left: 3px solid var(--accent);
+  margin-left: 0;
+  padding-left: 16px;
+  color: var(--fg-muted);
+}
+.preview table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.preview th,
+.preview td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+.preview th {
+  background: var(--bg-panel);
+}
+.preview a {
+  color: var(--accent);
+}
+.preview img {
+  max-width: 100%;
+  height: auto;
+}
+.preview hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.error {
+  color: var(--danger);
+  font-size: 12px;
+}

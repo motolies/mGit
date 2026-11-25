@@ -5,6 +5,7 @@ import { describeError, useFolder, useWorkspace } from '../../store';
 import type { CommitDiffTarget } from '../../store/workspace-store';
 import { DiffPaneView } from '../diff/DiffPaneView';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
+import { useCurrentFile } from '../workspace/use-current-file';
 
 /** 읽은 diff 와 그 상태 */
 interface LoadedDiff {
@@ -22,6 +23,7 @@ const LOADING: LoadedDiff = { document: null, loading: true, error: null };
  * 바뀌면 다시 읽는다. 늦게 온 옛 응답은 버린다
  */
 export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
+  const editCurrent = useCurrentFile();
   const read = useFolder((st) => st.readCommitFileDiff);
   const repoActions = useRepoSessionActions();
   const ws = useWorkspace((w) => ({
@@ -82,6 +84,7 @@ export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
       options={ws.options}
       onOptionsChange={ws.setOptions}
       onLoadFull={() => setFullTarget(targetKey)}
+      onEditCurrent={() => editCurrent(repoPath, path, doc.repoName)}
       onDifftool={
         repoActions
           ? () => repoActions.difftool(repoPath, { kind: 'commit', oid, path })

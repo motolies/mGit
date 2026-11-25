@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.13.1",
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/merge": "^6.12.3",

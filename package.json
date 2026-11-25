@@ -24,7 +24,8 @@
     "signing:export": "swift -suppress-warnings scripts/signing-identity.swift export",
     "signing:import": "swift -suppress-warnings scripts/signing-identity.swift import",
     "signing:verify-backup": "swift -suppress-warnings scripts/signing-identity.swift verify-backup",
-    "test:signing": "node --test scripts/signing-tests/signing.test.mjs"
+    "test:signing": "node --test scripts/signing-tests/signing.test.mjs",
+    "release": "bash scripts/release.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",

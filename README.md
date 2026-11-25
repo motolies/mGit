@@ -38,9 +38,7 @@ pnpm build     # .app·.dmg 만들기 → target/release/bundle/
 버전을 고정한 Apple Silicon용 로컬 릴리스는 별도 명령을 사용합니다. 최초에 `pnpm signing:setup`으로 `mGit` 자체 서명 키와 복구용 백업을 준비하고, 공개 인증서 정보와 버전 변경을 검토해 commit합니다.
 
 ```bash
-pnpm release:tag     # 현재 commit에 로컬 annotated 버전 태그 생성
-pnpm release:check   # 버전·태그·작업 트리·서명 키 검사
-pnpm release:macos   # release/v<버전>/에 .app·.dmg·체크섬·manifest 수집
+pnpm release 0.1.1   # 버전 준비·자동 버전 커밋·태그·검사·패키징을 순서대로 실행
 ```
 
 버전 준비는 `pnpm release:prepare <버전>`, 키 백업·복원은 `pnpm signing:export` / `pnpm signing:import --bundle <백업 경로>`입니다. 개인키 백업과 암호는 Git에서 제외되는 `signing/`에 보관합니다. 자세한 순서와 실패 조건은 [패키징 가이드](docs/패키징.md)를 봅니다. 이 흐름은 GitHub push·게시·자동 업데이트를 수행하지 않으며, 자체 서명은 Apple 공증과 별개입니다.

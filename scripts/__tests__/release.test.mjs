@@ -112,13 +112,17 @@ function runner(root, overrides = {}) {
       fs.writeFileSync(path.join(app, 'Contents/Resources/data'), 'resource');
       fs.symlinkSync('Resources/data', path.join(app, 'Contents/data'));
       fs.mkdirSync(path.join(bundle, 'dmg'));
-      fs.writeFileSync(path.join(bundle, 'dmg/mGit_1.2.3_aarch64.dmg'), 'fixture dmg');
+      const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+      fs.writeFileSync(path.join(bundle, `dmg/mGit_${version}_aarch64.dmg`), 'fixture dmg');
       return '';
     }
     if (program === '/usr/bin/plutil')
       return {
-        CFBundleShortVersionString: overrides.version ?? '1.2.3',
-        CFBundleVersion: '1.2.3',
+        CFBundleShortVersionString:
+          overrides.version ??
+          JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version,
+        CFBundleVersion: JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+          .version,
         CFBundleIdentifier: 'io.github.motolies.mgit',
         LSMinimumSystemVersion: '15.0',
         CFBundleExecutable: 'mgit-desktop',
@@ -357,4 +361,63 @@ test('same version preserves all manifest formatting', () => {
   )) {
     assert.equal(content, fs.readFileSync(path.join(ROOT, file), 'utf8'));
   }
+});
+
+// 자동 흐름은 fixture에서만 실제 버전 커밋과 태그를 만든다.
+test('all prepares, commits only versions, tags and packages in order', () => {
+  const root = fixture();
+  const before = git(root, 'rev-parse', 'HEAD');
+  const ctx = context(root);
+  assert.equal(main(['all', '2.3.4'], ctx).output, 'release/v2.3.4');
+  assert.notEqual(git(root, 'rev-parse', 'HEAD'), before);
+  assert.equal(git(root, 'log', '-1', '--format=%s'), '릴리스 버전 v2.3.4 준비');
+  assert.equal(checkVersions(root), '2.3.4');
+  assert.equal(checkTag(ctx.run, root, '2.3.4'), 'v2.3.4');
+  assert.equal(git(root, 'status', '--porcelain'), '');
+  assert.equal(
+    ctx.calls.some((call) => call.program === 'git' && call.args[0] === 'push'),
+    false,
+  );
+});
+
+test('all dry-run describes steps without changing versions or Git', () => {
+  const root = fixture();
+  const before = git(root, 'rev-parse', 'HEAD');
+  const result = main(['all', '2.3.4', '--dry-run'], context(root));
+  assert.deepEqual(result.steps, ['prepare', 'commit', 'tag', 'check', 'macos']);
+  assert.equal(checkVersions(root), '1.2.3');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), before);
+  assert.equal(git(root, 'tag', '--list'), '');
+  assert.equal(fs.existsSync(path.join(root, 'release')), false);
+});
+
+test('all rejects dirty workspaces, unavailable signing and tag collisions before writes', () => {
+  const root = fixture();
+  const before = git(root, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(root, 'unfinished'), 'keep');
+  assert.throws(() => main(['all', '2.3.4'], context(root)), /clean working tree/);
+  fs.unlinkSync(path.join(root, 'unfinished'));
+  assert.throws(
+    () => main(['all', '2.3.4'], context(root, { identity: { status: 'missing' } })),
+    /identity/,
+  );
+  git(root, 'tag', '-a', 'v2.3.4', '-m', 'existing');
+  assert.throws(() => main(['all', '2.3.4'], context(root)), /Tag already exists/);
+  assert.equal(checkVersions(root), '1.2.3');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), before);
+  assert.equal(git(root, 'status', '--porcelain'), '');
+});
+
+test('all resumes a failed build without changing its existing commit or tag', () => {
+  const root = fixture();
+  assert.throws(
+    () => main(['all'], context(root, { signatureFailure: true })),
+    /invalid signature/,
+  );
+  const before = git(root, 'rev-parse', 'HEAD');
+  const tag = git(root, 'rev-parse', 'v1.2.3');
+  assert.equal(main(['all'], context(root)).output, 'release/v1.2.3');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), before);
+  assert.equal(git(root, 'rev-parse', 'v1.2.3'), tag);
+  assert.throws(() => main(['all'], context(root)), /Release already exists/);
 });

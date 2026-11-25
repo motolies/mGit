@@ -381,6 +381,54 @@ function packageMacos(ctx, info) {
   }
 }
 
+/** 버전 변경만 커밋하고 기존 검증·태그·패키징 단계를 순서대로 재사용한다. */
+function releaseAll(ctx, requested, dryRun) {
+  const version = requested === undefined ? checkVersions(ctx.root) : validateVersion(requested);
+  cleanHead(ctx.run, ctx.root);
+  checkMock(ctx.root, ctx.env);
+  if (ctx.platform !== 'darwin' || ctx.arch !== 'arm64')
+    throw new Error('Release requires a native Apple Silicon macOS host.');
+  checkIdentity(ctx.run, ctx.root, ctx.now);
+  const tag = `v${version}`;
+  if (fs.existsSync(path.join(ctx.root, 'release', tag)))
+    throw new Error(`Release already exists: release/${tag}`);
+  const updates = versionUpdates(ctx.root, version);
+  const changed = [...updates.keys()].filter(
+    (file) => fs.readFileSync(path.join(ctx.root, file), 'utf8') !== updates.get(file),
+  );
+  const exists = ctx.run('git', ['tag', '--list', tag], { cwd: ctx.root }) !== '';
+  if (exists) {
+    if (changed.length) throw new Error(`Tag already exists: ${tag}`);
+    checkTag(ctx.run, ctx.root, version);
+  } else if (!changed.length) {
+    const headTags = ctx.run('git', ['tag', '--points-at', 'HEAD'], { cwd: ctx.root });
+    if (headTags.split(/\r?\n/).some((name) => /^v\d/.test(name)))
+      throw new Error('HEAD already has a release tag.');
+  }
+  if (dryRun)
+    return {
+      action: 'all',
+      version,
+      tag,
+      dryRun,
+      files: changed,
+      steps: [
+        ...(changed.length ? ['prepare', 'commit'] : []),
+        ...(exists ? [] : ['tag']),
+        'check',
+        'macos',
+      ],
+    };
+  if (changed.length) {
+    main(['prepare', version], ctx);
+    ctx.run('git', ['add', '--', ...changed], { cwd: ctx.root });
+    ctx.run('git', ['commit', '-m', `릴리스 버전 ${tag} 준비`], { cwd: ctx.root });
+  }
+  if (!exists) main(['tag'], ctx);
+  main(['check'], ctx);
+  return main(['macos'], ctx);
+}
+
 /** 릴리스 준비·검사·로컬 태그·macOS 패키징의 공통 진입점이다. */
 export function main(args, options = {}) {
   const ctx = {
@@ -396,11 +444,12 @@ export function main(args, options = {}) {
   const values = args.filter((value) => value !== '--dry-run');
   const [action, versionArg, ...rest] = values;
   if (
-    !['prepare', 'check', 'tag', 'macos'].includes(action) ||
+    !['prepare', 'check', 'tag', 'macos', 'all'].includes(action) ||
     rest.length ||
-    (action !== 'prepare' && versionArg !== undefined)
+    (!['prepare', 'all'].includes(action) && versionArg !== undefined)
   )
-    throw new Error('Usage: release.mjs prepare X.Y.Z|check|tag|macos [--dry-run]');
+    throw new Error('Usage: release.mjs prepare X.Y.Z|check|tag|macos|all [X.Y.Z] [--dry-run]');
+  if (action === 'all') return releaseAll(ctx, versionArg, dryRun);
   if (action === 'prepare') {
     const updates = versionUpdates(ctx.root, versionArg);
     if (!dryRun) {

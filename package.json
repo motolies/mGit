@@ -13,7 +13,18 @@
     "format": "biome format --write .",
     "typecheck": "pnpm -r --parallel exec tsc --noEmit",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "gen:ipc": "cargo test -p mgit-desktop --lib export_bindings"
+    "gen:ipc": "cargo test -p mgit-desktop --lib export_bindings",
+    "release:prepare": "node scripts/release.mjs prepare",
+    "release:check": "node scripts/release.mjs check",
+    "release:tag": "node scripts/release.mjs tag",
+    "release:macos": "node scripts/release.mjs macos",
+    "test:release": "node --test scripts/__tests__/release.test.mjs",
+    "signing:setup": "swift -suppress-warnings scripts/signing-identity.swift create",
+    "signing:status": "swift -suppress-warnings scripts/signing-identity.swift status",
+    "signing:export": "swift -suppress-warnings scripts/signing-identity.swift export",
+    "signing:import": "swift -suppress-warnings scripts/signing-identity.swift import",
+    "signing:verify-backup": "swift -suppress-warnings scripts/signing-identity.swift verify-backup",
+    "test:signing": "node --test scripts/signing-tests/signing.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",

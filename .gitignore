@@ -23,3 +23,8 @@ proptest-regressions/*.txt.new
 .claude/settings.local.json
 # 브라우저 자동화(Playwright MCP) 산출물
 .playwright-mcp/
+
+# 로컬 서명 비밀과 검증된 릴리스 산출물
+/signing/
+/release/
+/.env.signing.local

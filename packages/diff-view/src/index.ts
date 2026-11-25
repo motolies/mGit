@@ -21,6 +21,8 @@ export {
 } from './rows';
 export {
   changeLineIndices,
+  changeUnits,
+  countSelectedChanges,
   lineKey,
   parseLineKey,
   rangeKeys,

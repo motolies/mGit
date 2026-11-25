@@ -372,3 +372,49 @@ async fn replacement_patch_is_complete_when_each_source_fits() {
     assert!(!doc.diff.truncated);
     assert_eq!(doc.diff.hunks[0].lines.len(), 6);
 }
+
+/// 수정 쌍을 되돌리면 Index와 같은 구간의 선택하지 않은 수정 및 폐기 백업을 보존한다.
+#[tokio::test]
+async fn paired_row_discard_restores_index_without_other_changes() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("text.txt", "HEAD 내용\n확인\n원래 값\n");
+    repo.commit("base");
+    repo.write_file("text.txt", "Index 내용\n확인\n원래 값\n");
+    repo.stage(&["text.txt"]);
+    repo.write_file("text.txt", "Index 내용\n확인 안함\n다른 수정\n");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let opts = DiffOptions::default();
+    let doc = core
+        .work_tree_diff_document(opened.session, "text.txt", false, false, opts)
+        .await
+        .unwrap();
+    assert_eq!(doc.diff.hunks.len(), 1);
+    let lines = doc.diff.hunks[0]
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.text == "확인" || line.text == "확인 안함")
+        .map(|(index, _)| index as u32)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    let before_index = repo.git_ok(["show", ":text.txt"]);
+    let backup = core
+        .discard_lines_checked(
+            opened.session,
+            "text.txt",
+            &[LineSelection { hunk: 0, lines }],
+            opts,
+            Some(&doc.revision),
+        )
+        .await
+        .unwrap();
+    assert!(backup.is_some());
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("text.txt")).unwrap(),
+        "Index 내용\n확인\n다른 수정\n"
+    );
+    assert_eq!(repo.git_ok(["show", ":text.txt"]), before_index);
+}

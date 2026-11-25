@@ -84,6 +84,7 @@ function client(): IpcClient {
         nonUtf8: false,
       }),
     ),
+    workTreeDiffDocument: vi.fn(async () => documentOf()),
     stageLines: vi.fn(async () => {}),
     discardLines: vi.fn(async () => null),
   };

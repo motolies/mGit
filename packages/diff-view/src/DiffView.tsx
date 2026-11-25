@@ -20,7 +20,10 @@ import styles from './DiffView.module.css';
 import { plainSpans } from './highlight';
 import { buildContextRows, buildDocumentRows, buildRows, type DiffRow, type LineRef } from './rows';
 import {
+  changeBlocks,
   changeLineIndices,
+  changeRangeKeys,
+  changeUnits,
   diffContentKey,
   lineKey,
   rangeKeys,
@@ -43,12 +46,13 @@ export type DiffMode = 'unified' | 'split';
 export interface DiffActions {
   /** 버튼 문구에 쓰는 동작 이름 (stage / unstage) */
   verb: 'stage' | 'unstage';
-  onApplyHunk(hunk: number): void;
-  onApplyLines(selection: LineSelection[]): void;
+  disabled?: boolean;
+  onApplyHunk(hunk: number): Promise<boolean>;
+  onApplyLines(selection: LineSelection[]): Promise<boolean>;
   /** 작업 트리 변경일 때만: 되돌리기 */
-  onDiscardHunk?(hunk: number): void;
+  onDiscardHunk?(hunk: number): Promise<boolean>;
   /** false 로 끝나면 (확인에서 취소 등) 선택을 남긴다 */
-  onDiscardLines?(selection: LineSelection[]): Promise<boolean> | undefined;
+  onDiscardLines?(selection: LineSelection[]): Promise<boolean>;
 }
 
 /** 줄 선택 상태. `key` 는 이 선택을 만든 diff 내용이다 */
@@ -181,7 +185,21 @@ export function DiffView({
   const pendingScroll = useRef<{ left?: number; right?: number }>({});
   const [cursor, setCursor] = useState({ key: '', row: 0, side: 'right' as 'left' | 'right' });
   // 비 UTF-8 줄은 코어가 줄 단위 stage·discard 를 거부한다
-  const actions = diff?.nonUtf8 || diff?.truncated || loading ? undefined : givenActions;
+  const actions = diff?.nonUtf8 || diff?.truncated ? undefined : givenActions;
+  const worktree = actions?.verb === 'stage' && !!actions.onDiscardLines;
+  const [selectionUnit, setSelectionUnit] = useState<'block' | 'line'>('block');
+  const blockMode = worktree && selectionUnit === 'block';
+  const units = useMemo(
+    () => diff?.hunks.map(blockMode ? changeBlocks : changeUnits) ?? [],
+    [diff, blockMode],
+  );
+  const blockStarts = useMemo(
+    () => new Set(units.flatMap((hunk, hi) => hunk.map((unit) => lineKey(hi, unit[0] ?? -1)))),
+    [units],
+  );
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
+  const disabled = !!loading || !!actions?.disabled || pending;
   const contentKey = useMemo(
     () => `${diffContentKey(path, diff)}:${document?.revision ?? ''}`,
     [path, diff, document?.revision],
@@ -192,7 +210,7 @@ export function DiffView({
     anchor: null,
   });
   // 다른 diff 의 선택은 쓰지 않는다 (그 위치는 이 diff 에서 다른 줄이다)
-  const selected = !loading && lineState.key === contentKey ? lineState.lines : NO_LINES;
+  const selected = lineState.key === contentKey ? lineState.lines : NO_LINES;
   const anchor = lineState.key === contentKey ? lineState.anchor : null;
   const originals = useMemo(
     () =>
@@ -262,17 +280,42 @@ export function DiffView({
     }
   }, [splitRatio]);
 
-  /** 재조회가 시작되면 같은 내용으로 완료되더라도 이전 선택을 복원하지 않는다. */
+  /** 다른 파일이나 revision으로 전환한 선택은 다시 돌아와도 복원하지 않는다. */
   useEffect(() => {
-    void loading;
-    void mode;
-    void fullFile;
-    void highlightMode;
-    void wrap;
-    void horizontalSync;
-    void tabWidth;
-    setSelection({ key: '', lines: NO_LINES, anchor: null });
-  }, [loading, mode, fullFile, highlightMode, wrap, horizontalSync, tabWidth]);
+    setSelection((previous) =>
+      previous.key === contentKey ? previous : { key: contentKey, lines: NO_LINES, anchor: null },
+    );
+  }, [contentKey]);
+
+  /** 확인창부터 갱신 완료까지 중복 실행을 막고 성공한 요청의 선택만 지운다. */
+  const run = async (action: () => Promise<boolean>) => {
+    if (disabled || pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      if (await action()) {
+        setSelection((previous) =>
+          previous.key === contentKey
+            ? { key: contentKey, lines: NO_LINES, anchor: null }
+            : previous,
+        );
+      }
+    } catch {
+      // 실행 오류는 호출자가 표시하며 실패한 선택은 재시도를 위해 유지한다.
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  };
+
+  /** 화살표는 체크 선택과 무관하게 현재 단위의 변경만 실행한다. */
+  const discardRow = (ref: LineRef) => {
+    const hunk = diff?.hunks[ref.hunk];
+    const discard = actions?.onDiscardLines;
+    if (!hunk || !discard || ref.line.kind === 'context') return;
+    const lines = units[ref.hunk]?.find((unit) => unit.includes(ref.index));
+    if (lines) void run(() => discard([{ hunk: ref.hunk, lines }]));
+  };
 
   /** 줄바꿈·분할 폭 변경 후 좌우를 함께 다시 측정한다. */
   useEffect(() => {
@@ -346,20 +389,30 @@ export function DiffView({
   /** 체크박스·클릭으로 줄 선택을 토글한다. Shift 면 같은 hunk 안의 범위 */
   const toggle = useCallback(
     (ref: LineRef, e: ToggleEvent) => {
-      if (!diff || !actions) {
+      if (!diff || !actions || disabled || pendingRef.current) {
         return;
       }
-      const key = lineKey(ref.hunk, ref.index);
       const next = new Set(selected);
       const h = diff.hunks[ref.hunk];
+      const indices =
+        worktree && h
+          ? (units[ref.hunk]?.find((unit) => unit.includes(ref.index)) ?? [ref.index])
+          : [ref.index];
+      const keys = indices.map((index) => lineKey(ref.hunk, index));
       if (e.shiftKey && anchor && anchor.hunk === ref.hunk && h) {
-        for (const k of rangeKeys(h, ref.hunk, anchor.index, ref.index)) {
+        for (const k of (worktree ? changeRangeKeys : rangeKeys)(
+          h,
+          ref.hunk,
+          anchor.index,
+          ref.index,
+          blockMode,
+        )) {
           next.add(k);
         }
-      } else if (next.has(key)) {
-        next.delete(key);
+      } else if (keys.every((key) => next.has(key))) {
+        for (const key of keys) next.delete(key);
       } else {
-        next.add(key);
+        for (const key of keys) next.add(key);
       }
       setSelection({
         key: contentKey,
@@ -367,7 +420,7 @@ export function DiffView({
         anchor: { hunk: ref.hunk, index: ref.index },
       });
     },
-    [diff, actions, anchor, selected, contentKey],
+    [diff, actions, anchor, selected, contentKey, disabled, worktree, units, blockMode],
   );
 
   const cursorRow =
@@ -454,18 +507,28 @@ export function DiffView({
         target?.kind === 'line'
           ? target.ref
           : target?.kind === 'split'
-            ? target[cursor.side]
+            ? worktree
+              ? (target.right ?? target.left)
+              : target[cursor.side]
             : null;
       if (e.shiftKey && ref && ref.line.kind !== 'context') {
         toggle(ref, e);
       }
       return;
     }
-    if (e.key === ' ') {
+    if (e.key === ' ' || (e.key === 'Enter' && worktree)) {
       e.preventDefault();
-      const ref = row?.kind === 'line' ? row.ref : row?.kind === 'split' ? row[cursor.side] : null;
+      const ref =
+        row?.kind === 'line'
+          ? row.ref
+          : row?.kind === 'split'
+            ? worktree
+              ? (row.right ?? row.left)
+              : row[cursor.side]
+            : null;
       if (ref && ref.line.kind !== 'context') {
-        toggle(ref, e);
+        if (e.key === 'Enter') discardRow(ref);
+        else toggle(ref, e);
       }
     }
   };
@@ -499,6 +562,16 @@ export function DiffView({
 
   /** 선택을 코어 형식으로 */
   const selection = useMemo(() => selectionFromKeys(selected), [selected]);
+  const selectedCount =
+    worktree && diff
+      ? units.reduce(
+          (count, hunkUnits, hi) =>
+            count +
+            hunkUnits.filter((unit) => unit.some((index) => selected.has(lineKey(hi, index))))
+              .length,
+          0,
+        )
+      : selected.size;
   const clearSelection = () => setSelection({ key: contentKey, lines: NO_LINES, anchor: null });
 
   if (!diff) {
@@ -511,7 +584,9 @@ export function DiffView({
     <div
       ref={viewRef}
       className={styles.view}
-      style={{ '--diff-split': `${splitRatio}%` } as CSSProperties}
+      style={
+        { '--diff-split': `${splitRatio}%`, '--diff-ratio': splitRatio / 100 } as CSSProperties
+      }
     >
       <div className={styles.toolbar}>
         <span className={styles.change}>{S.diff.change(diff.change)}</span>
@@ -533,31 +608,46 @@ export function DiffView({
             </button>
           </span>
         )}
-        {actions && selected.size > 0 ? (
-          <span className={styles.selectionActions}>
-            <Button
-              variant="primary"
-              onClick={() => {
-                actions.onApplyLines(selection);
+        {worktree ? (
+          <label className={styles.selectionUnit}>
+            {S.diff.selectionUnit}
+            <select
+              aria-label={S.diff.selectionUnit}
+              value={selectionUnit}
+              disabled={disabled}
+              onChange={(event) => {
                 clearSelection();
+                setSelectionUnit(event.target.value as 'block' | 'line');
               }}
             >
-              {S.diff.applySelected(verb, selected.size)}
-            </Button>
+              <option value="block">{S.diff.blockUnit}</option>
+              <option value="line">{S.diff.lineUnit}</option>
+            </select>
+          </label>
+        ) : null}
+        {actions ? (
+          <span className={styles.selectionActions}>
             {actions.onDiscardLines ? (
               <Button
-                onClick={() => {
-                  void Promise.resolve(actions.onDiscardLines?.(selection)).then((ok) => {
-                    if (ok !== false) {
-                      clearSelection();
-                    }
-                  });
-                }}
+                disabled={disabled || selectedCount === 0}
+                onClick={() =>
+                  void run(() => actions.onDiscardLines?.(selection) ?? Promise.resolve(false))
+                }
               >
-                {S.diff.discardSelected(selected.size)}
+                {worktree ? S.diff.discardSelectedChanges : S.diff.discardSelected(selectedCount)}
               </Button>
             ) : null}
-            <Button onClick={clearSelection}>{S.diff.clearSelection}</Button>
+            <Button
+              variant="primary"
+              disabled={disabled || selectedCount === 0}
+              onClick={() => void run(() => actions.onApplyLines(selection))}
+            >
+              {worktree ? S.diff.stageSelectedChanges : S.diff.applySelected(verb, selectedCount)}
+            </Button>
+            <Button disabled={disabled || selectedCount === 0} onClick={clearSelection}>
+              {S.diff.clearSelection}
+            </Button>
+            <span aria-live="polite">{worktree ? S.diff.selectedChanges(selectedCount) : ''}</span>
           </span>
         ) : null}
         {diff.nonUtf8 ? <span className={styles.truncated}>{S.diff.nonUtf8}</span> : null}
@@ -645,7 +735,8 @@ export function DiffView({
                               type="button"
                               tabIndex={-1}
                               className={styles.link}
-                              onClick={() => actions.onApplyHunk(row.hunk)}
+                              disabled={disabled}
+                              onClick={() => void run(() => actions.onApplyHunk(row.hunk))}
                             >
                               {S.diff.applyHunk(verb)}
                             </button>
@@ -654,7 +745,13 @@ export function DiffView({
                                 type="button"
                                 tabIndex={-1}
                                 className={styles.link}
-                                onClick={() => actions.onDiscardHunk?.(row.hunk)}
+                                disabled={disabled}
+                                onClick={() =>
+                                  void run(
+                                    () =>
+                                      actions.onDiscardHunk?.(row.hunk) ?? Promise.resolve(false),
+                                  )
+                                }
                               >
                                 {S.diff.discardHunk}
                               </button>
@@ -663,7 +760,9 @@ export function DiffView({
                               type="button"
                               tabIndex={-1}
                               className={styles.link}
+                              disabled={disabled}
                               onClick={() => {
+                                if (disabled || pendingRef.current) return;
                                 const h = diff.hunks[row.hunk];
                                 if (!h) {
                                   return;
@@ -686,7 +785,14 @@ export function DiffView({
                         width={width}
                         highlight={highlight}
                         highlightMode={highlightMode}
-                        selectable={!!actions}
+                        selectable={
+                          !!actions &&
+                          (!blockMode || blockStarts.has(lineKey(row.ref.hunk, row.ref.index)))
+                        }
+                        worktree={worktree}
+                        blockMode={blockMode}
+                        disabled={disabled}
+                        onDiscard={discardRow}
                         selected={selected.has(lineKey(row.ref.hunk, row.ref.index))}
                         onToggle={toggle}
                       />
@@ -696,7 +802,17 @@ export function DiffView({
                         width={width}
                         highlight={highlight}
                         highlightMode={highlightMode}
-                        selectable={!!actions}
+                        selectable={
+                          !!actions &&
+                          (!blockMode ||
+                            blockStarts.has(
+                              lineKey(row.hunk, (row.left ?? row.right)?.index ?? -1),
+                            ))
+                        }
+                        worktree={worktree}
+                        blockMode={blockMode}
+                        disabled={disabled}
+                        onDiscard={discardRow}
                         selected={selected}
                         onToggle={toggle}
                       />
@@ -788,26 +904,90 @@ function signOf(kind: LineRef['line']['kind']): string {
   return kind === 'add' ? '+' : kind === 'del' ? '-' : ' ';
 }
 
-/** unified 줄 */
+/** 변경 행의 선택과 실행은 별도 클릭 영역으로 제공한다. */
+function LineControls({
+  refLine,
+  blockMode,
+  selected,
+  disabled,
+  onToggle,
+  onDiscard,
+}: {
+  refLine: LineRef | null;
+  blockMode: boolean;
+  selected: boolean;
+  disabled: boolean;
+  onToggle: (ref: LineRef, e: ToggleEvent) => void;
+  onDiscard?: (ref: LineRef) => void;
+}) {
+  return (
+    <span className={styles.lineControls}>
+      {refLine ? (
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={selected}
+            disabled={disabled}
+            onChange={() => {}}
+            onClick={(event) => onToggle(refLine, event)}
+            tabIndex={-1}
+            aria-label={blockMode ? S.diff.selectBlock : S.diff.selectLine}
+          />
+        </label>
+      ) : (
+        <span className={styles.check} />
+      )}
+      {onDiscard ? (
+        <span className={styles.rowAction}>
+          {refLine ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              disabled={disabled}
+              title={blockMode ? S.diff.restoreBlock : S.diff.restoreChange}
+              aria-label={blockMode ? S.diff.restoreBlock : S.diff.restoreChange}
+              onClick={() => onDiscard(refLine)}
+            >
+              →
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** unified 줄은 수정 쌍의 첫 표시 줄에만 선택·실행 컨트롤을 둔다. */
 function UnifiedLine({
   row,
   width,
   highlight,
   highlightMode,
   selectable,
+  worktree,
+  blockMode,
+  disabled,
   selected,
   onToggle,
+  onDiscard,
 }: {
   row: Extract<DiffRow, { kind: 'line' }>;
   width: number;
   highlight: HighlightMap;
   highlightMode: HighlightMode;
   selectable: boolean;
+  worktree: boolean;
+  blockMode: boolean;
+  disabled: boolean;
   selected: boolean;
   onToggle: (ref: LineRef, e: ToggleEvent) => void;
+  onDiscard: (ref: LineRef) => void;
 }) {
   const { line } = row.ref;
-  const changeable = selectable && line.kind !== 'context';
+  const changeable =
+    selectable &&
+    line.kind !== 'context' &&
+    (!worktree || !row.pair || row.ref.index < row.pair.index);
   const pieces = piecesOf(row.ref, row.pair, highlight, highlightMode);
   return (
     // biome-ignore lint/a11y/useSemanticElements: 가상 스크롤 행은 grid 레이아웃이 필요해 div 로 둔다
@@ -818,18 +998,14 @@ function UnifiedLine({
       data-kind={line.kind}
       data-selected={selected ? 'true' : 'false'}
     >
-      <span className={styles.check}>
-        {changeable ? (
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={() => {}}
-            onClick={(event) => onToggle(row.ref, event)}
-            tabIndex={-1}
-            aria-label={S.diff.selectLine}
-          />
-        ) : null}
-      </span>
+      <LineControls
+        blockMode={blockMode}
+        refLine={changeable ? row.ref : null}
+        selected={selected}
+        disabled={disabled}
+        onToggle={onToggle}
+        onDiscard={worktree ? onDiscard : undefined}
+      />
       <span className={styles.no} style={{ width: `${width}ch` }}>
         {line.oldNo ?? ''}
       </span>
@@ -847,79 +1023,79 @@ function UnifiedLine({
   );
 }
 
-/** split 줄 (왼쪽 옛 파일, 오른쪽 새 파일) */
+/** 좌우 패치 참조는 보존하고 작업 트리 조작은 중앙 오른쪽에 모은다. */
 function SplitLine({
   row,
   width,
   highlight,
   highlightMode,
   selectable,
+  worktree,
+  blockMode,
+  disabled,
   selected,
   onToggle,
+  onDiscard,
 }: {
   row: Extract<DiffRow, { kind: 'split' }>;
   width: number;
   highlight: HighlightMap;
   highlightMode: HighlightMode;
   selectable: boolean;
+  worktree: boolean;
+  blockMode: boolean;
+  disabled: boolean;
   selected: ReadonlySet<string>;
   onToggle: (ref: LineRef, e: ToggleEvent) => void;
+  onDiscard: (ref: LineRef) => void;
 }) {
-  const left = row.left;
-  const right = row.right;
+  const { left, right } = row;
   const isContext = left?.line.kind === 'context' && right?.line.kind === 'context';
-  const leftPair = isContext ? null : right;
-  const rightPair = isContext ? null : left;
-  const side = (
-    ref: LineRef | null,
-    pair: LineRef | null,
-    no: number | null | undefined,
-    position: 'left' | 'right',
-  ) => {
-    if (!ref) {
-      return <div className={styles.half} data-kind="empty" />;
-    }
-    const changeable = selectable && ref.line.kind !== 'context';
-    const isSel = selected.has(lineKey(ref.hunk, ref.index));
+  /** 오른쪽이 빈 삭제 행에도 중앙 컨트롤과 왼쪽 선택 표시를 유지한다. */
+  const side = (ref: LineRef | null, pair: LineRef | null, position: 'left' | 'right') => {
+    const controlRef = worktree ? (right ?? left) : ref;
+    const changeable = selectable && controlRef && controlRef.line.kind !== 'context';
+    const selectedRef = ref ?? (worktree ? controlRef : null);
+    const isSel = !!selectedRef && selected.has(lineKey(selectedRef.hunk, selectedRef.index));
     return (
       // biome-ignore lint/a11y/useSemanticElements: 가상 스크롤 행은 grid 레이아웃이 필요해 div 로 둔다
       <div
         role="row"
         tabIndex={-1}
         className={styles.half}
-        data-kind={ref.line.kind}
+        data-kind={ref?.line.kind ?? 'empty'}
         data-selected={isSel ? 'true' : 'false'}
       >
-        <span className={styles.check}>
-          {changeable ? (
-            <input
-              type="checkbox"
-              checked={isSel}
-              onChange={() => {}}
-              onClick={(event) => onToggle(ref, event)}
-              tabIndex={-1}
-              aria-label={S.diff.selectLine}
-            />
-          ) : null}
-        </span>
+        {!worktree || position === 'right' ? (
+          <LineControls
+            blockMode={blockMode}
+            refLine={changeable ? controlRef : null}
+            selected={isSel}
+            disabled={disabled}
+            onToggle={onToggle}
+            onDiscard={worktree ? onDiscard : undefined}
+          />
+        ) : null}
         <span className={styles.no} style={{ width: `${width}ch` }}>
-          {no ?? ''}
+          {(position === 'left' ? ref?.line.oldNo : ref?.line.newNo) ?? ''}
         </span>
         <span className={styles.code} data-side={position}>
-          <span className={styles.codeText}>
-            {renderPieces(piecesOf(ref, pair, highlight, highlightMode))}
-            {ref.line.noNewline ? (
-              <span className={styles.noNewline}>{S.diff.noNewline}</span>
-            ) : null}
-          </span>
+          {ref ? (
+            <span className={styles.codeText}>
+              {renderPieces(piecesOf(ref, pair, highlight, highlightMode))}
+              {ref.line.noNewline ? (
+                <span className={styles.noNewline}>{S.diff.noNewline}</span>
+              ) : null}
+            </span>
+          ) : null}
         </span>
       </div>
     );
   };
   return (
     <div className={styles.split}>
-      {side(left, leftPair, left?.line.oldNo, 'left')}
-      {side(right, rightPair, right?.line.newNo, 'right')}
+      {side(left, isContext ? null : right, 'left')}
+      {side(right, isContext ? null : left, 'right')}
     </div>
   );
 }

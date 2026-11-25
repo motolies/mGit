@@ -248,6 +248,48 @@ describe('작업 트리 diff 탭 (ED-05, 저장소당 하나)', () => {
     );
   });
 
+  it('되돌리기 확인 중 파일이 바뀌면 기존 파일과 새 파일 모두 수정하지 않는다', async () => {
+    const { mock, session } = await mountFolder();
+    const discard = vi.spyOn(mock, 'discardLines');
+    await openRow('orders.ts');
+    act(() => fireEvent.click(editor().getByText(S.diff.discardHunk)));
+    await tick();
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
+    expect(dialog.textContent).toContain('Index');
+    expect(dialog.textContent).toContain('작업 파일');
+    const store = getSessionStore(session(WEB));
+    await act(async () => {
+      await store?.getState().openFile('different.ts', false);
+    });
+    act(() =>
+      fireEvent.submit(
+        within(dialog)
+          .getByRole('button', { name: S.diff.discardConfirm })
+          .closest('form') as HTMLFormElement,
+      ),
+    );
+    await tick();
+    expect(discard).not.toHaveBeenCalled();
+    expect(store?.getState().actionError).toBe(S.diff.staleSelection);
+  });
+
+  it('되돌리기 확인 중 revision이 바뀌면 오류를 표시하고 실행하지 않는다', async () => {
+    const { mock, session } = await mountFolder();
+    const discard = vi.spyOn(mock, 'discardLines');
+    await openRow('orders.ts');
+    act(() => fireEvent.click(editor().getByText(S.diff.discardHunk)));
+    await tick();
+    const store = getSessionStore(session(WEB));
+    const doc = store?.getState().diffDocument;
+    act(() => {
+      if (doc) store?.setState({ diffDocument: { ...doc, revision: 'external-edit' } });
+    });
+    act(() => fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement));
+    await tick();
+    expect(discard).not.toHaveBeenCalled();
+    expect(store?.getState().actionError).toBe(S.diff.staleSelection);
+  });
+
   it('Esc·탭 닫기는 그 문서의 저장소 세션 슬롯을 비워 탭을 닫는다 (다른 저장소의 탭은 그대로)', async () => {
     const { ws, session } = await mountFolder();
     await openRow('rate-limit.yaml');

@@ -1,4 +1,5 @@
 import type { FileDiff, Hunk, LineSelection } from '@mgit/ipc';
+import { pairChanges } from './rows';
 
 /**
  * 줄 선택이 가리키는 diff 의 내용 키. 선택은 `hunk:index` 위치로 저장되므로 파일이나 내용이 바뀌면 다른 줄을
@@ -65,6 +66,64 @@ export function rangeKeys(h: Hunk, hunk: number, a: number, b: number): string[]
   return changeLineIndices(h)
     .filter((i) => i >= from && i <= to)
     .map((i) => lineKey(hunk, i));
+}
+
+/** 좌우 표시 순서와 같은 수정 행 단위로 패치 인덱스를 묶는다. */
+export function changeUnits(h: Hunk): number[][] {
+  const pairs = pairChanges(h);
+  return changeLineIndices(h).flatMap((index) => {
+    const pair = pairs.get(index);
+    if (pair !== undefined && pair < index) return [];
+    return [[index, ...(pair === undefined ? [] : [pair])]];
+  });
+}
+
+/** 문맥 줄로 분리된 연속 삭제·추가 묶음을 하나의 변경 블록으로 만든다. */
+export function changeBlocks(h: Hunk): number[][] {
+  const blocks: number[][] = [];
+  let block: number[] = [];
+  h.lines.forEach((line, index) => {
+    if (line.kind === 'context') {
+      block = [];
+    } else {
+      if (block.length === 0) blocks.push(block);
+      block.push(index);
+    }
+  });
+  return blocks;
+}
+
+/** 선택된 삭제·추가 패치 줄을 화면의 변경 행 수로 센다. */
+export function countSelectedChanges(diff: FileDiff, selection: readonly LineSelection[]): number {
+  return selection.reduce((count, picked) => {
+    const hunk = diff.hunks[picked.hunk];
+    return (
+      count +
+      (hunk
+        ? changeUnits(hunk).filter(
+            (unit) =>
+              picked.lines.length === 0 || unit.some((index) => picked.lines.includes(index)),
+          ).length
+        : 0)
+    );
+  }, 0);
+}
+
+/** 같은 구간의 수정 행 범위를 선택하며 대응하는 삭제·추가를 함께 반환한다. */
+export function changeRangeKeys(
+  h: Hunk,
+  hunk: number,
+  a: number,
+  b: number,
+  blocks = false,
+): string[] {
+  const units = blocks ? changeBlocks(h) : changeUnits(h);
+  const first = units.findIndex((unit) => unit.includes(a));
+  const last = units.findIndex((unit) => unit.includes(b));
+  if (first < 0 || last < 0) return [];
+  return units
+    .slice(Math.min(first, last), Math.max(first, last) + 1)
+    .flatMap((unit) => unit.map((index) => lineKey(hunk, index)));
 }
 
 /** 텍스트 선택의 시작·끝 위치. 부분 작업 거터 선택과 독립적이다. */

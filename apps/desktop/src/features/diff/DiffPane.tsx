@@ -1,3 +1,4 @@
+import { countSelectedChanges } from '@mgit/diff-view';
 import type { SessionId } from '@mgit/ipc';
 import { S, shortHash } from '@mgit/ui';
 import { useEffect } from 'react';
@@ -74,7 +75,10 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
     const chosen = lines.filter(
       (l, i) => l.kind !== 'context' && (picked === undefined || picked.includes(i)),
     );
-    return chosen.map((l) => `${l.kind === 'add' ? '+' : '-'} ${l.text}`);
+    return chosen.map(
+      (l) =>
+        `${l.kind === 'add' ? S.diff.restoreCurrent(l.newNo ?? 0) : S.diff.restoreIndex(l.oldNo ?? 0)}: ${l.text}`,
+    );
   };
   /** 되돌리기 전 영향 범위를 보여 주고 확인을 받는다 (CHG-04, SF-02). 폴더 탭은 어느 저장소인지 함께 보인다 */
   const confirmDiscard = (message: string, items: readonly string[]) =>
@@ -82,24 +86,32 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
       title:
         repoName === undefined ? S.diff.discardTitle(path) : S.diff.discardTitleIn(repoName, path),
       message,
-      items: [...new Set(items)],
+      items,
       confirmLabel: S.diff.discardConfirm,
       danger: true,
     });
   /** hunk 되돌리기 */
   const discardHunk = async (hunk: number) => {
-    if (await confirmDiscard(S.diff.discardHunkMessage, changedLines(hunk))) {
-      await s.discardHunk(hunk, s.document?.revision);
-    }
+    const target = s.target;
+    const revision = s.document?.revision;
+    if (!target || !revision) return false;
+    if (!(await confirmDiscard(S.diff.discardHunkMessage, changedLines(hunk)))) return false;
+    return s.discardHunk(hunk, revision, target);
   };
   /** 고른 줄 되돌리기. 취소하면 false 로 선택을 남긴다 */
   const discardLines = async (sel: Parameters<typeof s.discardLines>[0]) => {
+    const target = s.target;
+    const revision = s.document?.revision;
+    if (!target || !revision) return false;
     const items = sel.flatMap((x) => changedLines(x.hunk, x.lines));
-    const ok = await confirmDiscard(S.diff.discardLinesMessage(items.length), items);
-    if (ok) {
-      await s.discardLines(sel, s.document?.revision);
-    }
-    return ok;
+    if (
+      !(await confirmDiscard(
+        S.diff.discardLinesMessage(s.diff ? countSelectedChanges(s.diff, sel) : 0),
+        items,
+      ))
+    )
+      return false;
+    return s.discardLines(sel, revision, target);
   };
   /** 외부 diff 도구 (DIFF-07) */
   const difftool = () =>
@@ -137,16 +149,18 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
         onEditCurrent={() => editCurrent(s.repoPath, path, s.repoName)}
         submoduleLog={submoduleLog}
         actions={
-          readOnly || s.loading || s.busy || !s.document
+          readOnly
             ? undefined
             : {
                 verb: staged ? 'unstage' : 'stage',
-                onApplyHunk: (h) => void s.applyHunk(h, s.document?.revision),
-                onApplyLines: (sel) => void s.applyLines(sel, s.document?.revision),
+                disabled: s.loading || s.busy || !s.document,
+                onApplyHunk: (h) => s.applyHunk(h, s.document?.revision, s.target ?? undefined),
+                onApplyLines: (sel) =>
+                  s.applyLines(sel, s.document?.revision, s.target ?? undefined),
                 ...(staged
                   ? {}
                   : {
-                      onDiscardHunk: (h: number) => void discardHunk(h),
+                      onDiscardHunk: discardHunk,
                       onDiscardLines: discardLines,
                     }),
               }

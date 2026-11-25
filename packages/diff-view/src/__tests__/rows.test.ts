@@ -1,7 +1,15 @@
 import type { FileDiff } from '@mgit/ipc';
 import { describe, expect, it } from 'vitest';
 import { buildSplitRows, buildUnifiedRows, hunkHeader, pairChanges } from '../rows';
-import { changeLineIndices, lineKey, rangeKeys, selectionFromKeys } from '../selection';
+import {
+  changeLineIndices,
+  changeRangeKeys,
+  changeUnits,
+  countSelectedChanges,
+  lineKey,
+  rangeKeys,
+  selectionFromKeys,
+} from '../selection';
 import { applyRanges, wordRanges } from '../word-diff';
 
 /** 첫 hunk (없으면 실패) */
@@ -85,6 +93,15 @@ describe('selection', () => {
       ],
     );
     expect(selectionFromKeys(['bad'])).toEqual([]);
+  });
+
+  it('수정 쌍과 남은 삭제 행을 나누고 같은 구간의 표시 순서로 범위를 고른다', () => {
+    expect(changeUnits(hunk0())).toEqual([[1, 3], [2]]);
+    expect(changeRangeKeys(hunk0(), 0, 3, 2)).toEqual(['0:1', '0:3', '0:2']);
+    expect(changeRangeKeys(hunk0(), 0, 2, 1)).toEqual(['0:1', '0:3', '0:2']);
+    expect(countSelectedChanges(sample(), [{ hunk: 0, lines: [1, 3] }])).toBe(1);
+    expect(countSelectedChanges(sample(), [{ hunk: 0, lines: [] }])).toBe(2);
+    expect(countSelectedChanges(sample(), [])).toBe(0);
   });
 
   it('변경 줄 인덱스와 Shift 범위', () => {

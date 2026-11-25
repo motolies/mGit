@@ -621,10 +621,22 @@ export interface SessionState {
    * `discard` 처럼 "폐기 백업에서 복구할 수 있습니다" 를 알린다. 실패 사유는 `actionError`
    */
   rollback(paths: string[]): Promise<void>;
-  applyLines(selection: LineSelection[], expectedRevision?: string): Promise<void>;
-  applyHunk(hunk: number, expectedRevision?: string): Promise<void>;
-  discardLines(selection: LineSelection[], expectedRevision?: string): Promise<void>;
-  discardHunk(hunk: number, expectedRevision?: string): Promise<void>;
+  applyLines(
+    selection: LineSelection[],
+    expectedRevision?: string,
+    expectedTarget?: FileTarget,
+  ): Promise<boolean>;
+  applyHunk(hunk: number, expectedRevision?: string, expectedTarget?: FileTarget): Promise<boolean>;
+  discardLines(
+    selection: LineSelection[],
+    expectedRevision?: string,
+    expectedTarget?: FileTarget,
+  ): Promise<boolean>;
+  discardHunk(
+    hunk: number,
+    expectedRevision?: string,
+    expectedTarget?: FileTarget,
+  ): Promise<boolean>;
 
   setCommitMessage(message: string): void;
   setCommitAmend(on: boolean): Promise<void>;
@@ -1313,10 +1325,14 @@ export function createSessionStore(
     let diffFull = false;
 
     /** 요청 순번으로 오래된 성공·오류를 버리고 재조회 동안 이전 선택의 쓰기를 막는다. */
-    const loadDiff = async (target: FileTarget, full: boolean) => {
+    const loadDiff = async (target: FileTarget, full: boolean, keepVisible = false) => {
       const seq = ++diffSeq;
       diffFull = full;
-      set({ diff: null, diffDocument: null, diffLoading: true, diffError: null });
+      set({
+        ...(keepVisible ? {} : { diff: null, diffDocument: null }),
+        diffLoading: true,
+        diffError: null,
+      });
       try {
         const { ignoreWhitespace, context } = get().diffOptions;
         const opts = { ignoreWhitespace, context };
@@ -1351,6 +1367,33 @@ export function createSessionStore(
           set({ diff: null, diffDocument: null, diffLoading: false, diffError: describeError(e) });
         }
       }
+    };
+
+    /** 확인을 시작한 파일·revision을 검증하고, 다른 화면의 줄 번호로 실행하지 않는다. */
+    const partialTarget = (
+      expectedRevision?: string,
+      expectedTarget?: FileTarget,
+    ): FileTarget | null => {
+      const state = get();
+      if (
+        (expectedTarget !== undefined && expectedTarget !== state.selectedFile) ||
+        (expectedRevision !== undefined && expectedRevision !== state.diffDocument?.revision)
+      ) {
+        set({ actionError: S.diff.staleSelection });
+        return null;
+      }
+      const target = state.selectedFile;
+      if (
+        !target ||
+        target.commit ||
+        target.range ||
+        state.diffLoading ||
+        !state.diffDocument ||
+        state.busy
+      ) {
+        return null;
+      }
+      return target;
     };
 
     /** 아바타 요청 중인 이메일 (중복 요청 방지) */
@@ -1868,7 +1911,7 @@ export function createSessionStore(
                 (e) => e.path === target.path && entryInArea(e, target.staged),
               );
               if (stillThere) {
-                void loadDiff(target, diffFull);
+                void loadDiff(target, diffFull, s.busy);
               } else {
                 set({ selectedFile: null, diff: null, diffDocument: null, diffLoading: false });
               }
@@ -2170,67 +2213,56 @@ export function createSessionStore(
         });
       },
 
-      applyLines(selection, expectedRevision) {
-        const target = get().selectedFile;
-        if (
-          !target ||
-          target.commit ||
-          target.range ||
-          get().diffLoading ||
-          !get().diffDocument ||
-          get().busy ||
-          (expectedRevision !== undefined && expectedRevision !== get().diffDocument?.revision)
-        ) {
-          return Promise.resolve();
-        }
+      async applyLines(selection, expectedRevision, expectedTarget) {
+        const target = partialTarget(expectedRevision, expectedTarget);
+        if (!target) return false;
         const { ignoreWhitespace, context } = get().diffOptions;
         const revision = get().diffDocument?.revision;
-        return run(() =>
-          client.stageLines(
-            id,
-            target.path,
-            selection,
-            target.staged,
-            {
-              ignoreWhitespace,
-              context,
-            },
-            revision,
-          ),
-        ).then(() => {});
+        return (
+          (await run(async () => {
+            await client.stageLines(
+              id,
+              target.path,
+              selection,
+              target.staged,
+              { ignoreWhitespace, context },
+              revision,
+            );
+            if (get().selectedFile === target) await loadDiff(target, diffFull, true);
+            return true;
+          })) === true
+        );
       },
 
-      applyHunk(hunk, expectedRevision) {
-        return get().applyLines([{ hunk, lines: [] }], expectedRevision);
+      applyHunk(hunk, expectedRevision, expectedTarget) {
+        return get().applyLines([{ hunk, lines: [] }], expectedRevision, expectedTarget);
       },
 
-      discardLines(selection, expectedRevision) {
-        const target = get().selectedFile;
-        if (
-          !target ||
-          target.staged ||
-          target.commit ||
-          target.range ||
-          get().diffLoading ||
-          !get().diffDocument ||
-          get().busy ||
-          (expectedRevision !== undefined && expectedRevision !== get().diffDocument?.revision)
-        ) {
-          return Promise.resolve();
-        }
+      async discardLines(selection, expectedRevision, expectedTarget) {
+        const target = partialTarget(expectedRevision, expectedTarget);
+        if (!target || target.staged) return false;
         const { ignoreWhitespace, context } = get().diffOptions;
         const revision = get().diffDocument?.revision;
-        return run(() =>
-          client.discardLines(id, target.path, selection, { ignoreWhitespace, context }, revision),
-        ).then((r) => {
-          if (r !== undefined && r !== null) {
-            notifyHub.notify({ kind: 'info', title: S.safety.discardBackedUp });
-          }
-        });
+        return (
+          (await run(async () => {
+            const backup = await client.discardLines(
+              id,
+              target.path,
+              selection,
+              { ignoreWhitespace, context },
+              revision,
+            );
+            if (backup != null) {
+              notifyHub.notify({ kind: 'info', title: S.safety.discardBackedUp });
+            }
+            if (get().selectedFile === target) await loadDiff(target, diffFull, true);
+            return true;
+          })) === true
+        );
       },
 
-      discardHunk(hunk, expectedRevision) {
-        return get().discardLines([{ hunk, lines: [] }], expectedRevision);
+      discardHunk(hunk, expectedRevision, expectedTarget) {
+        return get().discardLines([{ hunk, lines: [] }], expectedRevision, expectedTarget);
       },
 
       setCommitMessage(message) {

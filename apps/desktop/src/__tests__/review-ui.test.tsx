@@ -1077,7 +1077,7 @@ describe('폐기 백업 대화상자', () => {
 describe('hunk·줄 되돌리기 확인', () => {
   /** diff 하나를 연 세션 */
   function diffSession() {
-    const discardHunk = vi.fn(async () => {});
+    const discardHunk = vi.fn(async () => true);
     h.session = {
       selectedFile: { path: 'a.txt', staged: false, commit: null },
       diff: {
@@ -1109,9 +1109,9 @@ describe('hunk·줄 되돌리기 확인', () => {
       diffOptions: { ignoreWhitespace: false, context: 3, wrap: true, tabWidth: 4 },
       submoduleLog: null,
       discardHunk,
-      discardLines: vi.fn(async () => {}),
-      applyHunk: vi.fn(async () => {}),
-      applyLines: vi.fn(async () => {}),
+      discardLines: vi.fn(async () => true),
+      applyHunk: vi.fn(async () => true),
+      applyLines: vi.fn(async () => true),
       setDiffMode: vi.fn(),
       closeFile: vi.fn(),
       loadFullDiff: vi.fn(),
@@ -1134,7 +1134,7 @@ describe('hunk·줄 되돌리기 확인', () => {
     );
     fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
     await tick();
-    expect(discardHunk).toHaveBeenCalledWith(0, 'revision-1');
+    expect(discardHunk).toHaveBeenCalledWith(0, 'revision-1', h.session.selectedFile);
   });
 });
 

@@ -291,7 +291,7 @@ export function DiffPaneView({
           wrap={options.wrap}
           tabWidth={options.tabWidth}
           onLoadFull={onLoadFull}
-          actions={loading ? undefined : actions}
+          actions={actions}
         />
       </div>
     </div>

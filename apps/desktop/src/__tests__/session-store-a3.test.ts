@@ -265,6 +265,62 @@ describe('전체 파일 diff 조회와 선택 유효성', () => {
     await tick();
   });
 
+  it('부분 작업은 성공만 true를 반환하고 성공 후 diff를 다시 읽는다', async () => {
+    const { store, client: c } = setup();
+    c.stageLines = vi.fn(async () => {});
+    c.discardLines = vi.fn(async () => null);
+    await store.getState().openFile('f.txt', false);
+    const target = store.getState().selectedFile ?? undefined;
+    expect(await store.getState().applyHunk(0, 'revision-1', target)).toBe(true);
+    expect(c.workTreeDiffDocument).toHaveBeenCalledTimes(2);
+    expect(await store.getState().discardHunk(0, 'revision-1', target)).toBe(true);
+    expect(c.workTreeDiffDocument).toHaveBeenCalledTimes(3);
+    vi.mocked(c.stageLines).mockRejectedValueOnce(new Error('stage failed'));
+    expect(await store.getState().applyHunk(0, 'revision-1', target)).toBe(false);
+    expect(store.getState().actionError).toContain('stage failed');
+    vi.mocked(c.discardLines).mockRejectedValueOnce(new Error('discard failed'));
+    expect(await store.getState().discardHunk(0, 'revision-1', target)).toBe(false);
+    expect(store.getState().actionError).toContain('discard failed');
+    expect(c.workTreeDiffDocument).toHaveBeenCalledTimes(3);
+    expect(store.getState().diffDocument?.revision).toBe('revision-1');
+  });
+
+  it('revision이 같아도 확인창을 연 파일에서 이동하면 실행을 거부한다', async () => {
+    const { store, client: c } = setup();
+    c.discardLines = vi.fn(async () => null);
+    await store.getState().openFile('f.txt', false);
+    const target = store.getState().selectedFile ?? undefined;
+    await store.getState().openFile('other.txt', false);
+    expect(await store.getState().discardHunk(0, 'revision-1', target)).toBe(false);
+    expect(c.discardLines).not.toHaveBeenCalled();
+    expect(store.getState().actionError).toBeTruthy();
+    await store.getState().openFile('f.txt', false);
+    expect(await store.getState().discardHunk(0, 'revision-1', target)).toBe(false);
+    expect(c.discardLines).not.toHaveBeenCalled();
+  });
+
+  it('부분 작업 실행 중 중복 호출을 막고 다른 파일의 diff를 덮어쓰지 않는다', async () => {
+    const { store, client: c } = setup();
+    let finish!: () => void;
+    c.stageLines = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await store.getState().openFile('f.txt', false);
+    const first = store.getState().applyHunk(0);
+    expect(store.getState().busy).toBe(true);
+    expect(await store.getState().applyHunk(0)).toBe(false);
+    expect(c.stageLines).toHaveBeenCalledTimes(1);
+    await store.getState().openFile('other.txt', false);
+    finish();
+    expect(await first).toBe(true);
+    expect(c.workTreeDiffDocument).toHaveBeenCalledTimes(2);
+    expect(store.getState().selectedFile?.path).toBe('other.txt');
+    expect(store.getState().busy).toBe(false);
+  });
+
   it('비교 대화상자를 닫은 뒤 늦은 오류가 새 화면의 오류로 나타나지 않는다', async () => {
     const { store, client: c } = setup();
     let fail!: (error: Error) => void;

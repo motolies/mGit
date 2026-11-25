@@ -138,8 +138,42 @@
   outline-offset: -1px;
 }
 
+.lineControls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 20px;
+  align-items: center;
+  user-select: none;
+}
+
+.rowAction {
+  width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rowAction button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  width: 22px;
+  height: 20px;
+}
+
+.rowAction button:disabled,
+.link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .check {
   width: 22px;
+  height: 20px;
+  align-items: center;
   flex: 0 0 auto;
   display: inline-flex;
   justify-content: center;
@@ -206,7 +240,6 @@
 
 .half[data-kind="empty"] {
   background: var(--bg-hover);
-  opacity: 0.5;
 }
 
 .scroller[data-wrap="false"] .code {
@@ -258,7 +291,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--diff-split, 50%) - 6px);
+  left: calc((100% - 12px) * var(--diff-ratio, 0.5) - 5px);
   width: 5px;
   cursor: col-resize;
   touch-action: none;
@@ -351,4 +384,19 @@
 
 .sideLabels[data-mode="unified"] {
   grid-template-columns: 1fr;
+}
+
+.selectionUnit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.selectionUnit select {
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  padding: 3px 6px;
 }

@@ -106,8 +106,15 @@ export function versionUpdates(root, version) {
     const text = fs.readFileSync(path.join(root, file), 'utf8');
     const data = JSON.parse(text);
     validateVersion(data.version);
-    data.version = version;
-    updates.set(file, `${JSON.stringify(data, null, 2)}\n`);
+    const fields = [...text.matchAll(/("version"\s*:\s*")[^"]*(")/g)];
+    if (fields.length !== 1) throw new Error(`Ambiguous version field: ${file}`);
+    updates.set(
+      file,
+      text.replace(
+        /("version"\s*:\s*")[^"]*(")/,
+        (_match, prefix, suffix) => `${prefix}${version}${suffix}`,
+      ),
+    );
   }
   for (const [file, name] of [
     ['Cargo.toml', 'workspace.package'],

@@ -348,3 +348,13 @@ for (const [name, overrides, expected] of [
         true,
       );
   });
+
+// 같은 버전 준비는 버전과 무관한 JSON 배치를 바꾸지 않는다.
+test('same version preserves all manifest formatting', () => {
+  for (const [file, content] of versionUpdates(
+    ROOT,
+    JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+  )) {
+    assert.equal(content, fs.readFileSync(path.join(ROOT, file), 'utf8'));
+  }
+});

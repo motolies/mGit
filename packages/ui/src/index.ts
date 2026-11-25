@@ -47,3 +47,5 @@ export {
 } from './PromptDialog';
 export { S, type Strings, setStringsLocale } from './strings';
 export { useElementWidth } from './use-element-width';
+
+export { useNativeDialog } from './use-native-dialog';

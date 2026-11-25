@@ -54,9 +54,9 @@ import {
   reconcileLedger,
   sessionBusy,
   sessionHasWork,
-  sessionInFlight,
   withoutSession,
 } from './repo-sessions';
+import { type SessionCloseMode, type SessionClosePlan, sessionCloseTargets } from './session-close';
 import {
   disposeFolder,
   disposeSession,
@@ -369,6 +369,9 @@ export interface AppStore {
   credentialTargets: string[];
   /** 미저장 충돌 편집이 있는 저장소 탭을 닫기 전 확인 */
   closeConfirm: { id: SessionId; name: string; paths: string[] } | null;
+  closeTabsConfirm: SessionClosePlan | null;
+  closeTabsPending: SessionClosePlan | null;
+  closeTabsRunning: boolean;
   /**
    * 폴더 탭을 닫기 전 확인 (WS-21): 함께 닫히는 하위 저장소 탭, 숨은 세션의 초안·도는 작업 (`folderCloseRisks`).
    * 저장소 탭의 확인(`closeConfirm`)과 따로 둔다 — 보이는 문구가 다르다
@@ -489,6 +492,7 @@ export interface AppStore {
    * 세션의 초안·도는 작업)이 있으면 확인을 먼저 받는다
    */
   requestCloseSession(id: SessionId): Promise<void>;
+  requestCloseTabs(id: SessionId, mode: SessionCloseMode): Promise<void>;
   confirmCloseSession(): Promise<void>;
   cancelCloseSession(): void;
   setActiveSession(id: SessionId): void;
@@ -1247,6 +1251,206 @@ export function createAppStore(deps: AppStoreDeps) {
       set({ language: pref, uiLocale: locale });
     };
 
+    // 일괄 사전 검증을 끝낸 탭만 기존 닫기 본체의 중복 확인을 건너뛴다.
+    const approvedCloseIds = new Set<SessionId>();
+    let closeFinishing = false;
+
+    /** 실행 중 명령과 메시지 편집은 종료 대신 탭을 보존한다. */
+    const protectedSession = (id: SessionId): boolean => {
+      const st = getSessionStore(id)?.getState();
+      return (
+        !!st &&
+        (!!st.busy ||
+          !!st.committing ||
+          !!st.rewordEditor ||
+          Object.values(st.operations ?? {}).some((op) => !op.done))
+      );
+    };
+
+    /** 요청 당시 집합에 현재 위험과 부모·자식 보호를 다시 적용한다. */
+    const inspectClosePlan = (base: SessionClosePlan): SessionClosePlan => {
+      const state = get();
+      const requested = base.requested.filter((id) => state.sessions[id] === base.identities[id]);
+      const wanted = new Set(requested);
+      const protectedIds = new Set<SessionId>();
+      for (const id of state.sessionOrder) {
+        const meta = state.sessions[id];
+        if (!meta) continue;
+        if (meta.kind === 'repo' && protectedSession(id)) protectedIds.add(id);
+        if (meta.kind === 'folder') {
+          const folder = getFolderStore(id)?.getState();
+          if (
+            folder?.batchRunning ||
+            Object.keys(folder?.indexWrites ?? {}).length ||
+            state.repoSessionOpening[id] !== undefined ||
+            Object.values(state.repoSessions[id] ?? {}).some((entry) =>
+              protectedSession(entry.session),
+            )
+          )
+            protectedIds.add(id);
+          // 확인 이후 새로 열린 child는 닫지 않으며 부모의 연쇄 닫기도 막는다.
+          if (
+            state.sessionOrder.some(
+              (child) => state.sessions[child]?.parent === id && !wanted.has(child),
+            )
+          )
+            protectedIds.add(id);
+        }
+      }
+      for (const id of [...protectedIds]) {
+        let parent = state.sessions[id]?.parent;
+        while (parent !== null && parent !== undefined && !protectedIds.has(parent)) {
+          protectedIds.add(parent);
+          parent = state.sessions[parent]?.parent;
+        }
+      }
+      const targets = requested.filter((id) => !protectedIds.has(id));
+      const riskData: [number, unknown][] = [];
+      const risks: string[] = [];
+      const seen = new Set<SessionId>();
+      const collect = (id: SessionId, name: string) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        const drafts = getSessionStore(id)?.getState().conflictDrafts ?? {};
+        if (Object.keys(drafts).length) {
+          riskData.push([id, drafts]);
+          risks.push(...Object.keys(drafts).map((path) => S.toolbar.closeTabDraft(name, path)));
+        }
+      };
+      for (const id of targets) {
+        const meta = state.sessions[id];
+        if (!meta) continue;
+        collect(id, meta.name);
+        if (meta.kind === 'folder') {
+          for (const [path, entry] of Object.entries(state.repoSessions[id] ?? {}))
+            if (entry.held) collect(entry.session, folderRepoName(id, path));
+          if (base.mode === 'this')
+            risks.push(
+              ...targets
+                .filter((child) => state.sessions[child]?.parent === id)
+                .map((child) => S.folderClose.childTab(state.sessions[child]?.name ?? '')),
+            );
+        }
+      }
+      return {
+        ...base,
+        targets,
+        protectedIds: requested.filter((id) => protectedIds.has(id)),
+        risks,
+        signature: JSON.stringify([targets, riskData, risks]),
+      };
+    };
+
+    /** 확인창은 한 번만 만들며 단일 닫기의 기존 문구와 상태 계약도 유지한다. */
+    const publishClosePlan = (plan: SessionClosePlan) => {
+      const meta = get().sessions[plan.target];
+      if (plan.mode === 'this' && meta?.kind === 'repo' && plan.targets.includes(plan.target)) {
+        set({
+          closeTabsPending: plan,
+          closeTabsConfirm: null,
+          folderCloseConfirm: null,
+          closeConfirm: {
+            id: meta.id,
+            name: meta.name,
+            paths: Object.keys(getSessionStore(meta.id)?.getState().conflictDrafts ?? {}),
+          },
+        });
+      } else if (
+        plan.mode === 'this' &&
+        meta?.kind === 'folder' &&
+        plan.targets.includes(plan.target)
+      ) {
+        const risks = folderCloseRisks({
+          children: plan.targets
+            .filter((id) => get().sessions[id]?.parent === meta.id)
+            .map((id) => ({
+              name: get().sessions[id]?.name ?? '',
+              drafts: Object.keys(getSessionStore(id)?.getState().conflictDrafts ?? {}),
+            })),
+          held: Object.entries(get().repoSessions[meta.id] ?? {})
+            .filter(([, entry]) => entry.held)
+            .map(([path, entry]) => ({
+              repoName: folderRepoName(meta.id, path),
+              drafts: Object.keys(getSessionStore(entry.session)?.getState().conflictDrafts ?? {}),
+              running: false,
+            })),
+        });
+        set({
+          closeTabsPending: plan,
+          closeTabsConfirm: null,
+          closeConfirm: null,
+          folderCloseConfirm: { id: meta.id, name: meta.name, risks },
+        });
+      } else {
+        set({
+          closeTabsPending: plan,
+          closeTabsConfirm: plan,
+          closeConfirm: null,
+          folderCloseConfirm: null,
+        });
+      }
+    };
+
+    /** 모든 저장·확인이 끝나기 전에는 어떤 탭도 제거하지 않는다. */
+    const finishClosePlan = async (plan: SessionClosePlan) => {
+      if (closeFinishing) return;
+      closeFinishing = true;
+      const current = inspectClosePlan(plan);
+      if (current.signature !== plan.signature && current.risks.length) {
+        publishClosePlan(current);
+        closeFinishing = false;
+        return;
+      }
+      set({
+        closeConfirm: null,
+        folderCloseConfirm: null,
+        closeTabsConfirm: null,
+        closeTabsPending: current,
+      });
+      try {
+        if (!current.targets.length) return;
+        const scopeIds = new Set(current.targets);
+        for (const id of current.targets) {
+          if (get().sessions[id]?.kind === 'folder')
+            for (const entry of Object.values(get().repoSessions[id] ?? {}))
+              if (entry.held) scopeIds.add(entry.session);
+        }
+        const scopes = [...scopeIds].map((session) => ({ session }));
+        if (!(await guardFileEditorClose(scopes))) return;
+        const latest = inspectClosePlan(current);
+        if (latest.signature !== current.signature && latest.risks.length) {
+          publishClosePlan(latest);
+          return;
+        }
+        const closing = latest.targets;
+        for (const id of closing) approvedCloseIds.add(id);
+        // 모두 동기적으로 제거를 시작해 첫 탭의 IPC 대기 중 새 탭이 연쇄로 닫히지 않는다.
+        const pending = [...closing]
+          .sort(
+            (a, b) =>
+              Number(get().sessions[a]?.kind === 'folder') -
+              Number(get().sessions[b]?.kind === 'folder'),
+          )
+          .map((id) => get().closeSession(id));
+        approvedCloseIds.clear();
+        if (plan.mode === 'others' && get().sessions[plan.target])
+          set({ activeSessionId: plan.target });
+        persistTabs();
+        await Promise.all(pending);
+      } catch (error) {
+        get().notice({
+          kind: 'error',
+          title: S.toolbar.closeTabsConfirm,
+          message: describeError(error),
+        });
+      } finally {
+        closeFinishing = false;
+        approvedCloseIds.clear();
+        if (!get().closeTabsConfirm && !get().closeConfirm && !get().folderCloseConfirm)
+          set({ closeTabsPending: null, closeTabsRunning: false });
+      }
+    };
+
     return {
       sessions: {},
       sessionOrder: [],
@@ -1282,6 +1486,9 @@ export function createAppStore(deps: AppStoreDeps) {
       credentialQueue: [],
       credentialTargets: [],
       closeConfirm: null,
+      closeTabsConfirm: null,
+      closeTabsPending: null,
+      closeTabsRunning: false,
       folderCloseConfirm: null,
       conflictLeave: null,
       paletteOpen: false,
@@ -1831,9 +2038,11 @@ export function createAppStore(deps: AppStoreDeps) {
           return;
         }
         const closingIds = [id, ...sessionOrder.filter((child) => sessions[child]?.parent === id)];
-        if (!(await guardFileEditorClose(closingIds.map((session) => ({ session }))))) return;
+        const approved = approvedCloseIds.has(id);
+        if (!approved && !(await guardFileEditorClose(closingIds.map((session) => ({ session })))))
+          return;
         // 폴더 탭을 닫으면 거기서 연 하위 저장소 탭도 닫는다
-        if (meta.kind === 'folder') {
+        if (meta.kind === 'folder' && !approved) {
           for (const child of sessionOrder) {
             if (sessions[child]?.parent === id) {
               await get().closeSession(child);
@@ -1858,7 +2067,7 @@ export function createAppStore(deps: AppStoreDeps) {
           repoSessions:
             meta.kind === 'folder' ? otherLedgers : withoutSession(current.repoSessions, id),
         });
-        persistTabs();
+        if (!approved) persistTabs();
         disposeWorkspace(id);
         fileEditors.releaseSession(id);
         folderRepoWatches.get(id)?.();
@@ -1879,57 +2088,55 @@ export function createAppStore(deps: AppStoreDeps) {
         }
       },
 
-      async requestCloseSession(id) {
-        const { sessions, sessionOrder } = get();
-        const meta = sessions[id];
-        if (!meta) {
-          return;
-        }
-        /** 그 세션 스토어의 초안 경로들 */
-        const draftsOf = (session: SessionId) =>
-          Object.keys(getSessionStore(session)?.getState().conflictDrafts ?? {});
-        if (meta.kind === 'folder') {
-          // 폴더 탭 (WS-21): 함께 닫히는 하위 저장소 탭, 이 폴더가 잡은 숨은 세션의 초안·도는 작업
-          const risks = folderCloseRisks({
-            children: sessionOrder
-              .filter((s) => sessions[s]?.parent === id)
-              .map((s) => ({ name: sessions[s]?.name ?? '', drafts: draftsOf(s) })),
-            held: Object.entries(get().repoSessions[id] ?? {})
-              .filter(([, e]) => e.held)
-              .map(([repoPath, e]) => {
-                const st = getSessionStore(e.session)?.getState();
-                return {
-                  repoName: folderRepoName(id, repoPath),
-                  drafts: draftsOf(e.session),
-                  running: st ? sessionInFlight(st) : false,
-                };
-              }),
+      requestCloseSession(id) {
+        return get().requestCloseTabs(id, 'this');
+      },
+
+      async requestCloseTabs(id, mode) {
+        const state = get();
+        if (state.closeTabsRunning) return;
+        const requested = sessionCloseTargets(state.sessionOrder, state.sessions, id, mode);
+        if (!requested.length) return;
+        set({ closeTabsRunning: true });
+        const plan = inspectClosePlan({
+          target: id,
+          mode,
+          requested,
+          identities: { ...state.sessions },
+          targets: [],
+          protectedIds: [],
+          risks: [],
+          signature: '',
+        });
+        if (plan.protectedIds.length)
+          get().notice({
+            kind: 'info',
+            title: S.toolbar.closeTabsBusy,
+            message: plan.protectedIds.map((key) => state.sessions[key]?.name ?? '').join(', '),
           });
-          if (risks.length > 0) {
-            set({ folderCloseConfirm: { id, name: meta.name, risks } });
-            return;
-          }
-          await get().closeSession(id);
-          return;
-        }
-        const paths = draftsOf(id);
-        if (paths.length > 0) {
-          set({ closeConfirm: { id, name: meta.name, paths } });
-          return;
-        }
-        await get().closeSession(id);
+        if (plan.risks.length) publishClosePlan(plan);
+        else await finishClosePlan(plan);
       },
 
       async confirmCloseSession() {
+        const plan = get().closeTabsPending;
+        if (plan) {
+          await finishClosePlan(plan);
+          return;
+        }
         const pending = get().closeConfirm ?? get().folderCloseConfirm;
         set({ closeConfirm: null, folderCloseConfirm: null });
-        if (pending) {
-          await get().closeSession(pending.id);
-        }
+        if (pending) await get().closeSession(pending.id);
       },
 
       cancelCloseSession() {
-        set({ closeConfirm: null, folderCloseConfirm: null });
+        set({
+          closeConfirm: null,
+          folderCloseConfirm: null,
+          closeTabsConfirm: null,
+          closeTabsPending: null,
+          closeTabsRunning: false,
+        });
       },
 
       setActiveSession(id) {

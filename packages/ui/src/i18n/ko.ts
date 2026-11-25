@@ -16,6 +16,17 @@ export const ko = {
     yesterday: (time: string) => `어제 ${time}`,
   },
   toolbar: {
+    closeThisTab: '이 탭 닫기',
+    closeOtherTabs: '이 탭 제외 닫기',
+    closeAllTabs: '모두 닫기',
+    closeTabsTitle: (n: number) => `${n}개 탭을 닫을까요?`,
+    closeTabsMessage:
+      '닫을 탭과 저장하지 않은 충돌 편집을 확인하세요. 취소하면 모든 탭을 유지합니다.',
+    closeTabsConfirm: '탭 닫기',
+    closeTabsBusy: '작업 중인 탭은 유지했습니다',
+    closeTabsChanged: '닫을 대상이나 편집 내용이 변경되어 다시 확인이 필요합니다.',
+    closeTabDraft: (repo: string, path: string) => `${repo}: 미저장 충돌 편집 ${path}`,
+
     openRepo: '저장소 열기',
     opening: '여는 중…',
     closeRepo: '저장소 닫기',
@@ -2135,6 +2146,10 @@ export const ko = {
     clear: '해제',
     selectTarget: '해당 영역에서 동작에 맞는 대상을 선택하세요',
     notReady: '현재 선택 대상 또는 작업 상태에서는 실행할 수 없습니다',
+    rewordTarget: (repo: string, hash: string) => `${repo} · ${hash}`,
+    rewordChanged: '대상 커밋이나 브랜치가 변경되었습니다. 다시 선택해 주세요.',
+    rewordFailed: '커밋 메시지를 수정하지 못했습니다.',
+    rewordRunning: '커밋 메시지를 수정하는 중입니다.',
     rewordPublished: '원격 브랜치에 포함된 커밋은 메시지를 수정할 수 없습니다',
     rewordRemoteUnknown:
       '원격 브랜치 포함 여부를 확인하지 못해 메시지 수정을 중단했습니다. 다시 시도하세요',

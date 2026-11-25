@@ -396,6 +396,19 @@ export interface StashView {
 }
 
 /** 저장소 탭 하나의 상태. 그래프 데이터 자체는 `GraphRangeCache` 에 있다 */
+/** 폴더 안에서 메시지를 편집하는 동안 숨은 세션과 초안을 보존한다. */
+export interface RewordEditorState {
+  token: number;
+  folderId: SessionId;
+  oid: string;
+  headBranch: string;
+  headOid: string;
+  phase: 'loading' | 'editing' | 'saving';
+  message: string;
+  initialMessage: string;
+  error: string | null;
+}
+
 export interface SessionState {
   id: SessionId;
   path: string;
@@ -958,7 +971,18 @@ export interface SessionState {
   runRebasePlan(plan: RebasePlan): Promise<boolean>;
   /** 원격 포함 여부를 새로 조회한다. 조회 실패도 수정 허용으로 간주하지 않는다 */
   checkRewordAllowed(oid: string): Promise<boolean>;
-  rewordCommit(oid: string, message: string): Promise<void>;
+  rewordEditor: RewordEditorState | null;
+  beginRewordEditor(folderId: SessionId, oid: string): number | null;
+  patchRewordEditor(
+    token: number,
+    patch: Partial<Pick<RewordEditorState, 'phase' | 'message' | 'initialMessage' | 'error'>>,
+  ): void;
+  endRewordEditor(token: number): void;
+  rewordCommit(
+    oid: string,
+    message: string,
+    expectedHead?: { headBranch: string; headOid: string },
+  ): Promise<OpOutcome | null>;
   squashIntoParent(oid: string): Promise<void>;
   /**
    * 로그 범위를 하나로 합칠 준비 (MRG-07): 범위를 현재 branch 의 이력(`older^..HEAD`)과 맞춰 보고 메시지 초안을 만든다.
@@ -1326,6 +1350,7 @@ export function createSessionStore(
       }
     };
 
+    let rewordSeq = 0;
     let diffSeq = 0;
     let compareSeq = 0;
     let compareFilesSeq = 0;
@@ -4223,6 +4248,43 @@ export function createSessionStore(
         return false;
       },
 
+      rewordEditor: null,
+
+      beginRewordEditor(folderId, oid) {
+        const state = get();
+        if (state.busy || state.op || state.rewordEditor) return null;
+        const head = state.refs.head;
+        if (head.state !== 'attached') {
+          set({ actionError: S.shortcuts.rewordDetached });
+          return null;
+        }
+        const token = ++rewordSeq;
+        set({
+          rewordEditor: {
+            token,
+            folderId,
+            oid,
+            headBranch: head.branch,
+            headOid: head.oid,
+            phase: 'loading',
+            message: '',
+            initialMessage: '',
+            error: null,
+          },
+          actionError: null,
+        });
+        return token;
+      },
+
+      patchRewordEditor(token, patch) {
+        const editor = get().rewordEditor;
+        if (editor?.token === token) set({ rewordEditor: { ...editor, ...patch } });
+      },
+
+      endRewordEditor(token) {
+        if (get().rewordEditor?.token === token) set({ rewordEditor: null });
+      },
+
       async checkRewordAllowed(oid) {
         try {
           const refs = await client.commitContainingRefs(id, oid);
@@ -4230,7 +4292,9 @@ export function createSessionStore(
             ? S.shortcuts.rewordRemoteUnknown
             : refs.branches.some((branch) => branch.remote)
               ? S.shortcuts.rewordPublished
-              : null;
+              : !refs.head
+                ? S.shortcuts.rewordOutside
+                : null;
           if (reason) {
             set({ actionError: reason });
             return false;
@@ -4242,9 +4306,38 @@ export function createSessionStore(
         }
       },
 
-      async rewordCommit(oid, message) {
-        if (!(await get().checkRewordAllowed(oid))) return;
-        await outcome(() => client.rewordCommit(id, oid, message));
+      async rewordCommit(oid, message, expectedHead) {
+        if (get().busy || get().op) {
+          set({ actionError: S.shortcuts.rewordBusy });
+          return null;
+        }
+        if (get().refs.head.state !== 'attached') {
+          set({ actionError: S.shortcuts.rewordDetached });
+          return null;
+        }
+        const result = await run(async () => {
+          if (!(await get().checkRewordAllowed(oid))) return null;
+          const head = get().refs.head;
+          if (
+            expectedHead &&
+            (head.state !== 'attached' ||
+              head.branch !== expectedHead.headBranch ||
+              head.oid !== expectedHead.headOid)
+          ) {
+            set({ actionError: S.shortcuts.rewordChanged });
+            return null;
+          }
+          try {
+            return await client.rewordCommit(id, oid, message);
+          } catch (error) {
+            // 폴더에서 숨기는 힌트로 분류되더라도 편집창에는 실패 사유를 남긴다.
+            set({ actionError: describeError(error) });
+            if (expectedHead) return null;
+            throw error;
+          }
+        });
+        if (result) set({ lastOutcome: result });
+        return result ?? null;
       },
 
       async squashIntoParent(oid) {

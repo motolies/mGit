@@ -57,6 +57,7 @@ import { useBatchReport } from './batch-report';
 import { type CheckoutCandidate, useFolderBatchFlows } from './FolderBatchBar';
 import { FolderCommitPane } from './FolderCommitPane';
 import { FolderLogFilter } from './FolderLogFilter';
+import { FolderRewordDialog } from './FolderRewordDialog';
 import styles from './FolderTimeline.module.css';
 
 // 로그 탭의 분할과 왼쪽 칸 접힘 규칙은 저장소 탭과 함께 쓴다 (W21, `layout/GitLogSplit`). 기존 이름으로도 꺼내 둔다
@@ -792,6 +793,7 @@ export function FolderTimeline() {
     >
       {flows.dialogs.element}
       {deletion.element}
+      <FolderRewordDialog folderId={f.id} />
     </GitLogSplit>
   );
 }

@@ -53,7 +53,7 @@ type Dialogs = Pick<ReturnType<typeof useDialogs>, 'confirm' | 'confirmChoice' |
 /** 커밋 메시지 고치기: 입력란을 메시지 전체로 채운다. 코어는 메시지를 통째로 바꾸므로 제목만 주면 본문이 사라진다 */
 export async function rewordFlow(
   oid: string,
-  a: GraphMenuActions,
+  a: Pick<GraphMenuActions, 'checkRewordAllowed' | 'commitMessageOf' | 'rewordCommit'>,
   d: Dialogs,
   active: () => boolean = () => true,
 ): Promise<void> {

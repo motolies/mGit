@@ -36,14 +36,19 @@ export type BusyFields = Pick<
   SessionState,
   'busy' | 'committing' | 'operations' | 'conflictDrafts' | 'blame' | 'fileHistory'
 > &
-  Partial<Pick<SessionState, 'pendingHint'>>;
+  Partial<Pick<SessionState, 'pendingHint' | 'rewordEditor'>>;
 
 /**
  * 세션에서 지금 도는 것이 있는지: 쓰기(`busy`)·커밋, 끝나지 않은 장시간 명령. 결과(힌트·오류)가 나중에 이 세션에
  * 온다 (W15: 활성 저장소 잠금은 이것과 보이는 대화상자만 본다 — 초안은 결과를 만들지 않는다)
  */
 export function sessionInFlight(st: BusyFields): boolean {
-  return st.busy || st.committing || Object.values(st.operations).some((op) => !op.done);
+  return (
+    st.busy ||
+    st.committing ||
+    st.rewordEditor?.phase === 'saving' ||
+    Object.values(st.operations).some((op) => !op.done)
+  );
 }
 
 /**
@@ -51,7 +56,7 @@ export function sessionInFlight(st: BusyFields): boolean {
  * 이런 세션은 놓지 않는다
  */
 export function sessionHasWork(st: BusyFields): boolean {
-  return sessionInFlight(st) || Object.keys(st.conflictDrafts).length > 0;
+  return sessionInFlight(st) || !!st.rewordEditor || Object.keys(st.conflictDrafts).length > 0;
 }
 
 /**
@@ -111,7 +116,7 @@ export function folderHintPending(st: Pick<BusyFields, 'pendingHint'>): boolean 
  * 세션이 영영 바쁜 채로 남는다 — 폴더 탭에 대화상자를 더하는 슬라이스는 여기에도 더한다
  */
 export function sessionDialogOpen(st: BusyFields): boolean {
-  return st.blame !== null || st.fileHistory !== null || folderHintPending(st);
+  return !!st.rewordEditor || st.blame !== null || st.fileHistory !== null || folderHintPending(st);
 }
 
 /** 세션이 바쁜지: 작업·초안이 있거나 폴더 탭의 세션 대화상자가 열려 있다. 바쁜 세션은 상한에서 놓지 않는다 */

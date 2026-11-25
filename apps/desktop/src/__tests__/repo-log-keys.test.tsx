@@ -127,7 +127,7 @@ async function mountFolder() {
   );
   render(<App />);
   await settle();
-  return { id };
+  return { id, mock };
 }
 
 /** 읽기·상세 읽기가 끝날 때까지 몇 박자 기다린다 */
@@ -346,6 +346,58 @@ describe('폴더 탭 로그 — 같은 규칙 (W19 ③ + W27 의 행 클릭)', (
   });
 });
 
+describe('폴더 메시지 편집창', () => {
+  it('F2는 폴더에 전체 메시지 창을 열고 실패해도 입력과 탭을 유지한다', async () => {
+    const { id, mock } = await mountFolder();
+    const open = vi.spyOn(mock, 'openRepo');
+    const light = vi.spyOn(mock, 'folderOpenRepoSession');
+    const graph = vi.spyOn(mock, 'graphWindow');
+    vi.spyOn(mock, 'commitContainingRefs').mockResolvedValue({
+      timedOut: false,
+      head: true,
+      branches: [],
+    });
+    vi.spyOn(mock, 'commitMessage').mockResolvedValue('subject\n\ncomplete body');
+    const write = vi.spyOn(mock, 'rewordCommit').mockRejectedValue(new Error('hook denied'));
+    const folder = getFolderStore(id);
+    const timeline = folder?.getState().timeline;
+    if (!timeline?.info) throw new Error('missing timeline');
+    await timeline.cache.ensureRange(0, timeline.totalRows);
+    const index = timeline.info.repos.findIndex((repo) => repo.path === `${FOLDER}/api-gateway`);
+    const target = timeline.cache
+      .slice(0, timeline.totalRows)
+      .rows.find((row) => row?.repo === index);
+    if (!target) throw new Error('missing gateway commit');
+    const oid = target.oid;
+    focusGrid();
+    act(() => folder?.getState().selectTimelineRow(`${FOLDER}/api-gateway`, oid));
+    await settle();
+    const beforeTabs = useAppStore.getState().sessionOrder;
+    await key('F2');
+    const input = screen.getByRole('textbox', { name: S.rebase.message });
+    expect((input as HTMLTextAreaElement).value).toBe('subject\n\ncomplete body');
+    expect(open).not.toHaveBeenCalled();
+    expect(graph).not.toHaveBeenCalled();
+    expect(light).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().sessionOrder).toEqual(beforeTabs);
+    expect(useAppStore.getState().activeSessionId).toBe(id);
+    act(() => {
+      fireEvent.change(input, { target: { value: 'new title\n\nnew body' } });
+      fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
+    });
+    await settle();
+    expect(write).toHaveBeenCalledWith(expect.any(Number), oid, 'new title\n\nnew body');
+    expect((input as HTMLTextAreaElement).value).toBe('new title\n\nnew body');
+    expect(document.querySelector('dialog[open] [role="alert"]')?.textContent).toContain(
+      'hook denied',
+    );
+    expect(document.querySelector('dialog[open]')).toBeTruthy();
+    act(() => fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel })));
+    await settle();
+    expect(document.querySelector('dialog[open]')).toBeNull();
+  });
+});
+
 describe('로그 메시지 수정 명령', () => {
   it('F2의 원격 포함 확인이 실패하면 메시지 수정 창을 열지 않는다', async () => {
     const { store } = await mountRepo();
@@ -397,7 +449,7 @@ describe('로그 메시지 수정 명령', () => {
     const { store } = await mountRepo();
     const message = 'subject\n\nbody paragraph\n\n';
     const read = vi.fn(async () => message);
-    const write = vi.fn(async () => {});
+    const write = vi.fn(async () => 'clean' as const);
     act(() => store.setState({ commitMessageOf: read, rewordCommit: write }));
     focusGrid();
     await key('Home');
@@ -413,7 +465,7 @@ describe('로그 메시지 수정 명령', () => {
   it('수정 저장 시 메시지 본문과 앞뒤 공백을 그대로 전달한다', async () => {
     const { store } = await mountRepo();
     const message = 'subject\n\nbody\n\n';
-    const write = vi.fn(async () => {});
+    const write = vi.fn(async () => 'clean' as const);
     act(() => store.setState({ commitMessageOf: vi.fn(async () => message), rewordCommit: write }));
     focusGrid();
     await key('Home');

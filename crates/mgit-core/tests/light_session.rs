@@ -1217,3 +1217,43 @@ async fn stale_roster_entry_inside_a_parent_repo_is_not_opened_as_the_parent() {
     );
     assert!(core.sessions().is_empty(), "상위 저장소를 열면 안 된다");
 }
+
+/// 폴더의 메시지 수정은 숨은 세션에서 HEAD·과거 커밋 모두 실행하며 전체 그래프로 승격하지 않는다.
+#[tokio::test]
+async fn light_session_rewords_head_and_ancestor_without_graph_promotion() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = root_of(&dir);
+    let path = root.join("messages");
+    let mut repo = repo_at(&path);
+    let ancestor = repo.commit("ancestor\n\noriginal body");
+    let head = repo.commit("head\n\noriginal tail");
+    let core = core_with(CoreConfig::default()).await;
+    let folder = open_folder(&core, &root).await;
+    let (opened, mut events) = open_light(&core, folder, &path).await;
+    let id = opened.session;
+    assert_eq!(core.session_profile(id).unwrap(), SessionProfile::Light);
+    let refs = core.commit_containing_refs(id, &ancestor).await.unwrap();
+    assert!(refs.head && !refs.timed_out);
+    assert_eq!(
+        core.commit_message(id, &head).await.unwrap(),
+        "head\n\noriginal tail"
+    );
+    assert_eq!(
+        core.reword_commit(id, &head, "new head\n\nfull body")
+            .await
+            .unwrap(),
+        mgit_core::OpOutcome::Clean
+    );
+    assert_eq!(
+        core.reword_commit(id, &ancestor, "new ancestor\n\nwhole body")
+            .await
+            .unwrap(),
+        mgit_core::OpOutcome::Clean
+    );
+    assert_eq!(
+        repo.git_ok(["show", "-s", "--format=%B", "HEAD~1"]).trim(),
+        "new ancestor\n\nwhole body"
+    );
+    assert_eq!(core.session_profile(id).unwrap(), SessionProfile::Light);
+    assert!(!drain(&mut events).iter().any(is_graph_event));
+}

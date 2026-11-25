@@ -51,18 +51,28 @@ export function CredentialDialog() {
 /** 미저장 충돌 편집이 있는 탭을 닫기 전 확인 */
 export function CloseSessionDialog() {
   const pending = useAppStore((s) => s.closeConfirm);
+  const many = useAppStore((s) => s.closeTabsConfirm);
   const confirm = useAppStore((s) => s.confirmCloseSession);
   const cancel = useAppStore((s) => s.cancelCloseSession);
-  if (!pending) {
+  if (!pending && !many) {
     return null;
   }
   return (
     <ConfirmDialog
       open
-      title={S.dialog.closeWithDrafts(pending.name)}
-      message={S.dialog.closeWithDraftsMessage}
-      items={pending.paths}
-      confirmLabel={S.dialog.closeWithDraftsConfirm}
+      title={
+        many
+          ? S.toolbar.closeTabsTitle(many.targets.length)
+          : S.dialog.closeWithDrafts(pending?.name ?? '')
+      }
+      message={many ? S.toolbar.closeTabsMessage : S.dialog.closeWithDraftsMessage}
+      items={
+        many
+          ? [...many.targets.map((id) => many.identities[id]?.name ?? String(id)), ...many.risks]
+          : pending?.paths
+      }
+      expandableItems
+      confirmLabel={many ? S.toolbar.closeTabsConfirm : S.dialog.closeWithDraftsConfirm}
       danger
       onConfirm={() => void confirm()}
       onCancel={cancel}

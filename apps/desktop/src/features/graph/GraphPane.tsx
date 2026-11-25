@@ -26,7 +26,6 @@ import {
   useSession,
   useWorkspace,
 } from '../../store';
-import { finishRewordRequest, useRewordRequest } from '../../store/reword-request';
 import { clearedQuery, conditionSummary, hasConditions } from '../filter-bar/filter-model';
 import { CommitGraphBanner } from './CommitGraphBanner';
 import styles from './GraphPane.module.css';
@@ -151,7 +150,6 @@ export function GraphPane() {
   const dialogs = useDialogs();
   const paneRef = useRef<HTMLDivElement>(null);
   const rewordLoading = useRef(false);
-  const request = useRewordRequest((state) => state.request);
   const remoteNames = useMemo(() => s.remotes.map((r) => r.name), [s.remotes]);
   const openRepositoryAt = useAppStore((st) => st.openRepositoryAt);
   // 로그는 Git 도구 창의 탭이라 콘솔·터미널로 바꾸거나 숨기면 내려간다 (W21): 다시 붙을 때 보던 자리에서 시작한다
@@ -266,7 +264,7 @@ export function GraphPane() {
         useAppStore.getState().notice({ kind: 'info', title: reason });
         return;
       }
-      await rewordFlow(oid, { ...rewordState.current.s, remoteNames: [] }, currentDialogs, active);
+      await rewordFlow(oid, rewordState.current.s, currentDialogs, active);
     } catch {
       if (active())
         useAppStore.getState().notice({ kind: 'error', title: S.shortcuts.commitLoadFailed });
@@ -314,12 +312,6 @@ export function GraphPane() {
       for (const remove of unregister) remove();
     };
   }, [s, editSelectedMessage]);
-  useEffect(() => {
-    if (request?.sessionId !== s.id || request.oid !== s.selectedCommit || request.signal.aborted)
-      return;
-    // 요청 수명은 메시지를 읽고 대화상자를 닫을 때까지 유지한다.
-    void editSelectedMessage().finally(() => finishRewordRequest(request));
-  }, [request, s.id, s.selectedCommit, editSelectedMessage]);
   const wantAvatars = s.graphColumns.avatar ?? false;
   const onRowsRendered = useCallback(
     (rows: readonly (GraphRow | undefined)[]) => {

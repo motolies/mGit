@@ -219,14 +219,14 @@ describe('폴더 탭 닫기 확인 (WS-21)', () => {
     expect(closeFolder).toHaveBeenCalledWith(folder);
   });
 
-  it('숨은 세션에서 쓰기가 돌면 그것도 알린다', async () => {
+  it('숨은 세션에서 쓰기가 돌면 폴더를 보존하고 알린다', async () => {
     const { store, folder, session, openConflict } = await setup();
     await openConflict(CATALOG, FACET);
     getSessionStore(session(CATALOG))?.setState({ busy: true });
     await store.getState().requestCloseSession(folder);
-    expect(store.getState().folderCloseConfirm?.risks).toEqual([
-      { kind: 'running', repoName: 'catalog-service' },
-    ]);
+    expect(store.getState().folderCloseConfirm).toBeNull();
+    expect(store.getState().sessions[folder]).toBeDefined();
+    expect(store.getState().toasts.at(-1)?.title).toBe(S.toolbar.closeTabsBusy);
   });
 
   it('거기서 연 하위 저장소 탭이 있으면 초안이 없어도 확인한다 (탭 이름)', async () => {

@@ -1,6 +1,7 @@
 import type { PullMode, SessionId } from '@mgit/ipc';
 import { Button, S } from '@mgit/ui';
 import { type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from 'react';
+import { ContextMenuArea } from '../components/ContextMenu';
 import { type DropdownItem, DropdownMenu } from '../components/DropdownMenu';
 import { hasModifier, rovingIndex } from '../components/roving';
 import { useCommandTitle } from '../components/use-command-shortcut';
@@ -8,6 +9,7 @@ import { useBatchReport } from '../features/folder/batch-report';
 import { useFolderBatchFlows } from '../features/folder/FolderBatchBar';
 import { RemotesDialog } from '../features/remote/RemotesDialog';
 import { useActiveTab, useAppStore, useFolder, useIsRepoTab, useSession } from '../store';
+import { type SessionCloseMode, sessionCloseTargets } from '../store/session-close';
 import type { ThemePreference } from '../store/theme';
 import styles from './Toolbar.module.css';
 
@@ -291,6 +293,8 @@ export function Toolbar() {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const openRepository = useAppStore((s) => s.openRepository);
   const closeSession = useAppStore((s) => s.requestCloseSession);
+  const closeTabs = useAppStore((s) => s.requestCloseTabs);
+  const closing = useAppStore((s) => s.closeTabsRunning);
   const setActiveSession = useAppStore((s) => s.setActiveSession);
   const setTheme = useAppStore((s) => s.setTheme);
   const lastError = useAppStore((s) => s.lastError);
@@ -308,11 +312,14 @@ export function Toolbar() {
   const tabsRef = useRef<HTMLDivElement>(null);
   const tabPrefix = useId();
   const previousActive = useRef(activeSessionId);
+  const previousTabCount = useRef(sessionOrder.length);
   // 전역 닫기 명령으로 세션 본문까지 사라졌다면 남은 활성 탭 또는 빈 탭 영역으로 돌아간다.
   useLayoutEffect(() => {
     const closed =
-      previousActive.current !== null && !sessionOrder.includes(previousActive.current);
+      (previousActive.current !== null && !sessionOrder.includes(previousActive.current)) ||
+      sessionOrder.length < previousTabCount.current;
     previousActive.current = activeSessionId;
+    previousTabCount.current = sessionOrder.length;
     if (closed && document.activeElement === document.body) {
       const target =
         activeSessionId === null
@@ -340,6 +347,19 @@ export function Toolbar() {
 
   /** 저장소·폴더 탭도 Tab 진입점 하나와 방향키·Home/End 선택을 제공한다 */
   const onTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, id: SessionId) => {
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      e.preventDefault();
+      const rect = e.currentTarget.getBoundingClientRect();
+      e.currentTarget.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.bottom,
+        }),
+      );
+      return;
+    }
     if (hasModifier(e)) return;
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
@@ -371,52 +391,79 @@ export function Toolbar() {
       {folderTab ? <FolderSyncButtons /> : null}
       {repoTab ? <UndoButtons /> : null}
 
-      <div
-        ref={tabsRef}
-        className={styles.tabs}
-        role="tablist"
-        tabIndex={sessionOrder.length === 0 ? 0 : -1}
-        aria-label={S.toolbar.tabsLabel}
+      <ContextMenuArea
+        className={styles.tabContext}
+        resolveTarget={(event) => {
+          const element = (event.target as HTMLElement).closest<HTMLElement>('[data-session-tab]');
+          const id = Number(element?.dataset.sessionTab);
+          return element && sessions[id] ? id : null;
+        }}
+        items={(id) =>
+          (
+            [
+              ['this', S.toolbar.closeThisTab],
+              ['others', S.toolbar.closeOtherTabs],
+              ['all', S.toolbar.closeAllTabs],
+            ] as const
+          ).map(([mode, label]) => ({
+            label,
+            disabled: closing || sessionCloseTargets(sessionOrder, sessions, id, mode).length === 0,
+            onSelect: () => void closeTabs(id, mode as SessionCloseMode),
+          }))
+        }
       >
-        {sessionOrder.map((id) => {
-          const meta = sessions[id];
-          if (!meta) {
-            return null;
-          }
-          const active = id === activeSessionId;
-          return (
-            <div key={id} className={active ? styles.tabActive : styles.tab}>
-              <button
-                type="button"
-                className={styles.tabLabel}
-                id={`${tabPrefix}-${id}`}
-                role="tab"
-                aria-selected={active}
-                tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
-                onKeyDown={(e) => onTabKeyDown(e, id)}
-                onClick={() => setActiveSession(id)}
-                title={meta.path}
+        <div
+          ref={tabsRef}
+          className={styles.tabs}
+          role="tablist"
+          tabIndex={sessionOrder.length === 0 ? 0 : -1}
+          aria-label={S.toolbar.tabsLabel}
+        >
+          {sessionOrder.map((id) => {
+            const meta = sessions[id];
+            if (!meta) {
+              return null;
+            }
+            const active = id === activeSessionId;
+            return (
+              <div
+                key={id}
+                data-session-tab={id}
+                className={active ? styles.tabActive : styles.tab}
               >
-                {meta.kind === 'folder'
-                  ? `▣ ${meta.name}`
-                  : meta.parent !== null
-                    ? `└ ${meta.name}`
-                    : meta.name}
-              </button>
-              <button
-                type="button"
-                className={styles.tabClose}
-                tabIndex={-1}
-                onClick={() => void closeTab(id)}
-                aria-label={S.toolbar.closeRepo}
-                title={S.toolbar.closeRepo}
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-      </div>
+                <button
+                  type="button"
+                  className={styles.tabLabel}
+                  id={`${tabPrefix}-${id}`}
+                  role="tab"
+                  aria-selected={active}
+                  tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
+                  onKeyDown={(e) => onTabKeyDown(e, id)}
+                  onClick={() => setActiveSession(id)}
+                  title={meta.path}
+                >
+                  {meta.kind === 'folder'
+                    ? `▣ ${meta.name}`
+                    : meta.parent !== null
+                      ? `└ ${meta.name}`
+                      : meta.name}
+                </button>
+                <button
+                  type="button"
+                  className={styles.tabClose}
+                  disabled={closing}
+                  tabIndex={-1}
+                  onClick={() => void closeTab(id)}
+                  aria-label={S.toolbar.closeRepo}
+                  title={S.toolbar.closeRepo}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </ContextMenuArea>
 
       <CloneIndicator />
       {repoTab ? <OperationIndicator /> : null}

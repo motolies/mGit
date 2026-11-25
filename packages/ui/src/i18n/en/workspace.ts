@@ -37,6 +37,17 @@ export const enWorkspace: Pick<
     yesterday: (time: string) => `Yesterday ${time}`,
   },
   toolbar: {
+    closeThisTab: 'Close this tab',
+    closeOtherTabs: 'Close other tabs',
+    closeAllTabs: 'Close all tabs',
+    closeTabsTitle: (n: number) => `Close ${n} tabs?`,
+    closeTabsMessage:
+      'Review the tabs and unsaved conflict edits below. Cancel to keep all tabs open.',
+    closeTabsConfirm: 'Close tabs',
+    closeTabsBusy: 'Tabs with work in progress were kept open',
+    closeTabsChanged: 'The targets or edits changed. Please review them again.',
+    closeTabDraft: (repo: string, path: string) => `${repo}: unsaved conflict edits in ${path}`,
+
     openRepo: 'Open repository',
     opening: 'Opening…',
     closeRepo: 'Close repository',

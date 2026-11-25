@@ -488,6 +488,7 @@ export interface FolderState {
    * 빠르게 여러 행을 고르면 마지막 선택의 응답만 반영한다
    */
   selectTimelineRow(repoPath: string, oid: string): void;
+  clearTimelineSelection(repoPath: string, oid: string): void;
   /**
    * 로그 밖에서 커밋을 고르고 로그에서 그 행을 보이게 한다 (W19: blame·히스토리 해시, 상세의 부모·자식, 충돌 탭의 출처).
    * 고르기는 `selectTimelineRow` 와 같고, 지금 질의·범위의 로그에서 행을 찾아 `timeline.reveal` 에 둔다 — 찾으면 로그 탭이
@@ -1647,6 +1648,12 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
             }
           },
         );
+      },
+
+      clearTimelineSelection(repoPath, oid) {
+        if (!sameSelection(get().timeline.selected, { repoPath, oid })) return;
+        detailSeq += 1;
+        patchTimeline({ selected: null, detail: null });
       },
 
       selectTimelineRow(repoPath, oid) {

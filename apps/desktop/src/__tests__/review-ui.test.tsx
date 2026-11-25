@@ -582,7 +582,7 @@ describe('그래프 메뉴 reword', () => {
       signingInfo: null,
       checkRewordAllowed: vi.fn(async () => true),
       commitMessageOf: vi.fn(async () => 'subject\n\nbody line'),
-      rewordCommit: vi.fn(async () => {}),
+      rewordCommit: vi.fn(async () => 'clean' as const),
       ...over,
     } as never;
   }

@@ -539,6 +539,10 @@ export const enTools: Pick<
     clear: 'Clear',
     selectTarget: 'Select an applicable target in the command’s area',
     notReady: 'Unavailable for the current selection or operation state',
+    rewordTarget: (repo: string, hash: string) => `${repo} · ${hash}`,
+    rewordChanged: 'The commit or branch changed. Select the target again.',
+    rewordFailed: 'Could not update the commit message.',
+    rewordRunning: 'Updating the commit message.',
     rewordPublished: 'Messages of commits contained in remote branches cannot be edited',
     rewordRemoteUnknown:
       'Could not verify remote branch containment. Message editing was stopped; please retry',

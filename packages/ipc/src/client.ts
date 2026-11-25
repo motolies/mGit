@@ -38,11 +38,19 @@ import type {
   FolderOpened,
   FolderSettings,
   FoundRepo,
+  FsClipboard,
   FsDirListing,
   FsEditableFile,
+  FsExternalInput,
   FsFile,
   FsImage,
+  FsOperationDecision,
+  FsOperationPlan,
+  FsOperationProgress,
+  FsOperationRequest,
+  FsOperationResult,
   FsSaveResult,
+  FsSource,
   GitignoreTemplate,
   GitVersionInfo,
   GraphLayoutPrefs,
@@ -661,6 +669,23 @@ export interface IpcClient {
     text: string,
   ): Promise<FsSaveResult>;
 
+  /** Project 파일 작업을 준비하고 충돌 목록을 반환한다. */
+  fsPrepareOperation(request: FsOperationRequest): Promise<FsOperationPlan>;
+  /** 준비 이후 경로 변경을 재검증하고 항목별로 실행한다. */
+  fsExecuteOperation(id: string, decisions: FsOperationDecision[]): Promise<FsOperationResult>;
+  /** 다음 안전한 항목 경계에서 실행을 취소한다. */
+  fsCancelOperation(id: string): Promise<void>;
+  /** 완료 항목 수와 현재 처리 경로를 조회한다. */
+  fsOperationProgress(id: string): Promise<FsOperationProgress>;
+  /** 실제 네이티브 drop 경로만 외부 입력 권한으로 등록한다. */
+  fsRegisterDrop(paths: string[]): Promise<FsExternalInput>;
+  /** 파일 URL clipboard를 읽고 내부 cut과 외부 복사를 구분한다. */
+  fsClipboardRead(): Promise<FsClipboard | null>;
+  /** 빈 목록은 clipboard를 해제한다. */
+  fsClipboardWrite(sources: FsSource[], cut: boolean): Promise<void>;
+  /** 시작 복구에서 보존한 복구본 안내를 한 번 읽는다. */
+  fsRecoveryWarnings(): Promise<string[]>;
+
   // 서브모듈 관리 (C2)
   submodulePointerLog(
     session: SessionId,
@@ -1130,6 +1155,14 @@ export function createTauriClient(): IpcClient {
           options ?? null,
         ),
       ),
+    fsPrepareOperation: (request) => call(() => commands.fsPrepareOperation(request)),
+    fsExecuteOperation: (id, decisions) => call(() => commands.fsExecuteOperation(id, decisions)),
+    fsCancelOperation: (id) => voidCall(() => commands.fsCancelOperation(id)),
+    fsOperationProgress: (id) => call(() => commands.fsOperationProgress(id)),
+    fsRegisterDrop: (paths) => call(() => commands.fsRegisterDrop(paths)),
+    fsClipboardRead: () => call(() => commands.fsClipboardRead()),
+    fsClipboardWrite: (sources, cut) => voidCall(() => commands.fsClipboardWrite(sources, cut)),
+    fsRecoveryWarnings: () => call(() => commands.fsRecoveryWarnings()),
     fsListDir: (session, dir, limit) => call(() => commands.fsListDir(session, dir, limit ?? null)),
     fsReadFile: (session, path) => call(() => commands.fsReadFile(session, path)),
     fsReadImage: (session, path) => call(() => commands.fsReadImage(session, path)),

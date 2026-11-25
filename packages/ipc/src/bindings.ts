@@ -523,6 +523,22 @@ export const commands = {
 	folderCommitFileDiff: (session: number, repo: string, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<FileDiff_Serialize | null>("folder_commit_file_diff", { session, repo, oid, path, oldPath, full, options }),
 	/**  전체 원문과 확정된 비교 기준을 함께 조회한다. */
 	folderCommitFileDiffDocument: (session: number, repo: string, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<DiffDocument_Serialize>("folder_commit_file_diff_document", { session, repo, oid, path, oldPath, full, options }),
+	/**  안전한 계획을 생성하며 파일을 변경하지 않는다. */
+	fsPrepareOperation: (request: FsOperationRequest_Deserialize) => __TAURI_INVOKE<FsOperationPlan_Serialize>("fs_prepare_operation", { request }),
+	/**  준비 계획의 변경 여부를 검사하고 항목별 결과를 반환한다. */
+	fsExecuteOperation: (id: string, decisions: FsOperationDecision_Deserialize[]) => __TAURI_INVOKE<FsOperationResult_Serialize>("fs_execute_operation", { id, decisions }),
+	/**  진행 중 파일 작업을 안전한 항목 경계에서 중단한다. */
+	fsCancelOperation: (id: string) => __TAURI_INVOKE<void>("fs_cancel_operation", { id }),
+	/**  파일·디렉터리 단위 완료 수와 현재 처리 경로를 조회한다. */
+	fsOperationProgress: (id: string) => __TAURI_INVOKE<FsOperationProgress_Serialize>("fs_operation_progress", { id }),
+	/**  임의 절대 경로는 받지 않고 실제 OS drop과 일치한 입력만 등록한다. */
+	fsRegisterDrop: (paths: string[]) => __TAURI_INVOKE<FsExternalInput>("fs_register_drop", { paths }),
+	/**  선택 파일을 시스템 clipboard에 기록한다. 빈 목록은 cut 표시와 clipboard를 해제한다. */
+	fsClipboardWrite: (sources: FsSource[], cut: boolean) => __TAURI_INVOKE<null>("fs_clipboard_write", { sources, cut }),
+	/**  Finder clipboard는 항상 복사이며 자체 marker와 changeCount가 일치할 때만 cut을 유지한다. */
+	fsClipboardRead: () => __TAURI_INVOKE<FsClipboard | null>("fs_clipboard_read"),
+	/**  자동으로 복구하지 못한 이전 작업의 경로를 한 번 전달한다. */
+	fsRecoveryWarnings: () => __TAURI_INVOKE<string[]>("fs_recovery_warnings"),
 	/**
 	 *  세션 루트 기준 상대 디렉터리 하나의 항목 (FS-01~05·09). `dir` 이 빈 문자열이면 루트, `limit` 이 없으면
 	 *  2,000 (1~50,000 으로 맞춘다). 루트 밖·`..`·절대 경로·`.git`·링크 나열·경로 중간의 링크는 거부한다
@@ -1534,6 +1550,17 @@ export type FoundRepo = {
 	kind: RepoKind,
 };
 
+export type FsClipboard = {
+	token: string,
+	count: number,
+	cut: boolean,
+	paths: string[],
+};
+
+export type FsConflictKind = "none" | "file" | "directory" | "type";
+
+export type FsDecisionAction = "overwrite" | "merge" | "rename" | "skip";
+
 /**  디렉터리 나열 결과 */
 export type FsDirListingDto = FsDirListingDto_Serialize | FsDirListingDto_Deserialize;
 
@@ -1596,6 +1623,11 @@ export type FsEntryKindDto = "dir" | "file" | "symlink" |
 /**  FIFO·소켓·장치 등 */
 "other";
 
+export type FsExternalInput = {
+	token: string,
+	count: number,
+};
+
 /**  파일 읽기 결과. 본문은 `text` 일 때만 있다 */
 export type FsFileDto =
 /**  UTF-8 텍스트 (BOM·CRLF 그대로) */
@@ -1619,8 +1651,133 @@ export type FsImageDto = { kind: "image"; mime: string; dataUrl: string; size: n
 /**  저장할 줄 끝 형식이다. */
 export type FsLineEndingDto = "lf" | "crlf";
 
+export type FsLocation = {
+	session: number,
+	path: string,
+};
+
+export type FsOperationDecision = FsOperationDecision_Serialize | FsOperationDecision_Deserialize;
+
+export type FsOperationDecision_Deserialize = {
+	itemId: string,
+	action: FsDecisionAction,
+	name?: string | null,
+};
+
+export type FsOperationDecision_Serialize = {
+	itemId: string,
+	action: FsDecisionAction,
+	name: string | null,
+};
+
+export type FsOperationItem = FsOperationItem_Serialize | FsOperationItem_Deserialize;
+
+export type FsOperationItem_Deserialize = {
+	id: string,
+	source?: string | null,
+	destination?: string | null,
+	directory: boolean,
+	conflict: FsConflictKind,
+	error?: string | null,
+	sourceSize?: number | null,
+	destinationSize?: number | null,
+	sourceMtimeMs?: number | null,
+	destinationMtimeMs?: number | null,
+};
+
+export type FsOperationItem_Serialize = {
+	id: string,
+	source: string | null,
+	destination: string | null,
+	directory: boolean,
+	conflict: FsConflictKind,
+	error: string | null,
+	sourceSize?: number | null,
+	destinationSize?: number | null,
+	sourceMtimeMs?: number | null,
+	destinationMtimeMs?: number | null,
+};
+
+export type FsOperationKind = "createFile" | "createDirectory" | "rename" | "copy" | "move" | "trash";
+
+export type FsOperationOutcome = FsOperationOutcome_Serialize | FsOperationOutcome_Deserialize;
+
+export type FsOperationOutcome_Deserialize = {
+	source?: string | null,
+	destination?: string | null,
+	status: FsOutcomeStatus,
+	error?: string | null,
+	directory: boolean,
+};
+
+export type FsOperationOutcome_Serialize = {
+	source: string | null,
+	destination: string | null,
+	status: FsOutcomeStatus,
+	error: string | null,
+	directory: boolean,
+};
+
+export type FsOperationPlan = FsOperationPlan_Serialize | FsOperationPlan_Deserialize;
+
+export type FsOperationPlan_Deserialize = {
+	id: string,
+	kind: FsOperationKind,
+	items: FsOperationItem_Deserialize[],
+};
+
+export type FsOperationPlan_Serialize = {
+	id: string,
+	kind: FsOperationKind,
+	items: FsOperationItem_Serialize[],
+};
+
+export type FsOperationProgress = FsOperationProgress_Serialize | FsOperationProgress_Deserialize;
+
+export type FsOperationProgress_Deserialize = {
+	completed: number,
+	total: number,
+	currentPath?: string | null,
+};
+
+export type FsOperationProgress_Serialize = {
+	completed: number,
+	total: number,
+	currentPath: string | null,
+};
+
+export type FsOperationRequest = FsOperationRequest_Serialize | FsOperationRequest_Deserialize;
+
+export type FsOperationRequest_Deserialize = {
+	kind: FsOperationKind,
+	sources: FsSource[],
+	destination?: FsLocation | null,
+};
+
+export type FsOperationRequest_Serialize = {
+	kind: FsOperationKind,
+	sources: FsSource[],
+	destination: FsLocation | null,
+};
+
+export type FsOperationResult = FsOperationResult_Serialize | FsOperationResult_Deserialize;
+
+export type FsOperationResult_Deserialize = {
+	id: string,
+	items: FsOperationOutcome_Deserialize[],
+};
+
+export type FsOperationResult_Serialize = {
+	id: string,
+	items: FsOperationOutcome_Serialize[],
+};
+
+export type FsOutcomeStatus = "committed" | "skipped" | "failed" | "cancelled";
+
 /**  저장 응답에는 본문을 싣지 않아 늦은 응답이 새 초안을 덮어쓰지 않는다. */
 export type FsSaveResultDto = { kind: "saved"; revision: string } | { kind: "conflict" } | { kind: "failed"; message: string };
+
+export type FsSource = { kind: "session"; session: number; path: string } | { kind: "external"; token: string; index: number };
 
 /**  실패한 쓰기 명령의 힌트 */
 export type GitHint = { kind: "dirtyWorkTree"; files: string[] } | { kind: "branchCheckedOutElsewhere"; path: string } | { kind: "notFullyMerged" } | { kind: "conflicts" } | { kind: "indexLock" } | { kind: "nonFastForward" } | { kind: "authFailed" } | { kind: "staleInfo" } | { kind: "detachedHead" } | { kind: "nothingToCommit" } | { kind: "hookFailed" } | { kind: "noUpstream" } | { kind: "remoteTagExists" } | { kind: "remoteRejected"; reason: string };

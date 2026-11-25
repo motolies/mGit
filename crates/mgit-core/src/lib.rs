@@ -97,6 +97,11 @@ pub use fs_tree::{
     FS_IMAGE_MAX_BYTES, FS_LIST_DEFAULT_LIMIT, FS_LIST_MAX_LIMIT, FS_READ_MAX_BYTES,
     FsEditableFile, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing, FsSaveResult,
 };
+pub use fs_tree::{
+    FsConflictKind, FsDecisionAction, FsLocation, FsOperationDecision, FsOperationItem,
+    FsOperationKind, FsOperationOutcome, FsOperationPlan, FsOperationProgress, FsOperationRequest,
+    FsOperationResult, FsOperations, FsOutcomeStatus, FsSource, FsTrash,
+};
 pub use history::EMPTY_TREE;
 pub use hosting::{HostingAccount, OauthConfig, Profile, SshKeyInfo, account_id};
 pub use hosting_pr::{PrTemplate, RemoteProject, avatar_url_for, parse_remote_url};

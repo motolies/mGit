@@ -20,11 +20,13 @@ import { ChangesPanel } from '../changes/ChangesPanel';
 import { RepoCommitTool } from '../commit/RepoCommitTool';
 import { SessionConflictPane } from '../conflict/ConflictPane';
 import { SessionDiffPane } from '../diff/DiffPane';
+import { HistoricalDiffDoc } from '../diff/HistoricalDiffDoc';
 import { PullRequestsTool } from '../hosting/PullRequestsTool';
 import { useRepoStructure } from '../modules/RepoStructure';
 import { ownEntries } from '../project/file-actions-menu';
 import { buildStatusLookup } from '../project/file-status';
-import { type ProjectOpenMode, ProjectTree } from '../project/ProjectTree';
+import { ManagedProjectTree } from '../project/ManagedProjectTree';
+import type { ProjectOpenMode } from '../project/ProjectTree';
 import { type RowDecoration, repoDecoration } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
 import { useFileActions } from '../project/use-file-actions';
@@ -36,7 +38,7 @@ import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
 import { repoTreeMenu } from './repo-tree-menu';
-import { currentFileTabMenu, useCurrentFile } from './use-current-file';
+import { useEditorFileMenu } from './use-current-file';
 import docStyles from './WorktreeDiffDoc.module.css';
 
 /** 에디터 문서가 가리키는 작업 트리 파일의 루트(작업 트리) 기준 경로 (트리에서 찾기). 없으면 null */
@@ -45,6 +47,8 @@ function repoDocTreePath(doc: EditorDoc | undefined): string | null {
     case 'file':
     case 'worktreeDiff':
     case 'historyDiff':
+    case 'commitDiff':
+    case 'rangeDiff':
       return doc.path;
     case 'conflict':
       // 읽는 중인 충돌 문서는 경로가 아직 없다
@@ -128,7 +132,7 @@ export interface RepoWorkspaceProps {
  *   디렉터리처럼 펼침이고, 저장소 탭으로 열기는 행 메뉴에 있다 (폴더 탭 W11 과 같은 규칙)
  */
 export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
-  const editCurrent = useCurrentFile();
+  const editorFileMenu = useEditorFileMenu();
   useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const tabId = useActiveTab()?.id ?? null;
   const s = useSession(pickRepo);
@@ -157,6 +161,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     openDoc: w.openDoc,
     activateDoc: w.activateDoc,
     closeDoc: w.closeDoc,
+    closeDocs: w.closeDocs,
     pinDoc: w.pinDoc,
   }));
   // 왼쪽 도구 창: Project·Commit·Pull Requests 가 같은 자리에 번갈아 뜬다 (폭은 폴더 탭과 함께 쓴다, WS-05). 그리는 것은
@@ -380,9 +385,10 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
         );
       case 'tags':
         return <TagsDoc key={doc.id} />;
-      case 'overview':
       case 'commitDiff':
-        // 폴더 탭의 문서다 (저장소 탭은 커밋 diff 를 세션 문서 `historyDiff` 로 연다)
+      case 'rangeDiff':
+        return <HistoricalDiffDoc key={doc.id} doc={doc} />;
+      case 'overview':
         return null;
     }
   };
@@ -408,7 +414,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
           <PullRequestsTool />
         ) : (
           <>
-            <ProjectTree
+            <ManagedProjectTree
+              protectedPaths={structure.ownerRepos}
+              session={tabId}
               // 탭마다 새로 마운트해 다른 탭의 스크롤 자리가 섞이지 않게 한다
               key={tabId}
               root={{ name: s.name, detail: root }}
@@ -456,8 +464,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
           renderDoc={renderDoc}
           onActivate={ws.activateDoc}
           onClose={ws.closeDoc}
+          onCloseMany={ws.closeDocs}
           onPin={ws.pinDoc}
-          tabMenu={(doc) => currentFileTabMenu(doc, editCurrent)}
+          tabMenu={editorFileMenu}
           empty={<EditorEmptyState hints={hints} action={emptyAction} />}
         />
       }

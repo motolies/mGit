@@ -14,6 +14,8 @@ export function docTitle(doc: DocTarget): string {
       return S.workspace.overview;
     case 'commitDiff':
       return S.workspace.commitDiffTitle(baseName(doc.path), shortHash(doc.oid));
+    case 'rangeDiff':
+      return baseName(doc.path);
     case 'historyDiff':
       return doc.rev.kind === 'commit'
         ? S.workspace.commitDiffTitle(baseName(doc.path), shortHash(doc.rev.oid))
@@ -41,6 +43,7 @@ export function docDetail(doc: DocTarget): string | undefined {
     case 'overview':
       return undefined;
     case 'commitDiff':
+    case 'rangeDiff':
     case 'worktreeDiff':
     case 'historyDiff':
     case 'conflict':
@@ -66,6 +69,8 @@ export function docTooltip(doc: DocTarget): string | undefined {
       return undefined;
     case 'commitDiff':
       return S.workspace.commitDiffTip(doc.repoName, doc.path, shortHash(doc.oid));
+    case 'rangeDiff':
+      return S.workspace.worktreeDiffTip(doc.repoName, doc.path, doc.label);
     case 'historyDiff':
       return doc.rev.kind === 'commit'
         ? S.workspace.commitDiffTip(doc.repoName, doc.path, shortHash(doc.rev.oid))

@@ -477,7 +477,8 @@ export interface AppStore {
    * 충돌 탭을 닫는다 (ED-06, 저장소 탭은 W21): 그 문서의 세션(`closeRepoDiff` 와 같게 찾는다)의 충돌 슬롯을 비운다.
    * 초안이 있으면 닫지 않고 확인(`conflictLeave`)을 먼저 받는다
    */
-  closeRepoConflict(tab: SessionId, repoPath: string): void;
+  // biome-ignore lint/suspicious/noConfusingVoidType: 기존 동기 호출자를 보존하며 일괄 닫기는 확인 결과를 기다린다.
+  closeRepoConflict(tab: SessionId, repoPath: string): void | Promise<boolean>;
   /**
    * 충돌 탭을 떠나는 확인에 답한다: 닫기(또는 다른 파일 열기)를 하고, `discard` 면 그 파일의 초안도 버린다. 버리지 않으면
    * 초안은 그 세션에 남아 같은 파일을 다시 열면 이어진다
@@ -816,6 +817,8 @@ export function createRepoWorkspace(
 
 export function createAppStore(deps: AppStoreDeps) {
   const store = create<AppStore>()((set, get) => {
+    // 일괄 문서 닫기는 기존 충돌 확인의 선택이 끝난 뒤 다음 문서로 진행한다.
+    let conflictCloseResolve: ((allowed: boolean) => void) | null = null;
     /**
      * 코어 이벤트를 해당 세션·폴더 스토어로 넘긴다. 닫힌 세션의 늦은 이벤트는 버린다. 어느 채널로 왔든 세션 id 로
      * 스토어를 찾으므로, 승격한 세션의 새 채널 이벤트도 같은 스토어로 간다 (W13). 폴더가 쓰는 저장소 세션의 상태가
@@ -1971,7 +1974,9 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       openRepoConflict(folder, repoPath, path) {
+        if (get().conflictLeave !== null) return Promise.resolve(false);
         return get().withRepoSession(folder, repoPath, (st) => {
+          if (get().conflictLeave !== null) return;
           // 같은 저장소의 다른 충돌 파일로 바꾸면 지금 파일의 초안이 화면에서 사라진다 (초안은 남는다) → 먼저 확인
           if (st.conflict !== null && st.conflict.path !== path && openConflictDraft(st) !== null) {
             set({
@@ -1990,24 +1995,29 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       closeRepoConflict(tab, repoPath) {
+        if (get().conflictLeave !== null) return Promise.resolve(false);
         const st = repoSessionState(tab, repoPath);
         // 열린 충돌이 없으면(저장소 탭의 "여는 중" 문서 포함 — 옛 닫기도 읽기를 멈추지 않았다, W20 ③) 할 일이 없다
         if (!st?.conflict) {
           return;
         }
+        const path = st.conflict.path;
         if (openConflictDraft(st) !== null) {
-          set({
-            conflictLeave: {
-              folder: tab,
-              repoPath,
-              repoName: tabRepoName(tab, repoPath),
-              path: st.conflict.path,
-              next: null,
-            },
+          return new Promise<boolean>((resolve) => {
+            conflictCloseResolve = resolve;
+            set({
+              conflictLeave: {
+                folder: tab,
+                repoPath,
+                repoName: tabRepoName(tab, repoPath),
+                path,
+                next: null,
+              },
+            });
           });
-          return;
         }
         st.closeConflict();
+        return Promise.resolve(true);
       },
 
       confirmConflictLeave(discard) {
@@ -2015,6 +2025,8 @@ export function createAppStore(deps: AppStoreDeps) {
         set({ conflictLeave: null });
         const st = pending ? repoSessionState(pending.folder, pending.repoPath) : undefined;
         if (!pending || !st) {
+          conflictCloseResolve?.(false);
+          conflictCloseResolve = null;
           return;
         }
         if (discard) {
@@ -2025,10 +2037,14 @@ export function createAppStore(deps: AppStoreDeps) {
         } else {
           openConflictIn(pending.folder, pending.repoPath, st, pending.next);
         }
+        conflictCloseResolve?.(true);
+        conflictCloseResolve = null;
       },
 
       cancelConflictLeave() {
         set({ conflictLeave: null });
+        conflictCloseResolve?.(false);
+        conflictCloseResolve = null;
       },
 
       async closeSession(id) {

@@ -30,7 +30,8 @@ import { FolderCommitDiff } from '../folder/FolderCommitDiff';
 import { FolderSettingsDialog } from '../folder/FolderSettingsDialog';
 import { ownEntries } from '../project/file-actions-menu';
 import { buildStatusLookup } from '../project/file-status';
-import { type ProjectOpenMode, ProjectTree } from '../project/ProjectTree';
+import { ManagedProjectTree } from '../project/ManagedProjectTree';
+import type { ProjectOpenMode } from '../project/ProjectTree';
 import { type RowDecoration, repoDecorations } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
 import { useFileActions } from '../project/use-file-actions';
@@ -41,7 +42,7 @@ import { editorHints } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, folderTreeMenu, menuTargets } from './folder-tree-menu';
 import { useRepoSessionActions } from './repo-session-actions';
-import { currentFileTabMenu, useCurrentFile } from './use-current-file';
+import { useEditorFileMenu } from './use-current-file';
 import { WorktreeDiffDoc } from './WorktreeDiffDoc';
 
 /**
@@ -54,6 +55,7 @@ function renderDoc(doc: EditorDoc, repoTools: (doc: EditorDoc) => FileViewRepoTo
     case 'overview':
       return <Dashboard />;
     case 'commitDiff':
+    case 'rangeDiff':
       return <FolderCommitDiff key={doc.id} doc={doc} />;
     case 'file':
       return <FileViewDoc key={doc.id} doc={doc} repoTools={repoTools(doc)} />;
@@ -75,7 +77,12 @@ function docTreePath(doc: EditorDoc | undefined, root: string): string | null {
   if (doc?.kind === 'file') {
     return doc.path;
   }
-  if (doc?.kind === 'commitDiff' || doc?.kind === 'worktreeDiff' || doc?.kind === 'conflict') {
+  if (
+    doc?.kind === 'commitDiff' ||
+    doc?.kind === 'rangeDiff' ||
+    doc?.kind === 'worktreeDiff' ||
+    doc?.kind === 'conflict'
+  ) {
     const repo = relativeTo(root, doc.repoPath);
     return repo === null ? null : childPath(repo, doc.path);
   }
@@ -98,7 +105,7 @@ export interface FolderWorkspaceProps {
  * 갱신된다. 파일 상태 색을 위해 변경 목록을 한 번 읽어 두면 그 뒤로는 폴더 스토어의 갱신이 함께 다시 읽는다
  */
 export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
-  const editCurrent = useCurrentFile();
+  const editorFileMenu = useEditorFileMenu();
   useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const f = useFolder((st) => ({
     id: st.id,
@@ -140,6 +147,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     openDoc: w.openDoc,
     activateDoc: w.activateDoc,
     closeDoc: w.closeDoc,
+    closeDocs: w.closeDocs,
     pinDoc: w.pinDoc,
     setActiveRepo: w.setActiveRepo,
     retainActiveRepo: w.retainActiveRepo,
@@ -375,7 +383,9 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
           leftTool === 'commit' ? (
             <FolderCommitTool />
           ) : (
-            <ProjectTree
+            <ManagedProjectTree
+              protectedPaths={repoPaths}
+              session={f.id}
               // 폴더 탭마다 새로 마운트해 다른 폴더의 스크롤 자리가 섞이지 않게 한다
               key={f.id}
               root={{ name: f.name, detail: f.path }}
@@ -421,8 +431,9 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
             renderDoc={(doc) => renderDoc(doc, fileTools)}
             onActivate={ws.activateDoc}
             onClose={ws.closeDoc}
+            onCloseMany={ws.closeDocs}
             onPin={ws.pinDoc}
-            tabMenu={(doc) => currentFileTabMenu(doc, editCurrent)}
+            tabMenu={editorFileMenu}
             empty={
               <EditorEmptyState
                 hints={hints}

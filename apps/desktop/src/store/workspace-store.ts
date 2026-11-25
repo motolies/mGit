@@ -35,6 +35,17 @@ export interface CommitDiffTarget {
   merge: boolean;
 }
 
+/** 선택 범위의 파일 diff 문서. 범위를 바꾸어도 열린 문서의 비교 양 끝은 유지한다. */
+export interface RangeDiffTarget {
+  kind: 'rangeDiff';
+  repoPath: string;
+  repoName: string;
+  base: string;
+  newer: string;
+  label: string;
+  path: string;
+}
+
 /**
  * 작업 트리 파일 하나의 보기 문서 (ED-04, 읽기 전용). 경로는 워크스페이스 루트 기준 상대 경로다 — 폴더 탭은
  * 폴더, 저장소 탭은 작업 트리가 루트다 (파일 API 와 같다)
@@ -125,6 +136,7 @@ export interface TagsDocTarget {
 export type DocTarget =
   | { kind: 'overview' }
   | CommitDiffTarget
+  | RangeDiffTarget
   | FileViewTarget
   | SessionDocTarget
   | TagsDocTarget;
@@ -155,6 +167,15 @@ export function commitDiffDoc(target: Omit<CommitDiffTarget, 'kind'>): DocReques
     kind: 'commitDiff',
     ...target,
     id: commitDiffDocId(target.repoPath, target.oid, target.path),
+  };
+}
+
+/** 범위와 파일이 같은 요청만 같은 탭으로 모으고 미리보기/고정 정책을 재사용한다. */
+export function rangeDiffDoc(target: Omit<RangeDiffTarget, 'kind'>): DocRequest {
+  return {
+    kind: 'rangeDiff',
+    ...target,
+    id: `rangeDiff:${JSON.stringify([target.repoPath, target.base, target.newer, target.path])}`,
   };
 }
 
@@ -214,6 +235,7 @@ export function docRepoPath(doc: DocTarget): string | null {
     case 'overview':
       return null;
     case 'commitDiff':
+    case 'rangeDiff':
     case 'file':
     case 'worktreeDiff':
     case 'historyDiff':
@@ -358,6 +380,7 @@ export function isSessionDoc(doc: DocTarget): doc is SessionDocTarget {
       return true;
     case 'overview':
     case 'commitDiff':
+    case 'rangeDiff':
     case 'file':
     case 'tags':
       return false;
@@ -619,6 +642,8 @@ export interface WorkspaceState extends EditorTabs {
   revealDoc(id: string): void;
   /** 문서를 닫는다. 세션 문서면 그 세션의 슬롯을 비우게 알리고(`closeSessionDoc`) 파생 목록이 바뀌기를 기다린다 */
   closeDoc(id: string): void;
+  /** 여러 문서는 순서대로 저장·확인하며 취소한 문서부터 남긴다. */
+  closeDocs(ids: readonly string[]): Promise<boolean>;
   pinDoc(id: string): void;
   /** 세션에서 파생한 문서 목록을 바꾼다 (앱 스토어가 장부·세션 슬롯이 바뀔 때 부른다). 같으면 아무것도 하지 않는다 */
   setSessionDocs(docs: readonly DocRequest[]): void;
@@ -679,7 +704,8 @@ export interface WorkspaceDeps {
    * 앱 스토어가 문서의 세션을 찾고(폴더 탭은 장부에서 문서의 저장소로, 저장소 탭은 탭 자신의 세션) 충돌 초안이 있으면 먼저
    * 확인한다. 없으면 세션 문서는 닫히지 않는다
    */
-  closeSessionDoc?: (doc: SessionDocTarget) => void;
+  // biome-ignore lint/suspicious/noConfusingVoidType: 기존 동기 닫기와 확인 결과를 기다리는 비동기 닫기를 함께 받는다.
+  closeSessionDoc?: (doc: SessionDocTarget) => void | Promise<boolean>;
 }
 
 /** 탭 상태만 골라 낸다 (전이 함수에 넘길 때) */
@@ -718,6 +744,7 @@ export function activeRepoInList(
 /** 워크스페이스 스토어를 만든다. 앱 스토어가 탭을 열 때 만들고 닫을 때 버린다 */
 export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {}): WorkspaceStore {
   const closingFiles = new Set<string>();
+  let closingBatch = false;
   // 문서별 스크롤 위치. 닫힌 문서의 것은 탭이 바뀔 때 버린다
   const scrolls = new Map<string, number>();
   // Commit 도구 창 변경 트리의 스크롤 위치 (다시 그릴 값이 아니라 구독 상태 밖에 둔다)
@@ -777,6 +804,7 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     },
 
     closeDoc(id) {
+      if (closingBatch) return;
       const before = get();
       const file = before.docs.find((doc) => doc.id === id && doc.kind === 'file');
       if (file?.kind === 'file' && deps.beforeCloseFile) {
@@ -805,13 +833,53 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
       set(applyTabs(tabs, followActive(before, tabs)));
     },
 
+    async closeDocs(ids) {
+      if (closingBatch || closingFiles.size > 0) return false;
+      closingBatch = true;
+      // 시작 시점의 문서만 닫는다. 확인 중 새로 열린 같은 ID의 문서는 남긴다.
+      const targets = [...new Set(ids)].flatMap((id) => {
+        const doc = allDocs(get()).find((item) => item.id === id);
+        return doc ? [doc] : [];
+      });
+      try {
+        for (const target of targets) {
+          if (!allDocs(get()).includes(target)) continue;
+          if (target.kind === 'file' && deps.beforeCloseFile) {
+            closingFiles.add(target.id);
+            try {
+              if (!(await deps.beforeCloseFile(target.path))) return false;
+            } finally {
+              closingFiles.delete(target.id);
+            }
+            if (!allDocs(get()).includes(target)) continue;
+          }
+          if (isSessionDoc(target)) {
+            const result = await deps.closeSessionDoc?.(target);
+            if (result === false || hasDoc(get(), target.id)) return false;
+          } else {
+            const before = get();
+            const tabs = docClosed(tabsOf(before), target.id);
+            set(applyTabs(tabs, followActive(before, tabs)));
+          }
+        }
+        return true;
+      } finally {
+        closingBatch = false;
+      }
+    },
+
     pinDoc(id) {
       set(docPinned(tabsOf(get()), id));
     },
 
     setSessionDocs(docs) {
       const before = get();
-      const next: EditorDoc[] = docs.map((doc) => ({ ...doc, pinned: true }));
+      // 다른 슬롯이 닫혀도 내용이 같은 문서의 정체성은 유지한다 (일괄 닫기 대상 재검사).
+      const next: EditorDoc[] = docs.map((doc) => {
+        const candidate = { ...doc, pinned: true };
+        const existing = before.sessionDocs.find((item) => item.id === doc.id);
+        return existing && sameSessionDocs([existing], [candidate]) ? existing : candidate;
+      });
       if (sameSessionDocs(before.sessionDocs, next)) {
         return;
       }

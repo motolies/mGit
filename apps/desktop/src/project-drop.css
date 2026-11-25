@@ -1,0 +1,5 @@
+[data-native-drop-target] {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+  background: var(--bg-selected);
+}

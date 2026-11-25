@@ -60,6 +60,7 @@ impl Core {
         expected_revision: &str,
         text: &str,
     ) -> Result<FsSaveResult, CoreError> {
+        let _mutation_guard = super::FS_MUTATION_LOCK.lock().await;
         let root = self.fs_root(session)?;
         let parsed = parse(path)?;
         let root_for_resolve = root.clone();

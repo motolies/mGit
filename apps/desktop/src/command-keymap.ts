@@ -1,7 +1,15 @@
 import { isMac, normalizeShortcut } from '@mgit/ui';
 import type { Action } from './actions';
 
-export type CommandScope = 'global' | 'log' | 'files' | 'diff' | 'commit' | 'branch' | 'editor';
+export type CommandScope =
+  | 'global'
+  | 'project'
+  | 'log'
+  | 'files'
+  | 'diff'
+  | 'commit'
+  | 'branch'
+  | 'editor';
 
 /** IntelliJ OS별 기본값. 없는 ID의 기존 mGit 기본값은 그대로 유지한다. */
 export function defaultShortcut(id: string, fallback?: string, mac = isMac()): string | undefined {
@@ -15,6 +23,13 @@ export function defaultShortcut(id: string, fallback?: string, mac = isMac()): s
     'view.graphFilter': undefined,
     'sync.pull': 'mod+t',
     'sync.push': 'mod+shift+k',
+    'project.newFile': 'mod+n',
+    'project.newFolder': 'mod+shift+n',
+    'project.rename': 'f2',
+    'project.copy': 'mod+c',
+    'project.cut': 'mod+x',
+    'project.paste': 'mod+v',
+    'project.trash': mac ? 'mod+backspace' : 'delete',
     'log.reword': 'f2',
     'log.copyHash': 'mod+c',
     'log.searchNext': mac ? 'mod+g' : 'f3',
@@ -31,6 +46,13 @@ export function defaultShortcut(id: string, fallback?: string, mac = isMac()): s
 
 /** 명령별 입력 정책과 활성 영역의 메타데이터. */
 export const COMMAND_SCOPES: Record<string, CommandScope> = {
+  'project.newFile': 'project',
+  'project.newFolder': 'project',
+  'project.rename': 'project',
+  'project.copy': 'project',
+  'project.cut': 'project',
+  'project.paste': 'project',
+  'project.trash': 'project',
   'log.reword': 'log',
   'log.copyHash': 'log',
   'log.searchNext': 'log',

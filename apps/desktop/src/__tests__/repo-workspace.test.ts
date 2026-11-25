@@ -586,6 +586,54 @@ describe('세션 슬롯 전이 → 저장소 탭 에디터의 활성 문서 (ED-
     expect(st().conflict).toBeNull();
   });
 
+  it('일괄 닫기는 충돌 확인을 기다리고 취소하면 다음 문서를 보존한다', async () => {
+    const { store, st, ws } = await openConflictRepo();
+    await st().openConflict(PAY);
+    await st().openFile(STAGED, true);
+    const open = present(st().conflict, '열린 충돌');
+    st().setConflictDraft(PAY, {
+      text: 'mine',
+      ranges: [],
+      key: open.payload.file.stages.join(':'),
+    });
+    const ids = [conflictDocId(CONFLICT_REPO), worktreeDiffDocId(CONFLICT_REPO)];
+    const closing = ws().closeDocs(ids);
+    expect(store.getState().conflictLeave?.path).toBe(PAY);
+    expect(st().selectedFile?.path).toBe(STAGED);
+    store.getState().cancelConflictLeave();
+    expect(await closing).toBe(false);
+    expect(ws().sessionDocs).toHaveLength(2);
+
+    const retry = ws().closeDocs(ids);
+    store.getState().confirmConflictLeave(false);
+    expect(await retry).toBe(true);
+    expect(ws().sessionDocs).toHaveLength(0);
+    expect(st().conflictDrafts[PAY]?.text).toBe('mine');
+  });
+
+  it('diff를 먼저 닫아 파생 문서 목록이 갱신되어도 뒤의 충돌 탭까지 닫는다', async () => {
+    const { store, st, ws } = await openConflictRepo();
+    await st().openConflict(PAY);
+    await st().openFile(STAGED, true);
+    const open = present(st().conflict, '열린 충돌');
+    st().setConflictDraft(PAY, {
+      text: 'mine',
+      ranges: [],
+      key: open.payload.file.stages.join(':'),
+    });
+    const closing = ws().closeDocs([
+      worktreeDiffDocId(CONFLICT_REPO),
+      conflictDocId(CONFLICT_REPO),
+    ]);
+    await flush();
+    expect(st().selectedFile).toBeNull();
+    expect(store.getState().conflictLeave?.path).toBe(PAY);
+    store.getState().confirmConflictLeave(true);
+    expect(await closing).toBe(true);
+    expect(ws().sessionDocs).toHaveLength(0);
+    expect(st().conflictDrafts[PAY]).toBeUndefined();
+  });
+
   it('문서가 열리면 아래 도구 창의 최대화를 푼다 (W21 — 폴더 탭의 `onDocOpened` 와 같은 규칙, WS-03)', async () => {
     const { store, st, ws, id } = await openConflictRepo();
     store.getState().toggleDockMaximized();

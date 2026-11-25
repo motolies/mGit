@@ -41,6 +41,7 @@ import {
   mockUpdateLocalBranch,
 } from './mock-console';
 import { mockDiffDocument } from './mock-diff-document';
+import { createMockFileOperations } from './mock-file-operations';
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
 import { pick } from './mock-l10n';
@@ -1890,6 +1891,43 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           reloadTimeline(session);
         },
 
+        ...createMockFileOperations(scene.fs, fsRootOf, (items) => {
+          for (const [id, entry] of sessions) {
+            if (!entry.data) continue;
+            let entries = [...entry.data.repoState.status.entries];
+            for (const item of items) {
+              if (item.status !== 'committed' || item.directory) continue;
+              for (const absolute of [item.source, item.destination]) {
+                if (!absolute?.startsWith(`${entry.path}/`)) continue;
+                const relative = absolute.slice(entry.path.length + 1);
+                const exists = scene.fs.kind(entry.path, relative) !== null;
+                const found = entries.find((e) => e.path === relative);
+                entries = entries.filter((e) => e.path !== relative);
+                if (exists)
+                  entries.push({
+                    path: relative,
+                    index: found?.index ?? 'unmodified',
+                    worktree: found ? 'modified' : 'untracked',
+                  });
+                else if (found?.worktree !== 'untracked')
+                  entries.push({
+                    path: relative,
+                    index: found?.index ?? 'unmodified',
+                    worktree: 'deleted',
+                  });
+              }
+            }
+            entry.data.repoState = mockStatusWith(entry.data.repoState, entries);
+            entry.emit({
+              type: 'statusChanged',
+              session: id,
+              status: entry.data.repoState.status,
+              op: entry.data.repoState.op ?? null,
+            });
+          }
+          for (const [id, folder] of folders)
+            folder.emit({ type: 'folderChanged', session: id, refs: false, repo: null });
+        }),
         // 파일 트리·파일 보기 (W10): 폴더·저장소 세션 모두. 거부는 코어처럼 internal 오류
         async fsListDir(session, dir, limit) {
           countMockCall('fsListDir');

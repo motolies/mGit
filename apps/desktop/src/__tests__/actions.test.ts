@@ -1,6 +1,7 @@
 import { formatShortcut, isMac, matchShortcut, S } from '@mgit/ui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ActionContext, buildActions, focusPanel } from '../actions';
+import { shortcutsConflict } from '../command-keymap';
 import type { DockState, TabKind } from '../store/app-store';
 
 /** 최소 컨텍스트. 탭 종류를 주지 않으면 세션이 있을 때 저장소 탭, 없으면 탭 없음이다 */
@@ -382,8 +383,12 @@ describe('영역 포커스 동작 (5.7절)', () => {
     expect(actions['view.focusDetail']?.shortcut).toBe('mod+3');
     expect(actions['view.focusGraph']?.shortcut).toBe(isMac() ? 'mod+9' : 'alt+9');
     // 같은 기본 키를 쓰는 동작이 둘이면 뒤의 것이 죽는다
-    const shortcuts = buildActions(ctx()).flatMap((a) => (a.shortcut ? [a.shortcut] : []));
-    expect(new Set(shortcuts).size).toBe(shortcuts.length);
+    const configured = buildActions(ctx());
+    for (const [index, action] of configured.entries()) {
+      expect(
+        configured.slice(index + 1).filter((other) => shortcutsConflict(action, other)),
+      ).toEqual([]);
+    }
   });
 
   it('사용자가 재지정한 키는 기본 키가 바뀌어도 그대로 적용된다', () => {
@@ -804,6 +809,15 @@ describe('팔레트·단축키 대화상자의 제목 정리 (W27) — 동작 id
     const keys = Object.fromEntries(
       list.filter((a) => a.shortcut !== undefined).map((a) => [a.id, a.shortcut]),
     );
-    expect(keys).toEqual(DEFAULT_KEYS);
+    expect(keys).toEqual({
+      ...DEFAULT_KEYS,
+      'project.newFile': 'mod+n',
+      'project.newFolder': 'mod+shift+n',
+      'project.rename': 'f2',
+      'project.copy': 'mod+c',
+      'project.cut': 'mod+x',
+      'project.paste': 'mod+v',
+      'project.trash': isMac() ? 'mod+backspace' : 'delete',
+    });
   });
 });

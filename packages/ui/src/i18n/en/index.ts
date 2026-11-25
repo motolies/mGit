@@ -1,4 +1,5 @@
 import type { Strings } from '../../strings';
+import { enProjectEdit } from '../project-edit';
 import { enRepository } from './repository';
 import { enTools } from './tools';
 import { enWorkspace } from './workspace';
@@ -17,4 +18,7 @@ function joinSections<A extends object, B extends object>(
 }
 
 /** 영어 사전. `Strings` 주석이 최상위 섹션이 빠짐없이 들어갔는지 검사한다 */
-export const en: Strings = joinSections(joinSections(enWorkspace, enRepository), enTools);
+export const en: Strings = joinSections(
+  joinSections(joinSections(enWorkspace, enRepository), enTools),
+  { projectEdit: enProjectEdit },
+);

@@ -49,6 +49,9 @@ export interface ProjectTreeProps {
    * 메뉴, W25). 없으면 그리지 않는다
    */
   tools?: ReactNode;
+  createTools?: ReactNode;
+  inline?: { id: string; input: ReactNode };
+  cutPaths?: readonly string[];
   /**
    * 머리와 트리 사이의 띠 (안내 줄 위). 무엇을 싣는지는 컨테이너가 정한다 (저장소 탭의 상위 저장소 링크·모듈 범위, W25).
    * 없으면 그리지 않는다
@@ -195,6 +198,9 @@ export function ProjectTree({
   now,
   notice,
   tools,
+  createTools,
+  inline,
+  cutPaths,
   banner,
   onSelect,
   onToggleSelect,
@@ -247,6 +253,19 @@ export function ProjectTree({
       el.scrollTop = initialScrollTop;
     }
   }, []);
+
+  // 인라인 생성 위치가 화면 밖이면 먼저 스크롤한 뒤 입력에 포커스를 둔다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 입력 내용 변경은 스크롤·포커스를 초기화하지 않는다.
+  useEffect(() => {
+    if (!inline) return;
+    const index = rows.findIndex((row) => row.id === inline.id);
+    if (index < 0) return;
+    virtualizer.scrollToIndex(index, { align: 'auto' });
+    const frame = requestAnimationFrame(() =>
+      treeRef.current?.querySelector<HTMLInputElement>('input')?.focus(),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [inline?.id, rows, virtualizer]);
 
   // "트리에서 찾기" 가 고른 행으로 스크롤한다. 마운트 때의 값은 지난 일이라 건너뛴다
   const seenReveal = useRef(revealSeq);
@@ -404,7 +423,7 @@ export function ProjectTree({
           </span>
         )}
         <span className={bold ? styles.nameBold : styles.name} title={title}>
-          {name}
+          {inline?.id === row.id ? inline.input : name}
         </span>
         {row.kind === 'root' ? <span className={styles.detail}>{root.detail}</span> : null}
         {row.kind === 'entry' && deco?.detail ? (
@@ -477,6 +496,7 @@ export function ProjectTree({
       <header className={styles.header}>
         <span className={styles.title}>{S.project.title}</span>
         <span className={styles.spacer} />
+        {createTools}
         {onLocate ? (
           <ToolButton
             icon="locate"
@@ -500,7 +520,9 @@ export function ProjectTree({
         className={styles.menuArea}
         resolveTarget={(e) => {
           const el = (e.target as HTMLElement | null)?.closest('[data-row-index]');
-          const row = el ? rows[Number(el.getAttribute('data-row-index'))] : undefined;
+          const row = el
+            ? rows[Number(el.getAttribute('data-row-index'))]
+            : rows.find((item) => item.kind === 'root');
           return row && (row.kind === 'root' || row.kind === 'entry') && menu(row).length > 0
             ? row
             : null;
@@ -510,6 +532,7 @@ export function ProjectTree({
         <div
           ref={treeRef}
           className={styles.tree}
+          data-project-tree=""
           role="tree"
           aria-label={S.project.tree}
           aria-multiselectable={onToggleSelect || onSelectRange ? true : undefined}
@@ -530,7 +553,8 @@ export function ProjectTree({
               }
               const node = row.kind === 'root' || row.kind === 'entry';
               const expandable = row.kind === 'root' || (row.kind === 'entry' && row.expandable);
-              const inert = row.kind === 'entry' && inertReason(row) !== null;
+              const inert =
+                row.kind === 'entry' && inline?.id !== row.id && inertReason(row) !== null;
               const deco = node ? decorate(row.path) : null;
               return (
                 // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
@@ -548,6 +572,18 @@ export function ProjectTree({
                   aria-expanded={node && expandable ? row.expanded : undefined}
                   aria-disabled={inert ? true : undefined}
                   data-row-index={item.index}
+                  data-project-path={node ? row.path : undefined}
+                  data-project-directory={
+                    row.kind === 'root' || (row.kind === 'entry' && row.entryKind === 'dir')
+                      ? 'true'
+                      : 'false'
+                  }
+                  data-cut={
+                    node &&
+                    cutPaths?.some((path) => row.path === path || row.path.startsWith(`${path}/`))
+                      ? 'true'
+                      : undefined
+                  }
                   data-kind={row.kind === 'entry' ? row.entryKind : row.kind}
                   data-inert={inert ? 'true' : undefined}
                   data-status={deco?.status?.tone}

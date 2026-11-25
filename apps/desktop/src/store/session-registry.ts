@@ -146,3 +146,27 @@ export function disposeWorkspace(id: SessionId): void {
   workspaceWatches.delete(id);
   workspaces.delete(id);
 }
+
+/** 파일 작업이 모든 열린 Project의 문서와 트리를 함께 갱신할 때 사용하는 세션 목록이다. */
+export function fileWorkspaceSessions() {
+  return [...workspaces.entries()].flatMap(([id, workspace]) => {
+    const repo = registry.get(id)?.store.getState();
+    const folder = folders.get(id)?.getState();
+    const state = repo ?? folder;
+    const repoPaths = repo
+      ? [repo.path, ...repo.nestedRepos]
+      : (folder?.repos.map((item) => item.path) ?? []);
+    return state
+      ? [
+          {
+            id,
+            workspace,
+            root: state.path,
+            tree: state.fileTree,
+            refresh: state.refresh,
+            repoPaths,
+          },
+        ]
+      : [];
+  });
+}

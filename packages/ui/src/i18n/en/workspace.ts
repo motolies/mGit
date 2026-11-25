@@ -4,6 +4,7 @@ import type { Strings } from '../../strings';
 // 영어 사전: 앱·상태·작업 공간·브랜치·필터·프로젝트·커밋·변경·diff 구역 (ko.ts 의 같은 구역과 키가 같다)
 export const enWorkspace: Pick<
   Strings,
+  | 'textContext'
   | 'app'
   | 'date'
   | 'toolbar'
@@ -27,6 +28,17 @@ export const enWorkspace: Pick<
   | 'commit'
   | 'diff'
 > = {
+  textContext: {
+    undo: 'Undo',
+    redo: 'Redo',
+    cut: 'Cut',
+    copy: 'Copy',
+    paste: 'Paste',
+    selectAll: 'Select All',
+    error: 'Text operation failed',
+    importError: 'File import failed',
+    recovery: 'File operation recovery',
+  },
   app: {
     title: 'mGit',
   },
@@ -134,6 +146,8 @@ export const enWorkspace: Pick<
     resize: 'Resize tool window',
   },
   workspace: {
+    closeRightTabs: 'Close tabs to the right',
+    revealInProject: 'Reveal in Project',
     stripe: 'Tool windows',
     resizeLeft: 'Resize left tool window',
     editorTabs: 'Editor tabs',

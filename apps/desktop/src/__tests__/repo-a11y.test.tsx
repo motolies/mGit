@@ -19,6 +19,7 @@ import {
 import {
   clearSessionRegistry,
   disposeWorkspace,
+  getWorkspaceStore,
   registerSession,
   registerWorkspace,
 } from '../store/session-registry';
@@ -236,7 +237,9 @@ describe('저장소 화면의 이름 (W27 — W20~W26 의 새 영역)', () => {
     const { store } = await mountRepo();
     expect(within(area('git-detail') as HTMLElement).getByRole('button')).toBeTruthy();
     await selectFirstCommit(store);
-    expect(area('git-detail')?.querySelectorAll('ul button').length).toBeGreaterThan(0);
+    expect(
+      within(area('git-detail') as HTMLElement).getByRole('tree', { name: S.detail.changedFiles }),
+    ).toBeTruthy();
     expect(unnamed()).toEqual([]);
   });
 
@@ -296,9 +299,11 @@ describe('저장소 화면의 Tab 정지 (W27)', () => {
   it('상세의 변경 파일 목록이 Tab 정지 하나다', async () => {
     const { store } = await mountRepo();
     await selectFirstCommit(store);
-    const files = area('git-detail')?.querySelector('ul') as HTMLElement;
-    expect(files.querySelectorAll('button').length).toBeGreaterThan(1);
-    expect(tabStops(files)).toHaveLength(1);
+    const files = screen.getByRole('tree', { name: S.detail.changedFiles });
+    expect(within(files).getAllByRole('treeitem').length).toBeGreaterThan(1);
+    expect(files.tabIndex).toBe(0);
+    expect(tabStops(files)).toHaveLength(0);
+    checkTreeRules(files);
   });
 
   it('한 바퀴 Tab 정지 수: Commit 도구 창을 열어도 Project 와 몇 개 차이다 (전에는 변경 파일마다 하나 — 브라우저 38 → 75)', async () => {
@@ -356,12 +361,97 @@ describe('저장소 탭 영역 단축키의 포커스 대상 (WS-11, 두 탭이 
     await selectFirstCommit(store);
     await press('3');
     expect(focusedPanel()).toBe('git-detail');
-    expect(document.activeElement?.closest('ul')).not.toBeNull();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(S.detail.changedFiles);
     await press('0');
     expect(focusedPanel()).toBe('commit');
     expect(document.activeElement?.closest('ul')).not.toBeNull();
     act(() => useAppStore.getState().setShortcutOverrides({ 'view.graphFilter': 'ctrl+shift+g' }));
     await press('g', { shift: true });
     expect(document.activeElement?.hasAttribute('data-filter-text')).toBe(true);
+  });
+});
+
+/** 범위 상세도 같은 트리·분할로 그리면서 기존 범위 diff 계약을 유지한다. */
+describe('단일 저장소 변경 파일 트리 통일', () => {
+  it('파일 단일 클릭은 미리보기를 교체하고 더블클릭은 독립 탭으로 고정한다', async () => {
+    const { store, id } = await mountRepo();
+    await selectFirstCommit(store);
+    const selectedCommit = store.getState().selectedCommit;
+    const tree = screen.getByRole('tree', { name: S.detail.changedFiles });
+    const files = within(tree)
+      .getAllByRole('treeitem')
+      .filter((item) => item.getAttribute('data-kind') === 'file');
+    const first = files[0];
+    const second = files[1];
+    if (!first || !second) throw new Error('변경 파일 둘이 필요합니다');
+    const ws = () => getWorkspaceStore(id)?.getState();
+    fireEvent.click(first);
+    expect(ws()?.docs).toHaveLength(1);
+    expect(ws()?.docs[0]).toMatchObject({ kind: 'commitDiff', pinned: false, oid: selectedCommit });
+    const firstId = ws()?.docs[0]?.id;
+    fireEvent.click(second);
+    expect(ws()?.docs).toHaveLength(1);
+    expect(ws()?.docs[0]?.id).not.toBe(firstId);
+    fireEvent.doubleClick(second);
+    expect(ws()?.docs[0]?.pinned).toBe(true);
+    fireEvent.click(first);
+    expect(ws()?.docs).toHaveLength(2);
+    expect(ws()?.docs.map((doc) => doc.pinned)).toEqual([true, false]);
+    fireEvent.contextMenu(first);
+    fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(S.menu.showDiff) }));
+    expect(ws()?.docs.map((doc) => doc.pinned)).toEqual([true, true]);
+    expect(store.getState().selectedFile).toBeNull();
+    expect(store.getState().selectedCommit).toBe(selectedCommit);
+  });
+
+  it('범위는 폴더 계층·rename 정보를 보이고 범위 diff를 그대로 연다', async () => {
+    const { store, id } = await mountRepo();
+    act(() =>
+      store.setState({
+        range: {
+          from: 0,
+          to: 2,
+          older: 'a'.repeat(40),
+          newer: 'b'.repeat(40),
+          base: 'c'.repeat(40),
+          loading: false,
+          files: [
+            { path: 'src/new.ts', oldPath: 'old.ts', change: { kind: 'renamed', similarity: 95 } },
+            { path: 'src/removed.ts', oldPath: null, change: { kind: 'deleted' } },
+          ],
+        },
+      }),
+    );
+    await tick();
+    const tree = screen.getByRole('tree', { name: S.detail.changedFiles });
+    expect(
+      within(tree)
+        .getAllByRole('treeitem')
+        .map((item) => item.getAttribute('aria-level')),
+    ).toEqual(['1', '2', '3', '3']);
+    const file = within(tree)
+      .getAllByRole('treeitem')
+      .find((item) => item.title === 'old.ts → src/new.ts');
+    expect(file).toBeTruthy();
+    expect(document.getElementById('gitdetail-files')?.contains(tree)).toBe(true);
+    expect(document.getElementById('gitdetail-info')?.textContent).toContain(
+      S.detail.rangeTitle(3),
+    );
+    fireEvent.click(file as HTMLElement);
+    expect(getWorkspaceStore(id)?.getState().docs).toEqual([
+      expect.objectContaining({
+        kind: 'rangeDiff',
+        path: 'src/new.ts',
+        base: 'c'.repeat(40),
+        newer: 'b'.repeat(40),
+        pinned: false,
+      }),
+    ]);
+    fireEvent.doubleClick(file as HTMLElement);
+    expect(getWorkspaceStore(id)?.getState().docs[0]?.pinned).toBe(true);
+    expect(store.getState().selectedFile).toBeNull();
+    fireEvent.contextMenu(file as HTMLElement);
+    expect(screen.queryByRole('menuitem', { name: S.menu.blame })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: S.project.menu.copyRelative })).toBeTruthy();
   });
 });

@@ -1,7 +1,11 @@
 import '@mgit/ui/tokens.css';
+import './project-drop.css';
+import { createTauriClient } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { installFileEditorLifecycle } from './file-editor-lifecycle';
+import { dropBlocked, highlightProjectDrop, projectDropTarget } from './project-drop';
 import { Root } from './Root';
 import { mockRowCount, useAppStore } from './store';
 import { applyTheme, resolveTheme, watchSystemTheme } from './store/theme';
@@ -30,12 +34,52 @@ async function bootstrap(): Promise<void> {
   await installFileEditorLifecycle(mockRowCount() === 0);
   // 폴더·파일 드래그앤드롭으로 열기 (REPO-01). 목 모드는 Tauri API 가 없다
   if (mockRowCount() === 0) {
-    void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
-      getCurrentWebview().onDragDropEvent((e) => {
-        if (e.payload.type === 'drop') {
-          void useAppStore.getState().openPaths(e.payload.paths);
+    void Promise.all([import('@tauri-apps/api/webview'), import('@tauri-apps/api/window')]).then(
+      async ([{ getCurrentWebview }, { getCurrentWindow }]) => {
+        const client = createTauriClient();
+        // 이전 실행에서 남은 복구본과 처리 실패를 시작할 때 사용자에게 알린다.
+        for (const message of await client
+          .fsRecoveryWarnings()
+          .catch((error: unknown) => [error instanceof Error ? error.message : String(error)])) {
+          useAppStore.getState().notice({ kind: 'error', title: S.textContext.recovery, message });
         }
-      }),
+        let dragEpoch = 0;
+        await getCurrentWebview().onDragDropEvent(async (event) => {
+          const epoch = ++dragEpoch;
+          const payload = event.payload;
+          if (payload.type === 'leave' || dropBlocked()) {
+            highlightProjectDrop(null);
+            return;
+          }
+          try {
+            const scale = await getCurrentWindow().scaleFactor();
+            if (payload.type !== 'drop' && epoch !== dragEpoch) return;
+            const target = projectDropTarget(payload.position, scale);
+            if (payload.type !== 'drop') {
+              highlightProjectDrop(target);
+              return;
+            }
+            highlightProjectDrop(null);
+            if (!target) {
+              await useAppStore.getState().openPaths(payload.paths);
+              return;
+            }
+            const grant = await client.fsRegisterDrop(payload.paths);
+            window.dispatchEvent(
+              new CustomEvent('mgit-project-import', {
+                detail: { session: target.session, directory: target.directory, ...grant },
+              }),
+            );
+          } catch (error) {
+            highlightProjectDrop(null);
+            useAppStore.getState().notice({
+              kind: 'error',
+              title: S.textContext.importError,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
+      },
     );
   }
 

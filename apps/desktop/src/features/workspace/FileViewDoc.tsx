@@ -64,17 +64,19 @@ export function FileViewDoc({
     };
   }, [client, session, doc.id, doc.path, attempt, epoch]);
 
-  if (result && 'fileKey' in result)
+  // 이동·덮어쓰기에서 공유 별칭이 합쳐지면 이미 열린 대상 탭도 최신 문서를 사용한다.
+  const current = session === undefined ? result : (fileEditors.get(session, doc.path) ?? result);
+  if (current && 'fileKey' in current)
     return session === undefined ? null : (
       <FileEditor
-        key={result.fileKey}
-        doc={result}
+        key={current.fileKey}
+        doc={current}
         repoTools={repoTools}
         source={{ client, session, path: doc.path }}
         refreshEpoch={epoch}
       />
     );
-  if (result?.kind === 'mixedLineEndings') {
+  if (current?.kind === 'mixedLineEndings') {
     return <div role="status">{S.fileEditor.mixedLineEndings}</div>;
   }
   return (
@@ -84,8 +86,8 @@ export function FileViewDoc({
       load={
         error
           ? { state: 'error', error }
-          : result
-            ? { state: 'loaded', file: result }
+          : current
+            ? { state: 'loaded', file: current }
             : { state: 'loading' }
       }
       onRetry={() => setAttempt((value) => value + 1)}

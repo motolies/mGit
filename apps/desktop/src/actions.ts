@@ -1,6 +1,7 @@
 import { S } from '@mgit/ui';
 import { COMMAND_SCOPES, type CommandScope, defaultShortcut } from './command-keymap';
 import { commandTarget, executeCommand, resolveCommand } from './command-registry';
+import { projectEditStrings } from './features/project/project-edit-strings';
 import { type AppStore, effectiveDock, type LeftTool, type TabKind } from './store/app-store';
 import type { SessionState } from './store/session-store';
 import { type TagsDocRequest, tagsDoc, type WorkspaceState } from './store/workspace-store';
@@ -823,7 +824,15 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
 
 /** 화면별 명령은 안정적 ID와 메타데이터를 갖고, 구현은 화면 수명에 맞춰 등록한다. */
 function contextActions(): Action[] {
+  const project = projectEditStrings();
   const definitions: [string, string, Action['group']][] = [
+    ['project.newFile', project.newFile, 'view'],
+    ['project.newFolder', project.newFolder, 'view'],
+    ['project.rename', project.rename, 'view'],
+    ['project.copy', project.copy, 'view'],
+    ['project.cut', project.cut, 'view'],
+    ['project.paste', project.paste, 'view'],
+    ['project.trash', project.trash, 'view'],
     ['log.reword', S.actions.reword, 'repo'],
     ['log.copyHash', S.actions.copyHash, 'repo'],
     ['log.searchNext', S.actions.searchNext, 'view'],

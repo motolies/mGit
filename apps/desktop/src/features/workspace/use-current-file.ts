@@ -1,8 +1,9 @@
 import { S } from '@mgit/ui';
-import type { MenuItem } from '../../components/ContextMenu';
-import { useAppStore, useWorkspace } from '../../store';
-import { baseName, repoToRoot } from '../../store/fs-path';
+import { type MenuItem, menuGroups } from '../../components/ContextMenu';
+import { useAppStore, useFileTree, useWorkspace } from '../../store';
+import { baseName, joinRoot, repoToRoot } from '../../store/fs-path';
 import { type DocRequest, type EditorDoc, fileViewDoc } from '../../store/workspace-store';
+import { revealLabel } from '../project/file-actions-menu';
 
 /** 저장소 기준 경로를 현재 워크스페이스의 파일 탭으로 바꾼다. 과거 이름을 추측하거나 복원하지 않는다. */
 export function currentFileDoc(
@@ -35,7 +36,12 @@ export function currentFileTabMenu(
   doc: EditorDoc,
   open: (repoPath: string, path: string, repoName?: string) => void,
 ): MenuItem[] {
-  if (doc.kind !== 'worktreeDiff' && doc.kind !== 'historyDiff' && doc.kind !== 'commitDiff') {
+  if (
+    doc.kind !== 'worktreeDiff' &&
+    doc.kind !== 'historyDiff' &&
+    doc.kind !== 'commitDiff' &&
+    doc.kind !== 'rangeDiff'
+  ) {
     return [];
   }
   return [
@@ -44,4 +50,52 @@ export function currentFileTabMenu(
       onSelect: () => open(doc.repoPath, doc.path, doc.repoName),
     },
   ];
+}
+
+/** 파일을 가리키는 모든 탭에서 같은 경로 복사·Project 표시·Finder 동작을 제공한다. */
+export function useEditorFileMenu(): (doc: EditorDoc) => MenuItem[] {
+  const editCurrent = useCurrentFile();
+  const root = useAppStore((s) =>
+    s.activeSessionId === null ? null : (s.sessions[s.activeSessionId]?.path ?? null),
+  );
+  const setLeftTool = useAppStore((s) => s.setLeftTool);
+  const openExternal = useAppStore((s) => s.openExternal);
+  const reveal = useFileTree((s) => s.reveal);
+  return (doc) => {
+    if (!root || !('path' in doc) || doc.path === '') return [];
+    const relative = doc.kind === 'file' ? doc.path : repoToRoot(root, doc.repoPath, doc.path);
+    const absolute =
+      doc.kind === 'file' ? joinRoot(root, doc.path) : joinRoot(doc.repoPath, doc.path);
+    return menuGroups([
+      currentFileTabMenu(doc, editCurrent),
+      [
+        ...(relative !== null && reveal
+          ? [
+              {
+                label: S.workspace.revealInProject,
+                onSelect: () => {
+                  setLeftTool('project');
+                  void reveal(relative);
+                },
+              },
+            ]
+          : []),
+        { label: revealLabel(), onSelect: () => void openExternal('reveal', absolute) },
+      ],
+      [
+        {
+          label: S.project.menu.copyPath,
+          onSelect: () => void navigator.clipboard.writeText(absolute).catch(() => {}),
+        },
+        ...(relative !== null
+          ? [
+              {
+                label: S.project.menu.copyRelative,
+                onSelect: () => void navigator.clipboard.writeText(relative).catch(() => {}),
+              },
+            ]
+          : []),
+      ],
+    ]);
+  };
 }

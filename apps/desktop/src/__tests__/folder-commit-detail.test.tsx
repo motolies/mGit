@@ -792,21 +792,22 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       await tick();
       fireEvent.contextMenu(fileRow('two.ts'));
       await tick();
-      expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
+      expect(screen.getAllByRole('menuitem').map((m) => m.childNodes[0]?.textContent)).toEqual([
         S.menu.showDiff,
         S.fileView.editCurrent,
         S.menu.blame,
         S.menu.fileHistory,
         S.menu.difftool,
+        S.project.menu.copyRelative,
         S.menu.copyPath,
       ]);
       expect(spies.folderOpenRepoSession).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole('menuitem', { name: S.menu.copyPath }));
+      fireEvent.click(screen.getByRole('menuitem', { name: S.project.menu.copyRelative }));
       await tick();
       expect(writeText).toHaveBeenCalledWith('src/a/two.ts');
       fireEvent.contextMenu(fileRow('two.ts'));
       await tick();
-      fireEvent.click(screen.getByRole('menuitem', { name: S.menu.showDiff }));
+      fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(S.menu.showDiff) }));
       await tick();
       expect(tabs()).toEqual([S.workspace.overview, '[two.ts @a1b2c3d4]']);
     } finally {

@@ -11,6 +11,7 @@ import {
   createWorkspaceStore,
   type EditorDoc,
   historyDiffDoc,
+  rangeDiffDoc,
   worktreeDiffDoc,
 } from '../store/workspace-store';
 
@@ -26,6 +27,7 @@ function diffDocs(): EditorDoc[] {
     historyDiffDoc({ ...target, rev: { kind: 'commit', oid: 'a'.repeat(40) } }),
     historyDiffDoc({ ...target, rev: { kind: 'range', label: 'a..b' } }),
     commitDiffDoc({ ...target, oid: 'b'.repeat(40), oldPath: 'old.ts', merge: false }),
+    rangeDiffDoc({ ...target, base: 'a'.repeat(40), newer: 'b'.repeat(40), label: 'a..b' }),
   ].map((doc) => ({ ...doc, pinned: true }));
 }
 
@@ -65,6 +67,31 @@ describe('현재 파일 편집 진입', () => {
     expect(docs.filter((doc) => doc.id === file.id)).toHaveLength(1);
     expect(docs.find((doc) => doc.id === file.id)?.pinned).toBe(true);
     expect(docs.some((doc) => doc.id === diff.id)).toBe(true);
+  });
+
+  it('같은 파일도 비교 범위가 다르면 고정한 범위 문서를 보존한다', () => {
+    const ws = createWorkspaceStore('repo');
+    const first = rangeDiffDoc({ ...target, base: 'a', newer: 'b', label: 'a..b' });
+    const second = rangeDiffDoc({ ...target, base: 'b', newer: 'c', label: 'b..c' });
+    ws.getState().openDoc(first, 'pinned');
+    ws.getState().openDoc(second, 'preview');
+    expect(ws.getState().docs).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        kind: 'rangeDiff',
+        base: 'a',
+        newer: 'b',
+        pinned: true,
+      }),
+      expect.objectContaining({
+        id: second.id,
+        kind: 'rangeDiff',
+        base: 'b',
+        newer: 'c',
+        pinned: false,
+      }),
+    ]);
+    expect(first.id).not.toBe(second.id);
   });
 
   it('공통 diff 도구 모음의 편집 버튼이 전달한 동작을 실행한다', () => {
@@ -109,5 +136,70 @@ describe('현재 파일 편집 진입', () => {
     fireEvent.contextMenu(screen.getByRole('tab', { name: first.id }));
     fireEvent.click(screen.getByRole('menuitem', { name: S.fileView.editCurrent }));
     expect(edit).toHaveBeenCalledWith(target.repoPath, target.path, target.repoName);
+  });
+});
+
+/** 탭 본문의 문서 종류와 무관하게 공통 메뉴가 같은 대상을 사용한다. */
+describe('편집기 탭 공통 메뉴', () => {
+  const docs = [
+    { id: 'a', pinned: false },
+    { id: 'b', pinned: true },
+    { id: 'c', pinned: true },
+  ];
+
+  function setup() {
+    const onClose = vi.fn();
+    const onCloseMany = vi.fn(async () => true);
+    const onPin = vi.fn();
+    render(
+      <EditorArea
+        docs={docs}
+        activeId="a"
+        titleOf={(doc) => doc.id}
+        renderDoc={() => null}
+        onActivate={vi.fn()}
+        onClose={onClose}
+        onCloseMany={onCloseMany}
+        onPin={onPin}
+        empty={null}
+      />,
+    );
+    return { onClose, onCloseMany, onPin };
+  }
+
+  it('비활성 탭의 오른쪽 닫기는 우클릭한 탭 오른쪽 문서만 전달한다', () => {
+    const { onCloseMany } = setup();
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: S.workspace.closeRightTabs }));
+    expect(onCloseMany).toHaveBeenCalledWith(['c']);
+  });
+
+  it('다른 탭 닫기와 모두 닫기는 현재 탭 순서를 보존한다', () => {
+    const { onCloseMany } = setup();
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: S.toolbar.closeOtherTabs }));
+    expect(onCloseMany).toHaveBeenCalledWith(['a', 'c']);
+  });
+
+  it('Shift+F10으로 일반 문서의 메뉴를 열고 미리보기 탭을 고정한다', () => {
+    const { onPin } = setup();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'a' }), { key: 'F10', shiftKey: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(S.actions.pin) }));
+    expect(onPin).toHaveBeenCalledWith('a');
+  });
+
+  it('맨 오른쪽 탭의 오른쪽 닫기와 이미 고정된 탭의 고정은 비활성이다', () => {
+    setup();
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'c' }));
+    expect(
+      screen
+        .getByRole('menuitem', { name: S.workspace.closeRightTabs })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
+    expect(
+      screen
+        .getByRole('menuitem', { name: new RegExp(S.actions.pin) })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
   });
 });

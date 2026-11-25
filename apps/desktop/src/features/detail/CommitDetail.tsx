@@ -1,129 +1,25 @@
-import type { CommitDetail as CommitDetailData } from '@mgit/ipc';
+import type { ChangedFile } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { useEffect, useState } from 'react';
-import { registerCommand } from '../../command-registry';
-import { ContextMenuArea } from '../../components/ContextMenu';
-import { useRovingToolbar } from '../../components/roving';
-import { useSession } from '../../store';
+import { useEffect } from 'react';
+import { useSession, useWorkspace } from '../../store';
+import { commitDiffDoc, type OpenMode } from '../../store/workspace-store';
 import { useCurrentFile } from '../workspace/use-current-file';
-import styles from './CommitDetail.module.css';
+import { ChangedFilesTree } from './ChangedFilesTree';
+import { CommitDetailPane, DetailFilesMessage } from './CommitDetailPane';
 import { CommitDetailView } from './CommitDetailView';
-import { changeLetter } from './change-letter';
+import { changedFileMenu } from './changed-file-menu';
 
-/**
- * 저장소 탭 상세의 변경 파일 평면 목록 (우클릭: diff·blame·히스토리·외부 도구). 목록이 Tab 정지 하나다 (W27 — 큰 목록의
- * 공용 규칙): 파일 단추 사이를 ↑↓·Home·End·PageUp·PageDown 으로 옮긴다(끝에서 멈춘다). 지금 단추만 `tabindex="0"` 이라
- * 로그의 Enter·⌘3(`focusTargetIn`)이 이 목록에 닿는다 — 폴더 탭의 변경 파일 트리와 같은 자리
- */
-function CommitFileList({ detail: d }: { detail: CommitDetailData }) {
+/** 저장소 상세도 멀티 저장소와 같은 변경 파일 트리/커밋 정보 분할을 사용한다. */
+export function CommitDetail() {
   const editCurrent = useCurrentFile();
+  const openDoc = useWorkspace((state) => state.openDoc);
   const s = useSession((st) => ({
+    oid: st.selectedCommit,
     repoPath: st.path,
     repoName: st.name,
-    openCommitFile: st.openCommitFile,
     openBlame: st.openBlame,
     openFileHistory: st.openFileHistory,
     openDifftool: st.openDifftool,
-    openPath: st.selectedFile?.commit === st.selectedCommit ? st.selectedFile?.path : null,
-  }));
-  const roving = useRovingToolbar<HTMLUListElement>('vertical', { wrap: false });
-  const [focusedPath, setFocusedPath] = useState<string | null>(null);
-  useEffect(() => {
-    if (!roving.ref.current) return;
-    const file = d.files.find((file) => file.path === focusedPath);
-    return registerCommand('file.showDiff', roving.ref.current, {
-      enabled: () => file !== undefined,
-      run: () => {
-        if (file) void s.openCommitFile(d.oid, file.path, file.oldPath ?? null);
-      },
-    });
-  }, [d, focusedPath, s.openCommitFile, roving.ref]);
-  return (
-    <>
-      <div className={styles.filesHeader}>{S.detail.files(d.files.length)}</div>
-      {d.files.length === 0 ? (
-        <div className={styles.loading}>{S.detail.noFiles}</div>
-      ) : (
-        <ContextMenuArea<string>
-          resolveTarget={(e) =>
-            (e.target as HTMLElement | null)?.closest('[data-path]')?.getAttribute('data-path') ??
-            null
-          }
-          items={(path) => {
-            const file = d.files.find((f) => f.path === path);
-            const deleted = file?.change.kind === 'deleted';
-            return [
-              {
-                label: S.fileView.editCurrent,
-                onSelect: () => editCurrent(s.repoPath, path, s.repoName),
-              },
-              {
-                label: S.menu.showDiff,
-                commandId: 'file.showDiff',
-                onSelect: () => void s.openCommitFile(d.oid, path, file?.oldPath ?? null),
-              },
-              {
-                label: S.menu.blame,
-                separator: true,
-                disabled: deleted,
-                onSelect: () => void s.openBlame(path, d.oid),
-              },
-              { label: S.menu.fileHistory, onSelect: () => void s.openFileHistory(path) },
-              {
-                label: S.menu.difftool,
-                onSelect: () => void s.openDifftool({ kind: 'commit', oid: d.oid, path }),
-              },
-            ];
-          }}
-        >
-          {/* 목록 안 단추 사이의 화살표 이동을 목록이 받는다 (W27) */}
-          <ul
-            ref={roving.ref}
-            className={styles.files}
-            onKeyDown={roving.onKeyDown}
-            data-command-scope="files"
-            onFocus={(e) => {
-              roving.onFocus(e);
-              setFocusedPath(
-                (e.target as HTMLElement).closest('[data-path]')?.getAttribute('data-path') ?? null,
-              );
-            }}
-          >
-            {d.files.map((f) => (
-              <li
-                key={f.path}
-                className={styles.file}
-                data-path={f.path}
-                data-open={s.openPath === f.path ? 'true' : 'false'}
-                title={f.oldPath ? `${f.path} ${S.changes.renamedFrom(f.oldPath)}` : f.path}
-              >
-                <button
-                  type="button"
-                  className={styles.fileButton}
-                  onClick={() => void s.openCommitFile(d.oid, f.path, f.oldPath ?? null)}
-                >
-                  <span className={styles.letter} data-letter={changeLetter(f.change.kind)}>
-                    {changeLetter(f.change.kind)}
-                  </span>
-                  <span className={styles.path}>{f.path}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </ContextMenuArea>
-      )}
-    </>
-  );
-}
-
-/**
- * 우측 패널 (저장소 탭): 선택한 커밋의 상세 (GRAPH-04). 세션 스토어를 읽어 `CommitDetailView` 에 값과 동작
- * (해시 복사, 부모·자식으로 이동, 서명, 포함 branch 줄)을 넘기고, 변경 파일은 평면 목록을 파일 자리에 넣는다.
- * W21 에서 같은 틀의 트리로 옮긴다
- */
-export function CommitDetail() {
-  const s = useSession((st) => ({
-    oid: st.selectedCommit,
     detail: st.detail,
     loading: st.detailLoading,
     headOid: st.refs.head.state === 'unborn' ? null : st.refs.head.oid,
@@ -144,27 +40,65 @@ export function CommitDetail() {
   if (!s.oid) {
     return null;
   }
-  const d = s.detail;
+  const d = s.detail?.oid === s.oid ? s.detail : null;
   const oid = s.oid;
+  /** 파일별 독립 문서를 열어 단일 클릭 미리보기와 고정 탭을 멀티 저장소와 맞춘다. */
+  const open = (file: ChangedFile, mode: OpenMode) => {
+    if (!d) return;
+    openDoc?.(
+      commitDiffDoc({
+        repoPath: s.repoPath,
+        repoName: s.repoName,
+        oid: d.oid,
+        path: file.path,
+        oldPath: file.oldPath ?? null,
+        merge: d.parents.length > 1,
+      }),
+      mode,
+    );
+  };
   return (
-    <aside className={styles.panel}>
-      {!d ? (
-        <div className={styles.loading}>{s.loading ? S.detail.loading : ''}</div>
-      ) : (
-        <CommitDetailView
-          detail={d}
-          isHead={s.headOid === d.oid}
-          onCopyHash={() => navigator.clipboard.writeText(oid)}
-          onNavigate={(target) => void s.jumpToCommit(target)}
-          signature={s.signature}
-          files={<CommitFileList detail={d} />}
-          containing={{
-            // 스토어의 상태가 보이는 커밋의 것이 아니면 아직 "읽는 중" 이다
-            load: s.containing?.of === d.oid ? s.containing : { state: 'loading' },
-            onRetry: s.retryContaining,
-          }}
-        />
-      )}
-    </aside>
+    <CommitDetailPane
+      files={
+        !d ? (
+          <DetailFilesMessage>{s.loading ? S.detail.loading : ''}</DetailFilesMessage>
+        ) : d.files.length === 0 ? (
+          <DetailFilesMessage>{S.detail.noFiles}</DetailFilesMessage>
+        ) : (
+          <ChangedFilesTree
+            key={`${s.repoPath}\u0000${d.oid}`}
+            files={d.files}
+            root={{ name: s.repoName }}
+            onPreview={(file) => open(file, 'preview')}
+            onOpen={(file) => open(file, 'pinned')}
+            menu={(file) =>
+              changedFileMenu(file, s.repoPath, {
+                showDiff: () => open(file, 'pinned'),
+                editCurrent: () => editCurrent(s.repoPath, file.path, s.repoName),
+                blame: () => void s.openBlame(file.path, d.oid),
+                history: () => void s.openFileHistory(file.path),
+                difftool: () =>
+                  void s.openDifftool({ kind: 'commit', oid: d.oid, path: file.path }),
+              })
+            }
+          />
+        )
+      }
+      info={
+        d ? (
+          <CommitDetailView
+            detail={d}
+            isHead={s.headOid === d.oid}
+            onCopyHash={() => navigator.clipboard.writeText(oid)}
+            onNavigate={(target) => void s.jumpToCommit(target)}
+            signature={s.signature}
+            containing={{
+              load: s.containing?.of === d.oid ? s.containing : { state: 'loading' },
+              onRetry: s.retryContaining,
+            }}
+          />
+        ) : null
+      }
+    />
   );
 }

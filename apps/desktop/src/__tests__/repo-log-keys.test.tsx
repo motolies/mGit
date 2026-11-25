@@ -227,9 +227,9 @@ describe('저장소 탭 로그의 Enter·⇧F10 (W27 — 폴더 탭과 같은 �
     expect(activeRow()?.getAttribute('data-row')).toBe('0');
     await key('Enter');
     expect(focusedPanel()).toBe('git-detail');
-    // 변경 파일 목록의 지금 단추 (목록이 Tab 정지 하나)
-    expect(document.activeElement?.tagName).toBe('BUTTON');
-    expect(document.activeElement?.closest('ul')).not.toBeNull();
+    // 단일·멀티 저장소 모두 변경 파일 트리 자체가 Tab 정지 하나다.
+    expect(document.activeElement?.getAttribute('role')).toBe('tree');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(S.detail.changedFiles);
     expect(document.activeElement?.getAttribute('tabindex')).toBe('0');
   });
 

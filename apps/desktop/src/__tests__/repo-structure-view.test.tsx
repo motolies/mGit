@@ -261,7 +261,7 @@ describe('머리 메뉴 (⋮) — 펼치지 않아도 닿게', () => {
     act(() => store.setState({ busy: true }));
     await tick();
     await openStructureMenu();
-    expect(menuShape().filter((t) => t.endsWith('[off]'))).toEqual([
+    expect(legacyMenuShape().filter((t) => t.endsWith('[off]'))).toEqual([
       '@acme/ui [off]',
       'cart · 변경 4 [off]',
       'checkout · 변경 1 [off]',
@@ -279,7 +279,7 @@ describe('머리 메뉴 (⋮) — 펼치지 않아도 닿게', () => {
     );
     await tick();
     await openStructureMenu();
-    expect(menuShape().filter((t) => t.endsWith('[off]'))).toEqual([
+    expect(legacyMenuShape().filter((t) => t.endsWith('[off]'))).toEqual([
       `${S.submodule.add} [off]`,
       `${S.submodule.sync} [off]`,
       `${S.submodule.batch} [off]`,
@@ -391,7 +391,7 @@ describe('트리 위 띠 — 범위 표시와 상위 저장소 링크', () => {
     const root = prow(st as never, '');
     expect(root.textContent).toContain(S.folder.kind.submodule);
     await contextMenu(root);
-    expect(menuShape()).toEqual([
+    expect(legacyMenuShape()).toEqual([
       `${S.submodule.superproject} platform`,
       '─',
       S.folder.refresh,
@@ -419,7 +419,7 @@ describe('행 장식과 행 메뉴', () => {
     expect(within(cart()).getByRole('img', { name: S.project.structure.moduleIcon })).toBeTruthy();
     expect(cart().textContent).toContain(S.project.changed(4));
     await contextMenu(cart());
-    expect(menuShape()).toEqual([
+    expect(legacyMenuShape()).toEqual([
       S.modules.scopeTo,
       S.modules.hide,
       '─',
@@ -438,7 +438,7 @@ describe('행 장식과 행 메뉴', () => {
     expect(st().moduleScope).toBe('src/features/cart');
     expect(cart().textContent).toContain(S.modules.scopeBadge);
     await contextMenu(cart());
-    expect(menuShape()[0]).toBe(S.modules.clearScope);
+    expect(legacyMenuShape()[0]).toBe(S.modules.clearScope);
     act(() => fireEvent.click(screen.getByRole('menuitem', { name: S.modules.hide })));
     await tick();
     await tick();
@@ -461,7 +461,7 @@ describe('행 장식과 행 메뉴', () => {
       fireEvent.keyDown(tree(), { key: 'F10', shiftKey: true });
     });
     await tick();
-    expect(menuShape()).toEqual([
+    expect(legacyMenuShape()).toEqual([
       S.submodule.open,
       S.submodule.updateRemote,
       S.submodule.setBranch,
@@ -504,7 +504,7 @@ describe('행 장식과 행 메뉴', () => {
     expect(st().fileTree.getState().expanded['vendor/legacy-theme']).toBe(true);
     expect(tree().textContent).toContain(S.project.empty);
     await contextMenu(row());
-    expect(menuShape().filter((t) => t.endsWith('[off]'))).toEqual([
+    expect(legacyMenuShape().filter((t) => t.endsWith('[off]'))).toEqual([
       `${S.submodule.updateRemote} [off]`,
     ]);
   });
@@ -522,7 +522,7 @@ describe('행 장식과 행 메뉴', () => {
     expect(st().fileTree.getState().expanded.experiments).toBe(true);
     expect(openRepositoryAt).not.toHaveBeenCalled();
     await contextMenu(row());
-    expect(menuShape()).toEqual([
+    expect(legacyMenuShape()).toEqual([
       S.project.openAsTab,
       '─',
       // 하위 저장소(통째로 untracked 인 디렉터리)는 백업할 수 없어 되돌리기·ignore 대상이 아니다
@@ -600,3 +600,21 @@ describe('ProjectTree 뷰의 새 자리 (tools·banner) — 폴더 탭은 그대
     expect(header.nextElementSibling?.getAttribute('data-testid')).toBe('banner');
   });
 });
+
+/** 기존 Git 메뉴의 순서를 파일 관리 공통 묶음과 독립적으로 검증한다. */
+function legacyMenuShape() {
+  const labels = [
+    S.projectEdit.newFile,
+    S.projectEdit.newFolder,
+    S.projectEdit.rename,
+    S.projectEdit.copy,
+    S.projectEdit.cut,
+    S.projectEdit.paste,
+    S.projectEdit.trash,
+  ];
+  const result = menuShape().filter((label) => !labels.some((prefix) => label.startsWith(prefix)));
+  return result.filter(
+    (label, index) =>
+      label !== '─' || (index > 0 && index < result.length - 1 && result[index - 1] !== '─'),
+  );
+}

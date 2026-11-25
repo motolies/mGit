@@ -44,6 +44,9 @@ use crate::events::SessionId;
 
 mod edit;
 mod image;
+mod operations;
+pub use operations::*;
+pub(super) static FS_MUTATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub use edit::{FsEditableFile, FsLineEnding, FsSaveResult};
 pub use image::{FS_IMAGE_MAX_BYTES, FsImage};
 
@@ -160,7 +163,7 @@ impl Core {
 
     /// 세션 id 로 정한 루트 (FS-01). 저장소 세션과 폴더 세션은 id 공간을 공유하므로(`alloc_session_id`)
     /// 한 id 는 둘 중 하나만 가리킨다
-    fn fs_root(&self, session: SessionId) -> Result<PathBuf, CoreError> {
+    pub fn fs_root(&self, session: SessionId) -> Result<PathBuf, CoreError> {
         let inner = self.inner_arc();
         if let Ok(repo) = inner.get(session) {
             return Ok(repo.info.work_tree.clone());
@@ -433,7 +436,7 @@ fn list_target(target: &Target, dir: &str, limit: usize) -> Result<FsListing, Co
             Err(e) => return fs_state(e).map(Into::into),
         };
         let name = entry.file_name();
-        if is_dot_git(&name) {
+        if is_dot_git(&name) || operations::is_operation_temporary(&name) {
             continue;
         }
         let Ok(name) = name.into_string() else {

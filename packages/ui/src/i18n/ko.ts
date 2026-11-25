@@ -4,7 +4,52 @@ import { LANGUAGE_NAMES } from './language-names';
 // 한국어 UI 문구 사전. Git 용어(commit, branch 등)는 원어를 유지한다 (UX-06).
 // 이 사전의 모양(`typeof ko` 를 넓힌 `Strings`)이 모든 언어 사전의 기준이다. 화면은 `strings.ts` 의 `S` 로 읽는다.
 
+const koProjectEdit = {
+  newFile: '새 파일',
+  copySuffix: ' 복사본',
+  source: '원본',
+  destination: '대상',
+  replaceType:
+    '종류가 다른 항목입니다. 덮어쓰기는 대상 전체를 교체하고 기존 항목을 휴지통에 보관합니다.',
+  parentDecision: '상위 폴더의 건너뛰기 또는 새 이름 선택이 이 항목에도 적용됩니다.',
+  changedDuringConfirm: '확인하는 동안 파일이 변경되었습니다. 작업을 다시 시도해 주세요.',
+
+  protected: '저장소 루트 또는 하위 저장소가 포함된 폴더는 변경할 수 없습니다.',
+  newFolder: '새 폴더',
+  rename: '이름 변경',
+  copy: '복사',
+  cut: '잘라내기',
+  paste: '붙여넣기',
+  trash: '휴지통으로 이동',
+  collapse: '모두 접기',
+  cancel: '취소',
+  apply: '적용',
+  conflicts: '파일 이름 충돌',
+  overwrite: '덮어쓰기',
+  merge: '폴더 병합',
+  skip: '건너뛰기',
+  newName: '새 이름',
+  all: '같은 종류에 적용',
+  invalid: '이름에는 /, \\, . 또는 ..을 사용할 수 없습니다.',
+  working: '파일 작업 중…',
+  confirmTrash: '선택한 항목을 휴지통으로 이동할까요?',
+  error: '파일 작업 실패',
+  name: '이름',
+};
+
 export const ko = {
+  projectEdit: koProjectEdit,
+  textContext: {
+    undo: '실행 취소',
+    redo: '다시 실행',
+    cut: '잘라내기',
+    copy: '복사',
+    paste: '붙여넣기',
+    selectAll: '모두 선택',
+    error: '텍스트 작업 실패',
+    importError: '파일 가져오기 실패',
+    recovery: '파일 작업 복구 확인',
+  },
   app: {
     title: 'mGit',
   },
@@ -119,6 +164,8 @@ export const ko = {
   },
   // 워크스페이스 틀: 왼쪽 띠·왼쪽 도구 창·에디터 공간 (WS-01·05, ED-01·07)
   workspace: {
+    closeRightTabs: '오른쪽 탭 닫기',
+    revealInProject: 'Project에서 표시',
     stripe: '도구 창',
     resizeLeft: '왼쪽 도구 창 폭 조절',
     editorTabs: '에디터 탭',

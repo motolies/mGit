@@ -1,24 +1,17 @@
 import type { ChangedFile, CommitDetail } from '@mgit/ipc';
 import { Button, S } from '@mgit/ui';
 import { useEffect } from 'react';
-import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import type { MenuItem } from '../../components/ContextMenu';
 import { repoNameOf, useFolder, useWorkspace } from '../../store';
 import { sameSelection, type TimelineSelection } from '../../store/folder-store';
 import { commitDiffDoc, type OpenMode } from '../../store/workspace-store';
 import { ChangedFilesTree } from '../detail/ChangedFilesTree';
+import { CommitDetailPane, DetailFilesMessage } from '../detail/CommitDetailPane';
 import { CommitDetailView } from '../detail/CommitDetailView';
 import type { ContainingLine } from '../detail/ContainingBranches';
+import { changedFileMenu } from '../detail/changed-file-menu';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
 import { useCurrentFile } from '../workspace/use-current-file';
-import styles from './FolderCommitPane.module.css';
-
-/** 변경 파일 트리 | 커밋 상세 세로 분할의 저장 id (앱 전역 1벌). 키는 `react-resizable-panels:git-detail` */
-const GIT_DETAIL_LAYOUT_ID = 'git-detail';
-/** 위 칸(변경 파일 트리)·아래 칸(커밋 상세)의 패널 id. 저장된 배치의 키이자 DOM id 다 */
-const GIT_DETAIL_FILES_ID = 'gitdetail-files';
-const GIT_DETAIL_INFO_ID = 'gitdetail-info';
-
 export interface FolderCommitPaneProps {
   /**
    * 상세의 부모·자식을 눌렀을 때: 그 커밋으로 로그를 옮기고 고른다. 로그의 스크롤은 로그 탭이 쥐고 있어
@@ -48,7 +41,6 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
   const openDoc = useWorkspace((w) => w.openDoc);
   // Blame·파일 히스토리·외부 도구는 그 커밋의 저장소 세션으로 연다 (W13 — 요청할 때만 열린다)
   const repoActions = useRepoSessionActions();
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: GIT_DETAIL_LAYOUT_ID });
 
   const selected = f?.selected ?? null;
   const state = f?.detail ?? null;
@@ -107,43 +99,20 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
   const fileMenu =
     (d: CommitDetail) =>
     (file: ChangedFile): MenuItem[] => {
-      const repoPath = selected?.repoPath ?? null;
-      const session: MenuItem[] =
-        repoActions && repoPath !== null
-          ? [
-              {
-                label: S.menu.blame,
-                separator: true,
-                disabled: file.change.kind === 'deleted',
-                onSelect: () => repoActions.blame(repoPath, file.path, d.oid),
-              },
-              {
-                label: S.menu.fileHistory,
-                onSelect: () => repoActions.history(repoPath, file.path),
-              },
-              {
-                label: S.menu.difftool,
-                onSelect: () =>
-                  repoActions.difftool(repoPath, { kind: 'commit', oid: d.oid, path: file.path }),
-              },
-            ]
-          : [];
-      return [
-        { label: S.menu.showDiff, onSelect: () => open(d, file, 'pinned') },
-        {
-          label: S.fileView.editCurrent,
-          disabled: repoPath === null,
-          onSelect: () => {
-            if (repoPath !== null) editCurrent(repoPath, file.path, repoName);
-          },
-        },
-        ...session,
-        {
-          label: S.menu.copyPath,
-          separator: session.length > 0,
-          onSelect: () => void navigator.clipboard.writeText(file.path).catch(() => {}),
-        },
-      ];
+      const repoPath = selected?.repoPath;
+      if (!repoPath) return [];
+      return changedFileMenu(file, repoPath, {
+        showDiff: () => open(d, file, 'pinned'),
+        editCurrent: () => editCurrent(repoPath, file.path, repoName),
+        ...(repoActions
+          ? {
+              blame: () => repoActions.blame(repoPath, file.path, d.oid),
+              history: () => repoActions.history(repoPath, file.path),
+              difftool: () =>
+                repoActions.difftool(repoPath, { kind: 'commit', oid: d.oid, path: file.path }),
+            }
+          : {}),
+      });
     };
 
   /**
@@ -162,21 +131,21 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
   /** 위 칸: 상태에 맞는 안내 또는 변경 파일 트리 */
   const filesArea = () => {
     if (!selected) {
-      return <div className={styles.message}>{S.detail.pickCommit}</div>;
+      return <DetailFilesMessage>{S.detail.pickCommit}</DetailFilesMessage>;
     }
     if (current?.state === 'error') {
       return (
-        <div className={styles.message} role="alert">
+        <DetailFilesMessage error>
           <span>{S.detail.failed(current.error ?? '')}</span>
           <Button onClick={() => f?.reloadDetail()}>{S.detail.retry}</Button>
-        </div>
+        </DetailFilesMessage>
       );
     }
     if (!detail) {
-      return <div className={styles.message}>{S.detail.loading}</div>;
+      return <DetailFilesMessage>{S.detail.loading}</DetailFilesMessage>;
     }
     if (detail.files.length === 0) {
-      return <div className={styles.message}>{S.detail.noFiles}</div>;
+      return <DetailFilesMessage>{S.detail.noFiles}</DetailFilesMessage>;
     }
     return (
       <ChangedFilesTree
@@ -192,46 +161,24 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
   };
 
   return (
-    <div className={styles.pane} tabIndex={-1} data-panel="git-detail">
-      <Group orientation="vertical" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-        <Panel
-          id={GIT_DETAIL_FILES_ID}
-          defaultSize="60%"
-          minSize="44px"
-          style={{ overflow: 'hidden' }}
-        >
-          <div className={styles.files}>
-            <div className={styles.bar}>
-              <span className={styles.title}>{S.detail.changedFiles}</span>
-            </div>
-            {filesArea()}
-          </div>
-        </Panel>
-        <Separator className={styles.separator} aria-label={S.detail.resize} />
-        <Panel
-          id={GIT_DETAIL_INFO_ID}
-          defaultSize="40%"
-          minSize="44px"
-          style={{ overflow: 'hidden' }}
-        >
-          <div className={styles.info}>
-            {detail && selected ? (
-              <CommitDetailView
-                detail={detail}
-                isHead={isHead(detail)}
-                onCopyHash={() => navigator.clipboard.writeText(detail.oid)}
-                // 상세의 커밋이 지금 로그에 있을 때만 부모·자식으로 옮긴다 (없으면 옮길 행이 없다)
-                onNavigate={
-                  (detail.row ?? null) === null
-                    ? undefined
-                    : (oid) => onNavigate({ repoPath: selected.repoPath, oid })
-                }
-                containing={containingLine(detail)}
-              />
-            ) : null}
-          </div>
-        </Panel>
-      </Group>
-    </div>
+    <CommitDetailPane
+      focusArea
+      files={filesArea()}
+      info={
+        detail && selected ? (
+          <CommitDetailView
+            detail={detail}
+            isHead={isHead(detail)}
+            onCopyHash={() => navigator.clipboard.writeText(detail.oid)}
+            onNavigate={
+              (detail.row ?? null) === null
+                ? undefined
+                : (oid) => onNavigate({ repoPath: selected.repoPath, oid })
+            }
+            containing={containingLine(detail)}
+          />
+        ) : null
+      }
+    />
   );
 }

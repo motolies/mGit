@@ -6,10 +6,12 @@ import {
   useId,
   useLayoutEffect,
   useRef,
+  useState,
 } from 'react';
 import { registerCommand } from '../../command-registry';
-import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
+import { ContextMenuArea, type MenuItem, menuGroups } from '../../components/ContextMenu';
 import { hasModifier, rovingIndex } from '../../components/roving';
+import { isContextMenuKey, openContextMenuAt } from '../../components/tree-keys';
 import { captureFocusReturn } from '../../components/use-modal';
 import { ToolButton } from '../../layout/ToolButton';
 import styles from './EditorArea.module.css';
@@ -35,6 +37,8 @@ export interface EditorAreaProps<D extends EditorTabDoc> {
   renderDoc: (doc: D) => ReactNode;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
+  /** 일괄 닫기는 각 문서의 저장·충돌 확인이 끝날 때까지 순서대로 기다린다. */
+  onCloseMany?: (ids: readonly string[]) => Promise<boolean>;
   /** 미리보기 탭을 고정 탭으로 (탭 더블클릭) */
   onPin: (id: string) => void;
   /** 문서 종류별 탭 우클릭 메뉴 */
@@ -61,6 +65,7 @@ export function EditorArea<D extends EditorTabDoc>({
   renderDoc,
   onActivate,
   onClose,
+  onCloseMany,
   onPin,
   tabMenu,
   dirtyOf,
@@ -69,6 +74,7 @@ export function EditorArea<D extends EditorTabDoc>({
   const baseId = useId();
   const areaRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+  const [closing, setClosing] = useState(false);
   // 키보드로 탭을 닫았으면 다음에 활성이 되는 탭으로 포커스를 옮긴다 (닫힌 탭과 함께 포커스가 사라지지 않게)
   const refocus = useRef(false);
   const active = docs.find((d) => d.id === activeId) ?? null;
@@ -145,6 +151,11 @@ export function EditorArea<D extends EditorTabDoc>({
 
   /** 탭 막대의 키: ←→·Home·End 옆 탭 열기, Delete·Backspace 그 탭 닫기 */
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, doc: D, index: number) => {
+    if (isContextMenuKey(e)) {
+      e.preventDefault();
+      openContextMenuAt(e.currentTarget);
+      return;
+    }
     if (hasModifier(e)) {
       return;
     }
@@ -164,6 +175,50 @@ export function EditorArea<D extends EditorTabDoc>({
     document.getElementById(tabId(next))?.focus();
   };
 
+  /** 우클릭한 탭을 기준으로 닫을 대상을 고정하고 취소·저장 실패를 기존 닫기 흐름에 맡긴다. */
+  const closeMany = (ids: readonly string[]) => {
+    if (!onCloseMany || closing) return;
+    refocus.current = true;
+    setClosing(true);
+    void onCloseMany(ids).finally(() => setClosing(false));
+  };
+
+  /** 모든 문서 종류에 공통 닫기·고정 메뉴와 종류별 파일 동작을 제공한다. */
+  const menu = (doc: D): MenuItem[] => {
+    const at = docs.findIndex((item) => item.id === doc.id);
+    const others = docs.filter((item) => item.id !== doc.id).map((item) => item.id);
+    const right = docs.slice(at + 1).map((item) => item.id);
+    return menuGroups([
+      [
+        { label: S.toolbar.closeThisTab, disabled: closing, onSelect: () => onClose(doc.id) },
+        {
+          label: S.toolbar.closeOtherTabs,
+          disabled: closing || !onCloseMany || others.length === 0,
+          onSelect: () => closeMany(others),
+        },
+        {
+          label: S.workspace.closeRightTabs,
+          disabled: closing || !onCloseMany || right.length === 0,
+          onSelect: () => closeMany(right),
+        },
+        {
+          label: S.toolbar.closeAllTabs,
+          disabled: closing || !onCloseMany,
+          onSelect: () => closeMany(docs.map((item) => item.id)),
+        },
+      ],
+      [
+        {
+          label: S.actions.pin,
+          commandId: 'editor.pin',
+          disabled: doc.pinned,
+          onSelect: () => onPin(doc.id),
+        },
+      ],
+      tabMenu?.(doc) ?? [],
+    ]);
+  };
+
   return (
     <div ref={areaRef} className={styles.area} tabIndex={-1}>
       <ContextMenuArea<D>
@@ -173,9 +228,9 @@ export function EditorArea<D extends EditorTabDoc>({
             ?.closest('[data-editor-doc]')
             ?.getAttribute('data-editor-doc');
           const doc = docs.find((item) => item.id === id);
-          return doc && tabMenu?.(doc).length ? doc : null;
+          return doc ?? null;
         }}
-        items={(doc) => tabMenu?.(doc) ?? []}
+        items={menu}
       >
         <div
           ref={tabsRef}

@@ -56,6 +56,8 @@ const theme = EditorView.theme({
 function extensions(doc: EditorFile): Extension {
   return [
     theme,
+    EditorState.readOnly.of(doc.mutationLocked === true),
+    EditorView.editable.of(doc.mutationLocked !== true),
     lineNumbers(),
     drawSelection(),
     highlightActiveLine(),
@@ -191,6 +193,9 @@ export function FileEditor({
       parent: host.current,
       state: doc.state,
       dispatchTransactions: (transactions, current) => {
+        // 구조 변경 중에는 늦은 입력이 이동 전 경로의 초안을 되살리지 못하게 한다.
+        if (doc.mutationLocked && transactions.some((transaction) => transaction.docChanged))
+          return;
         current.update(transactions);
         fileEditors.update(doc, current.state);
       },
@@ -223,7 +228,7 @@ export function FileEditor({
     if (!view) return;
     doc.wrap = wrap;
     view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
-  }, [doc, wrap]);
+  }, [doc, wrap, doc.mutationLocked]);
 
   // 언어 파서는 파일명으로 늦게 읽으며 큰 문서는 편집을 유지하고 강조만 끈다.
   // biome-ignore lint/correctness/useExhaustiveDependencies: generation은 원문 교체 뒤 언어 확장을 다시 적용하는 신호다.

@@ -514,7 +514,7 @@ describe('트리의 우클릭 메뉴 (PT-07)', () => {
     fireEvent.contextMenu(row('auth'));
     await tick();
     expect(treeSelected()).toEqual(['auth']);
-    expect(screen.getAllByRole('menuitem')[0]?.textContent).toBe(S.project.openAsTab);
+    expect(screen.getByRole('menuitem', { name: S.project.openAsTab })).toBeTruthy();
     expect(screen.getByText(S.folder.batch.withScope(S.remote.pull, 'auth'))).toBeTruthy();
   });
 

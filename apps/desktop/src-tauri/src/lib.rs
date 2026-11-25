@@ -12,6 +12,7 @@ mod commands_changes;
 mod commands_conflict;
 mod commands_folder;
 mod commands_fs;
+mod commands_fs_operations;
 mod commands_history;
 mod commands_hosting;
 mod commands_lfs;
@@ -35,6 +36,7 @@ mod events;
 #[cfg(test)]
 mod export;
 mod messages;
+mod native_files;
 mod pty;
 mod state;
 
@@ -262,6 +264,14 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_folder::folder_commit_containing_refs,
             commands_folder::folder_commit_file_diff,
             commands_folder::folder_commit_file_diff_document,
+            commands_fs_operations::fs_prepare_operation,
+            commands_fs_operations::fs_execute_operation,
+            commands_fs_operations::fs_cancel_operation,
+            commands_fs_operations::fs_operation_progress,
+            commands_fs_operations::fs_register_drop,
+            commands_fs_operations::fs_clipboard_write,
+            commands_fs_operations::fs_clipboard_read,
+            commands_fs_operations::fs_recovery_warnings,
             commands_fs::fs_list_dir,
             commands_fs::fs_read_file,
             commands_fs::fs_read_image,
@@ -359,7 +369,11 @@ pub fn run() {
             // 앱 데이터 디렉터리(SQLite·백업)는 AppHandle 이 있어야 알 수 있다.
             // git 탐색·버전 검사는 창을 띄우기 전에 한 번만 한다 (실패해도 앱은 뜬다)
             let data_dir = app.path().app_data_dir().ok();
+            let file_data_dir = data_dir.clone().unwrap_or_else(std::env::temp_dir);
             let app_state = tauri::async_runtime::block_on(state::AppState::build(data_dir));
+            app.manage(commands_fs_operations::FileOperationsState::new(
+                file_data_dir,
+            ));
             let cwd = std::env::current_dir().unwrap_or_default();
             let argv: Vec<String> = std::env::args().skip(1).collect();
             app_state.set_startup_paths(existing_paths(argv.iter(), &cwd));
@@ -367,6 +381,14 @@ pub fn run() {
             app.manage(pty::PtyState::default());
             install_quit_guard(app.handle())?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+                && let Some(files) =
+                    window.try_state::<commands_fs_operations::FileOperationsState>()
+            {
+                files.register_drop(paths);
+            }
         })
         .invoke_handler(builder.invoke_handler())
         .build(tauri::generate_context!())

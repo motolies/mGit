@@ -54,6 +54,14 @@
   overflow-y: auto;
 }
 
+/* 우클릭 메뉴도 작은 창에서 마지막 동작까지 스크롤로 접근할 수 있게 한다. */
+.context {
+  max-height: var(--radix-context-menu-content-available-height);
+  max-width: min(460px, calc(100vw - 16px));
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
 /* 드롭다운 메뉴 (그래프 옵션): 그룹 라벨과 체크 표시 */
 .label {
   margin: 4px 0;

@@ -28,10 +28,12 @@ sha2 = "0.10"
 base64 = "0.22"
 quick-xml = "0.42"
 tempfile.workspace = true
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
 # 파일 보기(FS-06)가 여는 플래그 상수만 쓴다 (O_NOFOLLOW·O_NONBLOCK·O_NOCTTY, ELOOP)
 libc.workspace = true
+rustix = { version = "1", features = ["fs"] }
 
 [features]
 default = ["syntax-check"]

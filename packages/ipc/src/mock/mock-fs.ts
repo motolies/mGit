@@ -92,6 +92,19 @@ export interface MockFs {
   readImage(root: string, path: string): FsImage;
   readEditable(root: string, path: string): FsEditableFile;
   save(root: string, path: string, expectedRevision: string, text: string): FsSaveResult;
+  /** 파일 작업 목에 필요한 변경 계약이다. */
+  kind(root: string, path: string): FsEntryKind | null;
+  validateOperation(root: string, path: string): void;
+  create(root: string, path: string, directory: boolean): void;
+  transfer(
+    fromRoot: string,
+    from: string,
+    toRoot: string,
+    to: string,
+    move: boolean,
+    overwrite: boolean,
+  ): void;
+  trash(root: string, path: string): void;
   /** 파일·링크 하나를 지운다 (Rollback 흉내). 디렉터리나 없는 경로는 그대로 둔다 */
   remove(root: string, path: string): void;
 }
@@ -649,7 +662,93 @@ export function createMockFs(layout: MockFsLayout): MockFs {
     };
   };
 
+  /** 저장소 자체 및 중첩 저장소를 포함하는 폴더는 구조 변경하지 않는다. */
+  const protectedPath = (root: string, path: string): void => {
+    const absolute = `${root}/${path}`;
+    const repositories = [
+      ...layout.repos.map((repo) => repo.path),
+      ...(folder?.repos.map((repo) => `${folder.path}/${repo.name}`) ?? []),
+    ];
+    if (!path || repositories.some((repo) => repo === absolute || repo.startsWith(`${absolute}/`)))
+      throw rejected(
+        path,
+        '저장소를 포함한 폴더는 변경할 수 없습니다',
+        'Cannot change a repository directory',
+      );
+  };
+  /** 부모와 이름을 확인해 실제 트리에 적용할 위치를 얻는다. */
+  const location = (root: string, path: string): [Map<string, MockNode>, string] => {
+    const parts = parseRel(path);
+    const name = parts.pop();
+    const parent = walk(rootOf(root), parts, path);
+    if (!name || typeof parent === 'string' || parent.kind !== 'dir' || parent.denied)
+      throw rejected(path, '부모 폴더에 접근할 수 없습니다', 'Parent folder is unavailable');
+    return [parent.entries(), name];
+  };
+  /** 링크·저장소 메타데이터를 복사하지 않으며 독립된 노드를 만든다. */
+  const cloneNode = (node: MockNode): MockNode => {
+    if (node.kind === 'dir') {
+      if (node.denied || [...node.entries().keys()].some((name) => name.toLowerCase() === '.git'))
+        throw rejected('', '보호된 폴더입니다', 'Protected folder');
+      const entries = new Map([...node.entries()].map(([name, child]) => [name, cloneNode(child)]));
+      return { ...node, entries: () => entries };
+    }
+    if (node.kind !== 'file')
+      throw rejected('', '특수 파일은 지원하지 않습니다', 'Unsupported file');
+    const read = node.read();
+    return { ...node, read: () => read };
+  };
+
   return {
+    validateOperation(root, path) {
+      protectedPath(root, path);
+      const [entries, name] = location(root, path);
+      const node = entries.get(name);
+      if (!node) throw rejected(path, '파일이 없습니다', 'Missing file');
+      cloneNode(node);
+    },
+    kind(root, path) {
+      const node = walk(rootOf(root), path === '' ? [] : parseRel(path), path);
+      return typeof node === 'string' ? null : node.kind;
+    },
+    create(root, path, directory) {
+      const [parent, name] = location(root, path);
+      if (parent.has(name)) throw rejected(path, '같은 이름이 있습니다', 'Already exists');
+      const entries = new Map<string, MockNode>();
+      parent.set(
+        name,
+        directory
+          ? { kind: 'dir', mtimeMs: Date.now(), denied: false, entries: () => entries }
+          : {
+              kind: 'file',
+              mtimeMs: Date.now(),
+              size: 0,
+              read: () => ({ kind: 'text', text: '', size: 0 }),
+            },
+      );
+    },
+    transfer(fromRoot, from, toRoot, to, move, overwrite) {
+      protectedPath(fromRoot, from);
+      protectedPath(toRoot, to);
+      const [source, sourceName] = location(fromRoot, from);
+      const node = source.get(sourceName);
+      if (!node) throw rejected(from, '파일이 없습니다', 'Missing file');
+      const [destination, name] = location(toRoot, to);
+      if (destination.has(name) && !overwrite)
+        throw rejected(to, '같은 이름이 있습니다', 'Already exists');
+      if (source === destination && sourceName === name) return;
+      const cloned = cloneNode(node);
+      destination.set(name, move ? node : cloned);
+      if (move) source.delete(sourceName);
+    },
+    trash(root, path) {
+      protectedPath(root, path);
+      const [parent, name] = location(root, path);
+      const node = parent.get(name);
+      if (!node) throw rejected(path, '파일이 없습니다', 'Missing file');
+      cloneNode(node);
+      parent.delete(name);
+    },
     list(root, dir, limit) {
       const parts = dir === '' ? [] : parseRel(dir);
       const node = walk(rootOf(root), parts, dir);

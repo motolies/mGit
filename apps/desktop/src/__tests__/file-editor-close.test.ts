@@ -94,3 +94,48 @@ describe('현재 파일 닫기 보호', () => {
     expect(store.getState().activeDocId).toBe(second.id);
   });
 });
+
+/** 여러 문서를 닫을 때 저장·확인이 겹치지 않는지 검증한다. */
+describe('편집기 탭 일괄 닫기', () => {
+  const file = (path: string) => fileViewDoc({ path, name: path, repoPath: null, repoName: null });
+
+  it('앞 문서의 저장을 기다리고 취소한 문서와 뒤 문서는 남긴다', async () => {
+    let finish!: (ok: boolean) => void;
+    const beforeCloseFile = vi
+      .fn<(path: string) => Promise<boolean>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(false);
+    const store = createWorkspaceStore('repo', { beforeCloseFile });
+    const docs = ['a.txt', 'b.txt', 'c.txt'].map(file);
+    for (const doc of docs) store.getState().openDoc(doc, 'pinned');
+    const closing = store.getState().closeDocs(docs.map((doc) => doc.id));
+    expect(beforeCloseFile).toHaveBeenCalledTimes(1);
+    expect(store.getState().docs).toHaveLength(3);
+    expect(await store.getState().closeDocs([docs[2]?.id ?? ''])).toBe(false);
+    finish(true);
+    expect(await closing).toBe(false);
+    expect(store.getState().docs.map((doc) => doc.id)).toEqual(['file:b.txt', 'file:c.txt']);
+    expect(beforeCloseFile.mock.calls.map(([path]) => path)).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('확인 중 새로 연 문서는 일괄 닫기 대상에 추가되지 않는다', async () => {
+    let finish!: (ok: boolean) => void;
+    const store = createWorkspaceStore('repo', {
+      beforeCloseFile: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    store.getState().openDoc(file('a.txt'), 'pinned');
+    const closing = store.getState().closeDocs(['file:a.txt']);
+    store.getState().openDoc(file('new.txt'), 'pinned');
+    finish(true);
+    expect(await closing).toBe(true);
+    expect(store.getState().docs.map((doc) => doc.id)).toEqual(['file:new.txt']);
+  });
+});

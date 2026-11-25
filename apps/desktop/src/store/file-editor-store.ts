@@ -27,6 +27,7 @@ export interface EditorFile {
   generation: number;
   imageEpoch: number;
   composing: boolean;
+  mutationLocked?: boolean;
   scrollTop: number;
   scrollLeft: number;
   wrap: boolean;
@@ -81,6 +82,11 @@ export class FileEditorStore {
   /** 세션의 상대 경로로 공유 문서를 찾는다. */
   get(session: SessionId, path: string): EditorFile | undefined {
     return this.aliases.get(sourceKey(session, path));
+  }
+
+  /** 구조 변경 전에 이미 시작된 파일 열기를 모두 완료한다. */
+  async settleOpening(): Promise<void> {
+    await Promise.allSettled([...this.opening.values()]);
   }
 
   /** 선택한 세션과 경로가 참조하는 문서를 중복 없이 고른다. */
@@ -165,6 +171,7 @@ export class FileEditorStore {
 
   /** 편집 상태 전체를 기억하며 텍스트 변경에만 저장 예약과 미리보기 고정을 적용한다. */
   update(doc: EditorFile, state: EditorState): void {
+    if (doc.mutationLocked) return;
     const changed = state.doc !== doc.state.doc;
     doc.state = state;
     if (!changed) return;
@@ -188,7 +195,14 @@ export class FileEditorStore {
   private schedule(doc: EditorFile): void {
     clearTimeout(doc.timer);
     doc.timer = undefined;
-    if (!doc.dirty || doc.composing || doc.status === 'conflict' || doc.status === 'error') return;
+    if (
+      doc.mutationLocked ||
+      !doc.dirty ||
+      doc.composing ||
+      doc.status === 'conflict' ||
+      doc.status === 'error'
+    )
+      return;
     doc.timer = setTimeout(() => {
       doc.timer = undefined;
       void this.save(doc);
@@ -204,6 +218,7 @@ export class FileEditorStore {
 
   /** 저장 요청을 하나만 보내고 늦은 응답은 최신 초안을 변경하지 않는다. */
   async save(doc: EditorFile): Promise<boolean> {
+    if (doc.mutationLocked) return false;
     clearTimeout(doc.timer);
     doc.timer = undefined;
     if (doc.inflight) return doc.inflight;
@@ -265,6 +280,7 @@ export class FileEditorStore {
 
   /** 디스크 변경을 검사한다. 저장 중 읽기는 저장 응답 뒤에 시작해 자기 저장과 경합하지 않는다. */
   async refresh(doc: EditorFile): Promise<void> {
+    if (doc.mutationLocked) return;
     doc.imageEpoch += 1;
     this.emit();
     if (doc.inflight) await doc.inflight;
@@ -343,6 +359,22 @@ export class FileEditorStore {
     this.emit();
   }
 
+  /** 파일 교체 후 텍스트 문서를 다시 읽고 비텍스트가 되었으면 별칭을 해제해 일반 뷰로 돌아간다. */
+  async reloadAfterReplacement(doc: EditorFile): Promise<void> {
+    const source = doc.sources.values().next().value as EditorSource | undefined;
+    if (!source) return;
+    try {
+      const file = await source.client.fsReadEditableFile(source.session, source.path);
+      if (file.kind === 'text') {
+        if (file.revision !== doc.revision) this.replace(doc, file);
+      } else for (const old of [...doc.sources.values()]) this.release(old.session, old.path);
+    } catch (error) {
+      doc.error = describeError(error);
+      doc.status = 'conflict';
+    }
+    this.emit();
+  }
+
   /** 덮어쓰기 확인 뒤 새 revision으로만 저장해 확인 이후 변경도 충돌로 처리한다. */
   async overwrite(doc: EditorFile): Promise<boolean> {
     const sequence = doc.sequence;
@@ -398,6 +430,48 @@ export class FileEditorStore {
         this.files.delete(doc.fileKey);
       }
     }
+    this.emit();
+  }
+
+  /** 파일 구조 변경 중 갱신과 자동저장을 멈추고 오래된 읽기 응답을 무효화한다. */
+  lockMutation(docs: readonly EditorFile[], locked: boolean): void {
+    for (const doc of docs) {
+      doc.mutationLocked = locked;
+      doc.readSequence += 1;
+      clearTimeout(doc.timer);
+      if (!locked) this.schedule(doc);
+    }
+    this.emit();
+  }
+
+  /** 이동한 문서의 편집 상태를 유지하면서 모든 별칭과 디스크 식별자를 교체한다. */
+  async remap(doc: EditorFile, sources: EditorSource[]): Promise<void> {
+    const source = sources[0];
+    if (!source) return;
+    const file = await source.client.fsReadEditableFile(source.session, source.path);
+    if (file.kind !== 'text') throw new Error(S.fileEditor.reloadUnreadable);
+    for (const key of doc.sources.keys()) this.aliases.delete(key);
+    this.files.delete(doc.fileKey);
+    const replaced = this.files.get(file.fileKey);
+    if (replaced && replaced !== doc) {
+      for (const old of replaced.sources.values()) {
+        if (!sources.some((s) => s.session === old.session && s.path === old.path))
+          sources.push(old);
+      }
+    }
+    doc.sources.clear();
+    doc.fileKey = file.fileKey;
+    doc.path = source.path;
+    doc.revision = file.revision;
+    doc.baseText = file.text;
+    doc.dirty = false;
+    doc.status = 'saved';
+    for (const item of sources) {
+      const key = sourceKey(item.session, item.path);
+      doc.sources.set(key, item);
+      this.aliases.set(key, doc);
+    }
+    this.files.set(doc.fileKey, doc);
     this.emit();
   }
 

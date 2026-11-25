@@ -1,4 +1,5 @@
 import { App } from './App';
+import { TextContextMenu } from './components/TextContextMenu';
 import { FileEditorCloseDialog } from './features/workspace/FileEditorCloseDialog';
 import { useAppStore } from './store';
 
@@ -9,9 +10,9 @@ import { useAppStore } from './store';
 export function Root() {
   const uiLocale = useAppStore((s) => s.uiLocale);
   return (
-    <>
+    <TextContextMenu>
       <App key={uiLocale} />
       <FileEditorCloseDialog />
-    </>
+    </TextContextMenu>
   );
 }

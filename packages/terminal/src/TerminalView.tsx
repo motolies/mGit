@@ -1,4 +1,5 @@
 import '@xterm/xterm/css/xterm.css';
+import { TEXT_CONTEXT_EVENT, type TextContextAdapter } from '@mgit/ui';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef } from 'react';
@@ -100,6 +101,22 @@ export function TerminalView({
     term.attachCustomKeyEventHandler((e) => !passKeyRef.current(e));
     term.open(el);
     termRef.current = term;
+    /** 터미널 선택과 paste API를 사용해 셸의 bracketed paste를 유지한다. */
+    const context = (event: Event) => {
+      const request = event as CustomEvent<{ adapter: TextContextAdapter | null }>;
+      request.detail.adapter = {
+        copy: term.hasSelection()
+          ? () => navigator.clipboard.writeText(term.getSelection())
+          : undefined,
+        paste: async () => {
+          term.paste(await navigator.clipboard.readText());
+          term.focus();
+        },
+        selectAll: () => term.selectAll(),
+      };
+      event.stopPropagation();
+    };
+    el.addEventListener(TEXT_CONTEXT_EVENT, context);
     fitRef.current = fit;
     try {
       fit.fit();
@@ -167,6 +184,7 @@ export function TerminalView({
       if (ptyId !== null) {
         io.close(ptyId).catch(() => {});
       }
+      el.removeEventListener(TEXT_CONTEXT_EVENT, context);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

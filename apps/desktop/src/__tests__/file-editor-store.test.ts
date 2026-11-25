@@ -284,3 +284,41 @@ describe('shared file editor documents', () => {
     expect(doc.status).toBe('conflict');
   });
 });
+
+describe('파일 구조 변경과 편집 상태', () => {
+  it('구조 변경 잠금 중 입력과 외부 변경 조회를 멈춘다', async () => {
+    const f = fixture();
+    const doc = await f.open();
+    f.store.lockMutation([doc], true);
+    edit(f.store, doc, 'unexpected');
+    f.external('outside');
+    await f.store.refresh(doc);
+    expect(doc.state.doc.toString()).toBe('start\n');
+    expect(f.read).toHaveBeenCalledTimes(1);
+    expect(await f.store.save(doc)).toBe(false);
+    f.store.lockMutation([doc], false);
+    await f.store.refresh(doc);
+    expect(doc.state.doc.toString()).toBe('outside');
+  });
+  it('이동 후 두 세션 별칭을 새 경로로 연결하고 편집 이력을 유지한다', async () => {
+    const f = fixture();
+    const doc = await f.open();
+    await f.open(2, 'nested/a.ts');
+    edit(f.store, doc, 'saved edit');
+    await f.store.flush();
+    const state = doc.state;
+    f.read.mockResolvedValue({ ...f.snapshot(), fileKey: 'moved-file' } as FsEditableFile);
+    await f.store.remap(doc, [
+      { client: f.client, session: 1, path: 'b.ts' },
+      { client: f.client, session: 2, path: 'nested/b.ts' },
+    ]);
+    expect(f.store.get(1, 'a.ts')).toBeUndefined();
+    expect(f.store.get(2, 'nested/a.ts')).toBeUndefined();
+    expect(f.store.get(1, 'b.ts')).toBe(doc);
+    expect(f.store.get(2, 'nested/b.ts')).toBe(doc);
+    expect(doc.state).toBe(state);
+    expect(doc.fileKey).toBe('moved-file');
+    expect(undo(commandTarget(f.store, doc))).toBe(true);
+    expect(doc.state.doc.toString()).toBe('start\n');
+  });
+});

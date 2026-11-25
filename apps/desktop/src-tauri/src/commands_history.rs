@@ -680,3 +680,32 @@ mod tests {
         );
     }
 }
+
+/// 전체 원문과 확정된 비교 기준을 함께 조회한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn compare_file_diff_document(
+    state: State<'_, AppState>,
+    session: u32,
+    a: String,
+    b: String,
+    three_dot: bool,
+    path: String,
+    options: DiffOptionsDto,
+    full: bool,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    let d = state
+        .core()?
+        .core
+        .compare_file_diff_document(
+            SessionId(session),
+            &a,
+            &b,
+            three_dot,
+            &path,
+            options.into(),
+            full,
+        )
+        .await?;
+    Ok(d.into())
+}

@@ -4,7 +4,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommitDetailView, splitCommitMessage } from '../features/detail/CommitDetailView';
 import { DiffPaneView, type DiffPaneViewProps } from '../features/diff/DiffPaneView';
+import { DEFAULT_DIFF_OPTIONS } from '../store/session-store';
 import { tick } from './dialog-stub';
+import { documentOf } from './diff-document-fixture';
 
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { get: () => 600 });
@@ -173,7 +175,7 @@ describe('DiffPaneView (ED-03)', () => {
       error: null,
       mode: 'unified',
       onModeChange: vi.fn(),
-      options: { ignoreWhitespace: false, context: 3, wrap: true, tabWidth: 4 },
+      options: { ...DEFAULT_DIFF_OPTIONS, wrap: true },
       onOptionsChange: vi.fn(),
       onLoadFull: vi.fn(),
       ...partial,
@@ -252,5 +254,45 @@ describe('DiffPaneView (ED-03)', () => {
     expect(screen.getByText('실패')).toBeTruthy();
     fireEvent.click(screen.getByText(S.diff.retry));
     expect(onRetry).toHaveBeenCalled();
+  });
+
+  it('원문 줄 수 제한만 전체 파일 불러오기를 제공하고 보기 모드는 별도로 바꾼다', () => {
+    const document = documentOf(diff());
+    document.old.content = null;
+    document.new.content = null;
+    document.old.lineCount = 12000;
+    document.limitReason = 'line-limit';
+    const props = setup({ document, diff: document.diff });
+    expect(screen.getByText(/표시 한도를 초과/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '전체 파일 불러오기' }));
+    expect(props.onLoadFull).toHaveBeenCalledOnce();
+    expect(props.onOptionsChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '변경 주변' }));
+    expect(props.onOptionsChange).toHaveBeenCalledWith({ fullFile: false });
+  });
+
+  it('지원하지 않는 파일 종류에는 한도 해제 버튼을 표시하지 않는다', () => {
+    const document = documentOf(diff());
+    document.old.content = null;
+    document.new.content = null;
+    document.limitReason = 'unsupported-file-type';
+    setup({ document, diff: document.diff });
+    expect(screen.getByText(/심볼릭 링크와 서브모듈/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '전체 파일 불러오기' })).toBeNull();
+  });
+
+  it('공백 무시로 패치가 없어져도 원문 문서를 유지하고 비교 결과를 안내한다', () => {
+    const document = documentOf();
+    document.old.content = 'const value = 1;';
+    document.new.content = 'const  value = 1;';
+    document.old.lineCount = 1;
+    document.new.lineCount = 1;
+    setup({
+      document,
+      diff: document.diff,
+      options: { ...DEFAULT_DIFF_OPTIONS, ignoreWhitespace: true },
+    });
+    expect(screen.getByText('공백을 제외한 변경 없음')).toBeTruthy();
+    expect(screen.getByRole('grid')).toBeTruthy();
   });
 });

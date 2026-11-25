@@ -17,6 +17,7 @@ import type {
   ConflictRule,
   ConflictSide,
   CreatePr,
+  DiffDocument,
   DiffOptions,
   DifftoolTarget,
   FileDiff,
@@ -131,6 +132,7 @@ const FILE_BACKUP_LIMIT = 200;
 const LONG_OP_MS = 1500;
 /** 사용자 설정 키 */
 const PREF_DIFF_OPTIONS = 'mgit.diffOptions';
+export const PREF_DIFF_MODE = 'mgit.diffMode';
 const PREF_GRAPH_COLUMNS = 'mgit.graphColumns';
 const PREF_GRAPH_LAYOUT = 'mgit.graphLayout';
 const PREF_GRAPH_VIEW = 'mgit.graphView';
@@ -139,14 +141,41 @@ const PREF_GRAPH_VIEW = 'mgit.graphView';
 export interface DiffViewOptions extends DiffOptions {
   wrap: boolean;
   tabWidth: number;
+  fullFile: boolean;
+  horizontalSync: boolean;
+  highlightMode: 'character' | 'word' | 'line';
 }
 
 export const DEFAULT_DIFF_OPTIONS: DiffViewOptions = {
   ignoreWhitespace: false,
   context: 3,
-  wrap: true,
+  wrap: false,
   tabWidth: 4,
+  fullFile: true,
+  horizontalSync: true,
+  highlightMode: 'character',
 };
+
+/** 저장된 유효한 설정을 보존하고 누락되거나 손상된 값만 기본값으로 보완한다. */
+export function readDiffOptions(): DiffViewOptions {
+  const saved = readPref(PREF_DIFF_OPTIONS, DEFAULT_DIFF_OPTIONS);
+  const next = { ...DEFAULT_DIFF_OPTIONS };
+  for (const key of ['ignoreWhitespace', 'wrap', 'fullFile', 'horizontalSync'] as const) {
+    if (typeof saved[key] === 'boolean') next[key] = saved[key];
+  }
+  if (Number.isInteger(saved.context) && saved.context >= 0 && saved.context <= 99)
+    next.context = saved.context;
+  if (Number.isInteger(saved.tabWidth) && saved.tabWidth >= 1 && saved.tabWidth <= 16)
+    next.tabWidth = saved.tabWidth;
+  if (['character', 'word', 'line'].includes(saved.highlightMode))
+    next.highlightMode = saved.highlightMode;
+  return next;
+}
+
+/** 저장된 비교 배치를 읽고 새 설치에서는 좌우 비교를 사용한다. */
+export function readDiffMode(): DiffMode {
+  return readPref<string>(PREF_DIFF_MODE, 'split') === 'unified' ? 'unified' : 'split';
+}
 
 export const DEFAULT_GRAPH_QUERY: GraphQuery = {
   revs: { kind: 'all' },
@@ -222,6 +251,7 @@ export interface CompareView {
   files: ChangedFile[];
   path: string | null;
   diff: FileDiff | null;
+  diffDocument: DiffDocument | null;
   loading: boolean;
   diffLoading: boolean;
 }
@@ -401,6 +431,7 @@ export interface SessionState {
   selectedFile: FileTarget | null;
   diffMode: DiffMode;
   diff: FileDiff | null;
+  diffDocument: DiffDocument | null;
   diffLoading: boolean;
   diffError: string | null;
   actionError: string | null;
@@ -588,10 +619,10 @@ export interface SessionState {
    * `discard` 처럼 "폐기 백업에서 복구할 수 있습니다" 를 알린다. 실패 사유는 `actionError`
    */
   rollback(paths: string[]): Promise<void>;
-  applyLines(selection: LineSelection[]): Promise<void>;
-  applyHunk(hunk: number): Promise<void>;
-  discardLines(selection: LineSelection[]): Promise<void>;
-  discardHunk(hunk: number): Promise<void>;
+  applyLines(selection: LineSelection[], expectedRevision?: string): Promise<void>;
+  applyHunk(hunk: number, expectedRevision?: string): Promise<void>;
+  discardLines(selection: LineSelection[], expectedRevision?: string): Promise<void>;
+  discardHunk(hunk: number, expectedRevision?: string): Promise<void>;
 
   setCommitMessage(message: string): void;
   setCommitAmend(on: boolean): Promise<void>;
@@ -629,7 +660,7 @@ export interface SessionState {
   openFileHistory(path: string): Promise<void>;
   closeFileHistory(): void;
   openCompare(a: string, b: string, threeDot: boolean): Promise<void>;
-  compareSelectFile(path: string | null): Promise<void>;
+  compareSelectFile(path: string | null, full?: boolean): Promise<void>;
   closeCompare(): void;
   selectRange(row: GraphRow): Promise<void>;
   clearRange(): void;
@@ -1273,15 +1304,23 @@ export function createSessionStore(
       }
     };
 
-    /** 현재 연 파일의 diff 를 (다시) 읽는다 */
+    let diffSeq = 0;
+    let compareSeq = 0;
+    let compareFilesSeq = 0;
+    let compareFull = false;
+    let diffFull = false;
+
+    /** 요청 순번으로 오래된 성공·오류를 버리고 재조회 동안 이전 선택의 쓰기를 막는다. */
     const loadDiff = async (target: FileTarget, full: boolean) => {
-      set({ diffLoading: true, diffError: null });
+      const seq = ++diffSeq;
+      diffFull = full;
+      set({ diff: null, diffDocument: null, diffLoading: true, diffError: null });
       try {
         const { ignoreWhitespace, context } = get().diffOptions;
         const opts = { ignoreWhitespace, context };
-        let diff: FileDiff | null;
+        let document: DiffDocument;
         if (target.range) {
-          diff = await client.compareFileDiff(
+          document = await client.compareFileDiffDocument(
             id,
             target.range.base,
             target.range.newer,
@@ -1291,7 +1330,7 @@ export function createSessionStore(
             full,
           );
         } else if (target.commit) {
-          diff = await client.commitFileDiff(
+          document = await client.commitFileDiffDocument(
             id,
             target.commit,
             target.path,
@@ -1300,21 +1339,15 @@ export function createSessionStore(
             opts,
           );
         } else {
-          diff = await client.workTreeDiff(id, target.path, target.staged, full, opts);
+          document = await client.workTreeDiffDocument(id, target.path, target.staged, full, opts);
         }
-        const current = get().selectedFile;
-        if (
-          current &&
-          current.path === target.path &&
-          current.staged === target.staged &&
-          current.commit === target.commit &&
-          current.range?.base === target.range?.base &&
-          current.range?.newer === target.range?.newer
-        ) {
-          set({ diff, diffLoading: false });
+        if (seq === diffSeq && get().selectedFile === target) {
+          set({ diff: document.diff, diffDocument: document, diffLoading: false });
         }
       } catch (e) {
-        set({ diff: null, diffLoading: false, diffError: describeError(e) });
+        if (seq === diffSeq && get().selectedFile === target) {
+          set({ diff: null, diffDocument: null, diffLoading: false, diffError: describeError(e) });
+        }
       }
     };
 
@@ -1346,7 +1379,15 @@ export function createSessionStore(
       const { selectedFile } = get();
       return {
         range: null,
-        ...(selectedFile?.range ? { selectedFile: null, diff: null, diffError: null } : {}),
+        ...(selectedFile?.range
+          ? {
+              selectedFile: null,
+              diff: null,
+              diffDocument: null,
+              diffLoading: false,
+              diffError: null,
+            }
+          : {}),
       };
     };
 
@@ -1609,8 +1650,9 @@ export function createSessionStore(
       selectedCommit: null,
       wipSelected: true,
       selectedFile: null,
-      diffMode: 'unified',
+      diffMode: readDiffMode(),
       diff: null,
+      diffDocument: null,
       diffLoading: false,
       diffError: null,
       actionError: null,
@@ -1629,7 +1671,7 @@ export function createSessionStore(
       pullMode: 'default',
       stashes: [],
       stashView: null,
-      diffOptions: readPref(PREF_DIFF_OPTIONS, DEFAULT_DIFF_OPTIONS),
+      diffOptions: readDiffOptions(),
       graphQuery: options.initialGraphQuery ?? DEFAULT_GRAPH_QUERY,
       filterError: null,
       graphAuthors: { state: 'idle', list: null, error: null },
@@ -1824,9 +1866,9 @@ export function createSessionStore(
                 (e) => e.path === target.path && entryInArea(e, target.staged),
               );
               if (stillThere) {
-                void loadDiff(target, false);
+                void loadDiff(target, diffFull);
               } else {
-                set({ selectedFile: null, diff: null });
+                set({ selectedFile: null, diff: null, diffDocument: null, diffLoading: false });
               }
             }
             return;
@@ -2023,11 +2065,19 @@ export function createSessionStore(
       },
 
       closeFile() {
-        set({ selectedFile: null, diff: null, diffError: null });
+        ++diffSeq;
+        set({
+          selectedFile: null,
+          diff: null,
+          diffDocument: null,
+          diffLoading: false,
+          diffError: null,
+        });
       },
 
       setDiffMode(mode) {
         set({ diffMode: mode });
+        writePref(PREF_DIFF_MODE, mode);
       },
 
       async loadFullDiff() {
@@ -2111,32 +2161,58 @@ export function createSessionStore(
         });
       },
 
-      applyLines(selection) {
+      applyLines(selection, expectedRevision) {
         const target = get().selectedFile;
-        if (!target || target.commit) {
+        if (
+          !target ||
+          target.commit ||
+          target.range ||
+          get().diffLoading ||
+          !get().diffDocument ||
+          get().busy ||
+          (expectedRevision !== undefined && expectedRevision !== get().diffDocument?.revision)
+        ) {
           return Promise.resolve();
         }
         const { ignoreWhitespace, context } = get().diffOptions;
+        const revision = get().diffDocument?.revision;
         return run(() =>
-          client.stageLines(id, target.path, selection, target.staged, {
-            ignoreWhitespace,
-            context,
-          }),
+          client.stageLines(
+            id,
+            target.path,
+            selection,
+            target.staged,
+            {
+              ignoreWhitespace,
+              context,
+            },
+            revision,
+          ),
         ).then(() => {});
       },
 
-      applyHunk(hunk) {
-        return get().applyLines([{ hunk, lines: [] }]);
+      applyHunk(hunk, expectedRevision) {
+        return get().applyLines([{ hunk, lines: [] }], expectedRevision);
       },
 
-      discardLines(selection) {
+      discardLines(selection, expectedRevision) {
         const target = get().selectedFile;
-        if (!target || target.staged || target.commit) {
+        if (
+          !target ||
+          target.staged ||
+          target.commit ||
+          target.range ||
+          get().diffLoading ||
+          !get().diffDocument ||
+          get().busy ||
+          (expectedRevision !== undefined && expectedRevision !== get().diffDocument?.revision)
+        ) {
           return Promise.resolve();
         }
         const { ignoreWhitespace, context } = get().diffOptions;
+        const revision = get().diffDocument?.revision;
         return run(() =>
-          client.discardLines(id, target.path, selection, { ignoreWhitespace, context }),
+          client.discardLines(id, target.path, selection, { ignoreWhitespace, context }, revision),
         ).then((r) => {
           if (r !== undefined && r !== null) {
             notifyHub.notify({ kind: 'info', title: S.safety.discardBackedUp });
@@ -2144,8 +2220,8 @@ export function createSessionStore(
         });
       },
 
-      discardHunk(hunk) {
-        return get().discardLines([{ hunk, lines: [] }]);
+      discardHunk(hunk, expectedRevision) {
+        return get().discardLines([{ hunk, lines: [] }], expectedRevision);
       },
 
       setCommitMessage(message) {
@@ -2306,7 +2382,7 @@ export function createSessionStore(
         if (patch.ignoreWhitespace !== undefined || patch.context !== undefined) {
           const target = get().selectedFile;
           if (target) {
-            void loadDiff(target, false);
+            void loadDiff(target, diffFull);
           }
           const c = get().compare;
           if (c?.path) {
@@ -2442,6 +2518,9 @@ export function createSessionStore(
       },
 
       async openCompare(a, b, threeDot) {
+        const seq = ++compareFilesSeq;
+        compareFull = false;
+        ++compareSeq;
         set({
           compare: {
             a,
@@ -2450,6 +2529,7 @@ export function createSessionStore(
             files: [],
             path: null,
             diff: null,
+            diffDocument: null,
             loading: true,
             diffLoading: false,
           },
@@ -2457,48 +2537,48 @@ export function createSessionStore(
         try {
           const files = await client.compareRefs(id, a, b, threeDot);
           const c = get().compare;
-          if (c && c.a === a && c.b === b && c.threeDot === threeDot) {
-            set({ compare: { ...c, files, loading: false } });
-          }
+          if (seq === compareFilesSeq && c) set({ compare: { ...c, files, loading: false } });
         } catch (e) {
-          set({ compare: null, actionError: describeError(e) });
+          if (seq === compareFilesSeq) set({ compare: null, actionError: describeError(e) });
         }
       },
 
-      async compareSelectFile(path) {
+      async compareSelectFile(path, full) {
+        const seq = ++compareSeq;
         const c = get().compare;
-        if (!c) {
-          return;
-        }
-        if (path === null) {
-          set({ compare: { ...c, path: null, diff: null } });
-          return;
-        }
-        set({ compare: { ...c, path, diff: null, diffLoading: true } });
+        if (!c) return;
+        const loadFull = full ?? (c.path === path && compareFull);
+        compareFull = loadFull;
+        set({
+          compare: { ...c, path, diff: null, diffDocument: null, diffLoading: path !== null },
+        });
+        if (path === null) return;
         try {
           const { ignoreWhitespace, context } = get().diffOptions;
-          const diff = await client.compareFileDiff(
+          const document = await client.compareFileDiffDocument(
             id,
             c.a,
             c.b,
             c.threeDot,
             path,
             { ignoreWhitespace, context },
-            true,
+            loadFull,
           );
           const now = get().compare;
-          if (now && now.path === path) {
-            set({ compare: { ...now, diff, diffLoading: false } });
-          }
+          if (seq === compareSeq && now)
+            set({
+              compare: { ...now, diff: document.diff, diffDocument: document, diffLoading: false },
+            });
         } catch (e) {
           const now = get().compare;
-          if (now) {
+          if (seq === compareSeq && now)
             set({ compare: { ...now, diffLoading: false }, actionError: describeError(e) });
-          }
         }
       },
 
       closeCompare() {
+        ++compareSeq;
+        ++compareFilesSeq;
         set({ compare: null });
       },
 
@@ -3834,7 +3914,14 @@ export function createSessionStore(
       },
 
       async openConflict(path) {
-        set({ conflictLoading: true, selectedFile: null, diff: null, actionError: null });
+        set({
+          conflictLoading: true,
+          selectedFile: null,
+          diff: null,
+          diffDocument: null,
+          diffLoading: false,
+          actionError: null,
+        });
         options.onRevealDoc?.('conflict');
         try {
           const payload = await client.conflictFile(id, path);

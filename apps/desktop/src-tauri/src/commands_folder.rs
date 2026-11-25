@@ -882,3 +882,33 @@ mod tests {
         );
     }
 }
+
+/// 전체 원문과 확정된 비교 기준을 함께 조회한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn folder_commit_file_diff_document(
+    state: State<'_, AppState>,
+    session: u32,
+    repo: String,
+    oid: String,
+    path: String,
+    old_path: Option<String>,
+    full: bool,
+    options: Option<DiffOptionsDto>,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    let oid = parse_oid(&oid)?;
+    let diff = state
+        .core()?
+        .core
+        .folder_commit_file_diff_document(
+            SessionId(session),
+            Path::new(&repo),
+            &oid,
+            &path,
+            old_path.as_deref(),
+            full,
+            options.map(Into::into).unwrap_or_default(),
+        )
+        .await?;
+    Ok(diff.into())
+}

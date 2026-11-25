@@ -122,3 +122,174 @@ export function buildSplitRows(diff: FileDiff): DiffRow[] {
 export function buildRows(diff: FileDiff, mode: 'unified' | 'split'): DiffRow[] {
   return mode === 'split' ? buildSplitRows(diff) : buildUnifiedRows(diff);
 }
+
+/** 원문의 개행을 보존하면서 실제 파일 줄만 분리한다. 마지막 LF는 빈 줄을 추가하지 않는다. */
+export function sourceLines(content: string): string[] {
+  if (!content) return [];
+  const lines = content.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
+}
+
+/** 원문 행은 음수 hunk로 구분하여 Git의 부분 작업 인덱스에 연결되지 않게 한다. */
+function sourceRef(
+  lines: string[],
+  index: number,
+  side: 'old' | 'new',
+  content: string,
+): LineRef | null {
+  const text = lines[index];
+  if (text === undefined) return null;
+  return {
+    hunk: side === 'old' ? -1 : -2,
+    index,
+    line: {
+      kind: 'context',
+      text,
+      oldNo: side === 'old' ? index + 1 : null,
+      newNo: side === 'new' ? index + 1 : null,
+      noNewline: index === lines.length - 1 && !content.endsWith('\n'),
+    },
+  };
+}
+
+/** 패치의 구간과 변경 인덱스를 유지하고, 구간 사이에는 양쪽 원문을 각각 채운다. */
+export function buildDocumentRows(
+  diff: FileDiff,
+  oldContent: string,
+  newContent: string,
+  mode: 'unified' | 'split',
+): DiffRow[] {
+  const oldLines = sourceLines(oldContent);
+  const newLines = sourceLines(newContent);
+  const rows: DiffRow[] = [];
+  let oldAt = 0;
+  let newAt = 0;
+  /** 문맥 행은 좌우 내용을 따로 보존하며 통합 모드에서도 공백 차이를 숨기지 않는다. */
+  const contextUntil = (oldEnd: number, newEnd: number) => {
+    while (oldAt < oldEnd || newAt < newEnd) {
+      const left = oldAt < oldEnd ? sourceRef(oldLines, oldAt++, 'old', oldContent) : null;
+      const right = newAt < newEnd ? sourceRef(newLines, newAt++, 'new', newContent) : null;
+      if (mode === 'split') {
+        rows.push({ kind: 'split', hunk: -1, left, right });
+      } else if (
+        left &&
+        right &&
+        left.line.text === right.line.text &&
+        left.line.noNewline === right.line.noNewline
+      ) {
+        rows.push({
+          kind: 'line',
+          ref: { ...right, line: { ...right.line, oldNo: left.line.oldNo } },
+          pair: null,
+        });
+      } else {
+        if (left) rows.push({ kind: 'line', ref: left, pair: null });
+        if (right) rows.push({ kind: 'line', ref: right, pair: null });
+      }
+    }
+  };
+  diff.hunks.forEach((h, hi) => {
+    contextUntil(
+      Math.min(oldLines.length, h.oldStart - (h.oldLines > 0 ? 1 : 0)),
+      Math.min(newLines.length, h.newStart - (h.newLines > 0 ? 1 : 0)),
+    );
+    rows.push({ kind: 'hunk', hunk: hi, header: hunkHeader(h) });
+    let i = 0;
+    while (i < h.lines.length) {
+      const line = h.lines[i];
+      if (!line) break;
+      if (line.kind === 'context') {
+        contextUntil(line.oldNo ?? oldAt, line.newNo ?? newAt);
+        i++;
+        continue;
+      }
+      const dels: LineRef[] = [];
+      const adds: LineRef[] = [];
+      while (h.lines[i]?.kind === 'del') {
+        const entry = h.lines[i];
+        if (!entry) break;
+        const no = entry.oldNo;
+        dels.push({
+          hunk: hi,
+          index: i++,
+          line: { ...entry, text: no ? (oldLines[no - 1] ?? entry.text) : entry.text },
+        });
+        if (no) oldAt = no;
+      }
+      while (h.lines[i]?.kind === 'add') {
+        const entry = h.lines[i];
+        if (!entry) break;
+        const no = entry.newNo;
+        adds.push({
+          hunk: hi,
+          index: i++,
+          line: { ...entry, text: no ? (newLines[no - 1] ?? entry.text) : entry.text },
+        });
+        if (no) newAt = no;
+      }
+      if (mode === 'split') {
+        for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
+          rows.push({ kind: 'split', hunk: hi, left: dels[k] ?? null, right: adds[k] ?? null });
+        }
+      } else {
+        dels.forEach((ref, k) => {
+          rows.push({ kind: 'line', ref, pair: adds[k] ?? null });
+        });
+        adds.forEach((ref, k) => {
+          rows.push({ kind: 'line', ref, pair: dels[k] ?? null });
+        });
+      }
+      if (!dels.length && !adds.length) i++;
+    }
+  });
+  contextUntil(oldLines.length, newLines.length);
+  return rows;
+}
+
+/** 변경 주변 모드에서도 패치가 생략한 공백을 각 원문에서 복원한다. */
+export function buildContextRows(
+  diff: FileDiff,
+  oldContent: string,
+  newContent: string,
+  mode: 'unified' | 'split',
+): DiffRow[] {
+  const oldLines = sourceLines(oldContent);
+  const newLines = sourceLines(newContent);
+  /** 변경 참조는 그대로 두고 문맥만 원문의 독립 참조로 교체한다. */
+  const original = (ref: LineRef | null, side: 'old' | 'new') => {
+    if (!ref) return null;
+    const no = side === 'old' ? ref.line.oldNo : ref.line.newNo;
+    if (!no) return ref;
+    const raw = sourceRef(
+      side === 'old' ? oldLines : newLines,
+      no - 1,
+      side,
+      side === 'old' ? oldContent : newContent,
+    );
+    if (!raw) return ref;
+    return ref.line.kind === 'context'
+      ? raw
+      : { ...ref, line: { ...ref.line, text: raw.line.text } };
+  };
+  return buildRows(diff, mode).flatMap((row): DiffRow[] => {
+    if (row.kind === 'hunk') return [row];
+    if (row.kind === 'split')
+      return [{ ...row, left: original(row.left, 'old'), right: original(row.right, 'new') }];
+    if (row.ref.line.kind !== 'context')
+      return [
+        { ...row, ref: original(row.ref, row.ref.line.kind === 'del' ? 'old' : 'new') ?? row.ref },
+      ];
+    const left = original(row.ref, 'old');
+    const right = original(row.ref, 'new');
+    if (
+      left &&
+      right &&
+      left.line.text === right.line.text &&
+      left.line.noNewline === right.line.noNewline
+    ) {
+      return [{ ...row, ref: { ...right, line: { ...right.line, oldNo: left.line.oldNo } } }];
+    }
+    return [left, right].flatMap((ref) => (ref ? [{ kind: 'line', ref, pair: null }] : []));
+  });
+}

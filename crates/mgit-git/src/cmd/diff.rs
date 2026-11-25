@@ -19,7 +19,19 @@ pub async fn work_tree_diff(
     untracked: bool,
     opts: &DiffOptions,
 ) -> Result<Option<FileDiff>, GitError> {
-    let mut args: Vec<String> = vec!["diff".into()];
+    // 경로를 먼저 제한하면 staged rename의 이전 파일이 사라지므로 이름 목록에서 짝을 찾는다.
+    let old_path = if staged {
+        let req = GitRequest::new(work_tree, ["diff", "--cached", "--name-status", "-z", "-M"]);
+        let display = req.display_args();
+        let bytes = runner.run(req).await?.ok(&display)?;
+        super::commit::parse_name_status(&bytes)
+            .into_iter()
+            .find(|file| file.path == path)
+            .and_then(|file| file.old_path)
+    } else {
+        None
+    };
+    let mut args: Vec<String> = vec!["diff".into(), "-M".into()];
     args.extend(DIFF_BASE_ARGS.iter().map(|s| s.to_string()));
     args.extend(diff_option_args(opts));
     if untracked {
@@ -32,6 +44,9 @@ pub async fn work_tree_diff(
             args.push("--cached".into());
         }
         args.push("--".into());
+        if let Some(old) = &old_path {
+            args.push(old.clone());
+        }
         args.push(path.to_string());
     }
     let req = GitRequest::new(work_tree, args)
@@ -52,7 +67,8 @@ pub async fn work_tree_diff(
     if files.is_empty() {
         return Ok(None);
     }
-    let mut f = files.remove(0);
+    let at = files.iter().position(|f| f.path() == path).unwrap_or(0);
+    let mut f = files.remove(at);
     // 호출자가 경로를 알고 있으므로 헤더 해석보다 우선한다
     if untracked {
         f.old_path = None;

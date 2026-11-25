@@ -435,6 +435,32 @@ impl Core {
         unstage: bool,
         opts: DiffOptions,
     ) -> Result<(), CoreError> {
+        self.stage_lines_checked(session, path, selection, unstage, opts, None)
+            .await
+    }
+
+    /// 표시 revision을 확인하고 쓰기 큐 안에서 다시 검사하여 오래된 선택을 거부한다.
+    pub async fn stage_lines_checked(
+        &self,
+        session: SessionId,
+        path: &str,
+        selection: &[LineSelection],
+        unstage: bool,
+        opts: DiffOptions,
+        expected_revision: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let s = self.inner().get(session)?;
+        let revision = crate::diff_document::work_revision(
+            self.inner().runner(),
+            &s.info.work_tree,
+            path,
+            unstage,
+            opts,
+        )
+        .await?;
+        if expected_revision.is_some_and(|expected| expected != revision) {
+            return Err(crate::diff_document::stale_diff_error());
+        }
         let Some(diff) = self
             .work_tree_diff_opts(session, path, unstage, true, opts)
             .await?
@@ -459,8 +485,9 @@ impl Core {
         }
         args.extend(["--recount".into(), "--whitespace=nowarn".into()]);
         args.extend(apply_flags(&opts));
-        self.run_write(session, WriteSpec::new(args).with_stdin(patch))
-            .await?;
+        let mut spec = WriteSpec::new(args).with_stdin(patch);
+        spec.diff_revision = Some((path.into(), unstage, opts, revision));
+        self.run_write(session, spec).await?;
         Ok(())
     }
 
@@ -565,7 +592,31 @@ impl Core {
         selection: &[LineSelection],
         opts: DiffOptions,
     ) -> Result<Option<u64>, CoreError> {
+        self.discard_lines_checked(session, path, selection, opts, None)
+            .await
+    }
+
+    /// 되돌리기도 표시 revision을 쓰기 큐 안에서 재검증한다.
+    pub async fn discard_lines_checked(
+        &self,
+        session: SessionId,
+        path: &str,
+        selection: &[LineSelection],
+        opts: DiffOptions,
+        expected_revision: Option<&str>,
+    ) -> Result<Option<u64>, CoreError> {
         let s = self.inner().get(session)?;
+        let revision = crate::diff_document::work_revision(
+            self.inner().runner(),
+            &s.info.work_tree,
+            path,
+            false,
+            opts,
+        )
+        .await?;
+        if expected_revision.is_some_and(|expected| expected != revision) {
+            return Err(crate::diff_document::stale_diff_error());
+        }
         if !is_safe_rel_path(path) {
             return Err(CoreError::Invalid(tr!(
                 "잘못된 경로: {path}",
@@ -587,8 +638,9 @@ impl Core {
             .map(String::from)
             .to_vec();
         args.extend(apply_flags(&opts));
-        self.run_write(session, WriteSpec::new(args).with_stdin(patch))
-            .await?;
+        let mut spec = WriteSpec::new(args).with_stdin(patch);
+        spec.diff_revision = Some((path.into(), false, opts, revision));
+        self.run_write(session, spec).await?;
         Ok(id)
     }
 

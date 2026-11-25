@@ -527,6 +527,7 @@ describe('W14 로 넓힌 허용 목록: 폴더 탭의 작업 트리 diff 탭', (
       [{ hunk: 0, lines: [] }],
       false,
       expect.anything(),
+      `mock:${ORDERS}`,
     );
     fireEvent.click(editor.getByText(S.diff.discardHunk));
     await tick();
@@ -540,6 +541,7 @@ describe('W14 로 넓힌 허용 목록: 폴더 탭의 작업 트리 diff 탭', (
       ORDERS,
       [{ hunk: 0, lines: [] }],
       expect.anything(),
+      `mock:${ORDERS}`,
     );
   });
 

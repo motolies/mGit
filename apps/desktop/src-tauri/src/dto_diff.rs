@@ -239,3 +239,49 @@ impl From<CommitSpec> for mgit_core::CommitSpec {
         }
     }
 }
+
+/// 전체 비교 화면의 한쪽 원문과 확정된 비교 레이블.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffDocumentSide {
+    pub path: Option<String>,
+    pub label: String,
+    pub content: Option<String>,
+    pub line_count: u32,
+}
+
+impl From<mgit_core::DiffDocumentSide> for DiffDocumentSide {
+    /// 원문과 줄 수를 그대로 전달한다.
+    fn from(side: mgit_core::DiffDocumentSide) -> Self {
+        Self {
+            path: side.path,
+            label: side.label,
+            content: side.content,
+            line_count: side.line_count,
+        }
+    }
+}
+
+/// 원래 Git 패치와 양쪽 파일 원문, 읽기 제한 및 쓰기 검증 지문.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffDocument {
+    pub diff: FileDiff,
+    pub old: DiffDocumentSide,
+    pub new: DiffDocumentSide,
+    pub revision: String,
+    pub limit_reason: Option<String>,
+}
+
+impl From<mgit_core::DiffDocument> for DiffDocument {
+    /// 원문 제한 상태를 패치의 잘림 상태와 별도로 전달한다.
+    fn from(doc: mgit_core::DiffDocument) -> Self {
+        Self {
+            diff: doc.diff.into(),
+            old: doc.old.into(),
+            new: doc.new.into(),
+            revision: doc.revision,
+            limit_reason: doc.limit_reason,
+        }
+    }
+}

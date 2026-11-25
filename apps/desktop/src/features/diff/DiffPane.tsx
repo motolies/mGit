@@ -11,6 +11,8 @@ function pickDiff(st: SessionState) {
   return {
     target: st.selectedFile,
     diff: st.diff,
+    document: st.diffDocument,
+    busy: st.busy,
     loading: st.diffLoading,
     error: st.diffError,
     mode: st.diffMode,
@@ -83,7 +85,7 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
   /** hunk 되돌리기 */
   const discardHunk = async (hunk: number) => {
     if (await confirmDiscard(S.diff.discardHunkMessage, changedLines(hunk))) {
-      await s.discardHunk(hunk);
+      await s.discardHunk(hunk, s.document?.revision);
     }
   };
   /** 고른 줄 되돌리기. 취소하면 false 로 선택을 남긴다 */
@@ -91,7 +93,7 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
     const items = sel.flatMap((x) => changedLines(x.hunk, x.lines));
     const ok = await confirmDiscard(S.diff.discardLinesMessage(items.length), items);
     if (ok) {
-      await s.discardLines(sel);
+      await s.discardLines(sel, s.document?.revision);
     }
     return ok;
   };
@@ -118,6 +120,7 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
         path={path}
         areaLabel={areaLabel}
         diff={s.diff}
+        document={s.document}
         loading={s.loading}
         error={s.error}
         mode={s.mode}
@@ -129,12 +132,12 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
         onDifftool={difftool}
         submoduleLog={submoduleLog}
         actions={
-          readOnly
+          readOnly || s.loading || s.busy || !s.document
             ? undefined
             : {
                 verb: staged ? 'unstage' : 'stage',
-                onApplyHunk: (h) => void s.applyHunk(h),
-                onApplyLines: (sel) => void s.applyLines(sel),
+                onApplyHunk: (h) => void s.applyHunk(h, s.document?.revision),
+                onApplyLines: (sel) => void s.applyLines(sel, s.document?.revision),
                 ...(staged
                   ? {}
                   : {

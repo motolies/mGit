@@ -10,6 +10,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { notifyHub } from '../store/notify';
 import { createSessionStore, type SessionState } from '../store/session-store';
+import { documentOf } from './diff-document-fixture';
 
 const HEAD = 'a'.repeat(40);
 
@@ -117,14 +118,7 @@ describe('스태시는 위치가 아니라 oid 로 다룬다', () => {
 describe('범위 diff', () => {
   it('무관한 상태 이벤트가 와도 닫히지 않는다', async () => {
     const { store } = setup({
-      compareFileDiff: async () =>
-        ({
-          change: 'modified',
-          hunks: [],
-          truncated: false,
-          totalLines: 0,
-          nonUtf8: false,
-        }) as unknown as Awaited<ReturnType<IpcClient['compareFileDiff']>>,
+      compareFileDiffDocument: async () => documentOf(),
     });
     store.setState({
       range: { from: 0, to: 1, newer: 'b', older: 'c', base: 'd', files: [], loading: false },

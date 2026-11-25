@@ -1,14 +1,16 @@
 import type { GraphScrollAnchor } from '@mgit/graph-view';
 import type { SessionId } from '@mgit/ipc';
 import { createStore, type StoreApi } from 'zustand';
-import { readPref, writePref } from './prefs';
+import { writePref } from './prefs';
 import { nextActiveRepo, type RepoSessionLedger } from './repo-sessions';
 import {
   type ConflictDraft,
-  DEFAULT_DIFF_OPTIONS,
   type DiffMode,
   type DiffViewOptions,
   type FileTarget,
+  PREF_DIFF_MODE,
+  readDiffMode,
+  readDiffOptions,
   type SessionDocSlot,
   type SessionState,
 } from './session-store';
@@ -743,8 +745,8 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     ...initialTabs(rootKind),
     sessionDocs: [],
     activeRepo: null,
-    diffMode: 'unified',
-    diffOptions: readPref(PREF_DIFF_OPTIONS, DEFAULT_DIFF_OPTIONS),
+    diffMode: readDiffMode(),
+    diffOptions: readDiffOptions(),
     commitMessage: '',
     commitCollapsed: [],
     commitReveal: null,
@@ -858,6 +860,7 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
 
     setDiffMode(mode) {
       set({ diffMode: mode });
+      writePref(PREF_DIFF_MODE, mode);
     },
 
     setDiffOptions(patch) {

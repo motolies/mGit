@@ -50,6 +50,8 @@ pub struct WriteSpec {
     pub quiet: bool,
     /// 메시지 수정 대상이 알려진 원격 추적 브랜치에서 도달 가능하면 쓰기를 거부한다.
     pub(crate) unpublished_commit: Option<Oid>,
+    /// 부분 쓰기의 경로·비교 방향·옵션·원문 지문. 큐 잠금을 얻은 뒤 검사한다.
+    pub(crate) diff_revision: Option<(String, bool, mgit_model::DiffOptions, String)>,
 }
 
 impl WriteSpec {
@@ -69,6 +71,7 @@ impl WriteSpec {
             keep_op_open: false,
             quiet: false,
             unpublished_commit: None,
+            diff_revision: None,
         }
     }
 
@@ -213,6 +216,19 @@ impl CoreInner {
     ) -> Result<WriteResult, CoreError> {
         let lock = self.write_lock_for(&session.info.common_dir);
         let _queued = lock.lock().await;
+        if let Some((path, staged, options, expected)) = &spec.diff_revision {
+            let actual = crate::diff_document::work_revision(
+                self.runner(),
+                &session.info.work_tree,
+                path,
+                *staged,
+                *options,
+            )
+            .await?;
+            if actual != *expected {
+                return Err(crate::diff_document::stale_diff_error());
+            }
+        }
         if let Some(oid) = spec.unpublished_commit {
             // 캐시·UI 조회 취소와 독립적으로 확인한다. 잠금 안이므로 앱 내부 fetch/push와 쓰기 사이에 끼어들 수 없다.
             // 네트워크는 부르지 않으며 현재 refs/remotes의 도달성만 판단한다. 조회 실패·시간 초과는 쓰기를 허용하지 않는다.
@@ -509,5 +525,47 @@ mod tests {
             "fatal: Unable to create '/r/.git/index.lock': File exists.\n"
         ));
         assert!(!is_index_lock_error("error: something else"));
+    }
+
+    /// 큐에서 기다리는 동안 파일이 바뀌면 잠금을 얻은 뒤 쓰기를 거부한다.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn diff_revision_is_checked_after_acquiring_write_queue() {
+        let runner = mgit_git::TokioGitRunner::new(mgit_git::RunnerConfig::default())
+            .await
+            .unwrap();
+        let core = crate::Core::new(Arc::new(runner), crate::CoreConfig::default());
+        let mut repo = mgit_testkit::build(mgit_testkit::Scenario::Linear(1));
+        repo.write_file("f1.txt", "displayed\n");
+        let opened = core
+            .open_repo(repo.path(), Arc::new(|_: crate::CoreEvent| {}))
+            .await
+            .unwrap();
+        let session = core.inner().get(opened.session).unwrap();
+        let opts = mgit_model::DiffOptions::default();
+        let revision = crate::diff_document::work_revision(
+            core.inner().runner(),
+            &session.info.work_tree,
+            "f1.txt",
+            false,
+            opts,
+        )
+        .await
+        .unwrap();
+        let mut spec = WriteSpec::new(["add", "--", "f1.txt"]);
+        spec.diff_revision = Some(("f1.txt".into(), false, opts, revision));
+        let lock = core.inner().write_lock_for(&session.info.common_dir);
+        let held = lock.lock().await;
+        let inner = core.inner_arc();
+        let pending = inner.run_write(&session, spec);
+        tokio::pin!(pending);
+        tokio::select! {
+            _ = &mut pending => panic!("쓰기 큐 잠금을 기다려야 한다"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        repo.write_file("f1.txt", "changed while queued\n");
+        drop(held);
+        assert!(matches!(pending.await, Err(CoreError::Invalid(_))));
+        assert!(repo.git_ok(["diff", "--cached", "--name-only"]).is_empty());
     }
 }

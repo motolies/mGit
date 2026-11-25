@@ -53,9 +53,9 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-/** 삭제 줄을 클릭해 고른다 */
+/** 삭제 줄의 거터 체크박스를 클릭해 고른다 */
 function pickDeletedLine(): void {
-  const row = document.querySelector('[role="row"][data-kind="del"]');
+  const row = document.querySelector('[role="row"][data-kind="del"] input');
   fireEvent.click(row as Element);
 }
 
@@ -192,5 +192,141 @@ describe('DiffView 키보드 본문', () => {
     expect(selectedCount()).toBe(1);
     fireEvent.keyDown(grid, { key: ' ' });
     expect(selectedCount()).toBe(2);
+  });
+});
+
+describe('IDE 비교 화면 안전성', () => {
+  it('코드 드래그·클릭은 부분 작업 선택을 바꾸지 않고 거터만 선택한다', async () => {
+    render(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
+    await flush();
+    fireEvent.click(document.querySelector('[data-kind="del"]') as Element);
+    expect(selectedCount()).toBe(0);
+    pickDeletedLine();
+    expect(selectedCount()).toBe(1);
+  });
+
+  it('재조회 중 동작을 숨기고 같은 내용으로 완료되어도 이전 선택을 복원하지 않는다', async () => {
+    const value = diff('a');
+    const a = actions();
+    const view = (loading: boolean) => (
+      <DiffView diff={value} path="a.txt" mode="split" actions={a} loading={loading} />
+    );
+    const { rerender } = render(view(false));
+    await flush();
+    pickDeletedLine();
+    expect(selectedCount()).toBe(1);
+    rerender(view(true));
+    expect(screen.queryByText(S.diff.applyHunk(S.diff.stage))).toBeNull();
+    expect(screen.queryByText(S.diff.applySelected(S.diff.stage, 1))).toBeNull();
+    rerender(view(false));
+    await flush();
+    expect(selectedCount()).toBe(0);
+  });
+
+  it('보기 옵션 변경은 이전 선택을 무효화하고 잘린 패치의 부분 쓰기를 막는다', async () => {
+    const value = diff('a');
+    const { rerender } = render(
+      <DiffView diff={value} path="a.txt" mode="split" actions={actions()} />,
+    );
+    await flush();
+    pickDeletedLine();
+    rerender(<DiffView diff={value} path="a.txt" mode="split" actions={actions()} wrap />);
+    await flush();
+    expect(selectedCount()).toBe(0);
+    rerender(
+      <DiffView
+        diff={{ ...value, truncated: true }}
+        path="a.txt"
+        mode="split"
+        actions={actions()}
+      />,
+    );
+    await flush();
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(screen.queryByText(S.diff.applyHunk(S.diff.stage))).toBeNull();
+  });
+});
+
+describe('공백만 달라 패치가 없는 문서', () => {
+  it('변경 주변 모드에서도 양쪽 원문을 유지한다', async () => {
+    const value = { ...diff('a'), hunks: [], totalLines: 0 };
+    render(
+      <DiffView
+        diff={value}
+        document={{
+          diff: value,
+          revision: 'raw',
+          limitReason: null,
+          old: { path: 'a.txt', label: 'Index', content: ' old\n', lineCount: 1 },
+          new: { path: 'a.txt', label: 'Working tree', content: '\told\n', lineCount: 1 },
+        }}
+        path="a.txt"
+        mode="split"
+        fullFile={false}
+      />,
+    );
+    await flush();
+    expect(
+      [...document.querySelectorAll('[data-side]')].map((element) => element.textContent),
+    ).toEqual([' old', '\told']);
+  });
+});
+
+describe('원문 복사 이벤트', () => {
+  it('여러 줄을 드래그해 복사하면 선택한 패널의 코드만 클립보드에 넣는다', async () => {
+    const value = {
+      ...diff('a'),
+      hunks: [
+        {
+          ...hunk('a'),
+          oldStart: 2,
+          newStart: 2,
+          lines: hunk('a').lines.map((line) => ({
+            ...line,
+            oldNo: line.oldNo ? 2 : null,
+            newNo: line.newNo ? 2 : null,
+          })),
+        },
+      ],
+    };
+    render(
+      <DiffView
+        diff={value}
+        document={{
+          diff: value,
+          revision: 'copy',
+          limitReason: null,
+          old: { path: 'a.txt', label: 'Index', content: 'keep\nold-a\nafter\n', lineCount: 3 },
+          new: {
+            path: 'a.txt',
+            label: 'Working tree',
+            content: 'keep\nnew-a\nafter\n',
+            lineCount: 3,
+          },
+        }}
+        path="a.txt"
+        mode="split"
+        actions={actions()}
+      />,
+    );
+    await flush();
+    const lines = document.querySelectorAll('[data-side="left"]');
+    const start = document
+      .createTreeWalker(lines[0] as Node, NodeFilter.SHOW_TEXT)
+      .nextNode() as Node;
+    const end = document
+      .createTreeWalker(lines[2] as Node, NodeFilter.SHOW_TEXT)
+      .nextNode() as Node;
+    const range = document.createRange();
+    range.setStart(start, 2);
+    range.setEnd(end, 3);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const setData = vi.fn();
+    fireEvent.copy(screen.getByTestId('diff-scroller'), { clipboardData: { setData } });
+    expect(setData).toHaveBeenCalledWith('text/plain', 'ep\nold-a\naft');
+    expect(selectedCount()).toBe(0);
+    selection?.removeAllRanges();
   });
 });

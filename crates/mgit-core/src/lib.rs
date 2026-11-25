@@ -10,6 +10,8 @@ mod auto_fetch;
 mod branch;
 mod branch_update;
 mod changes;
+mod diff_document;
+pub use diff_document::{DiffDocument, DiffDocumentSide};
 mod commit_table;
 mod config;
 mod conflict;

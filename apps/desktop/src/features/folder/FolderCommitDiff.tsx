@@ -1,4 +1,4 @@
-import type { FileDiff } from '@mgit/ipc';
+import type { DiffDocument } from '@mgit/ipc';
 import { S, shortHash } from '@mgit/ui';
 import { useEffect, useState } from 'react';
 import { describeError, useFolder, useWorkspace } from '../../store';
@@ -8,12 +8,12 @@ import { useRepoSessionActions } from '../workspace/repo-session-actions';
 
 /** 읽은 diff 와 그 상태 */
 interface LoadedDiff {
-  diff: FileDiff | null;
+  document: DiffDocument | null;
   loading: boolean;
   error: string | null;
 }
 
-const LOADING: LoadedDiff = { diff: null, loading: true, error: null };
+const LOADING: LoadedDiff = { document: null, loading: true, error: null };
 
 /**
  * 에디터 공간의 커밋 파일 diff 탭 (폴더, ED-03·CD-04): 읽기 전용이라 stage·되돌리기·"← 그래프로" 가 없고
@@ -31,11 +31,13 @@ export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
     setOptions: w.setDiffOptions,
   }));
   const [loaded, setLoaded] = useState<LoadedDiff>(LOADING);
-  const [full, setFull] = useState(false);
+  const [fullTarget, setFullTarget] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const ignoreWhitespace = ws?.options.ignoreWhitespace ?? false;
   const context = ws?.options.context ?? 3;
   const { repoPath, oid, path, oldPath } = doc;
+  const targetKey = JSON.stringify([repoPath, oid, path, oldPath]);
+  const full = fullTarget === targetKey;
 
   // 대상·옵션·"전체 보기"·다시 시도가 바뀔 때마다 읽는다. 정리 함수가 그 뒤에 온 옛 응답을 버린다
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt 는 "다시 시도" 로 같은 요청을 다시 보내는 신호다
@@ -44,16 +46,16 @@ export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
       return;
     }
     let live = true;
-    setLoaded((prev) => ({ ...prev, loading: true, error: null }));
+    setLoaded(LOADING);
     read(repoPath, oid, path, oldPath, full, { ignoreWhitespace, context }).then(
       (diff) => {
         if (live) {
-          setLoaded({ diff, loading: false, error: null });
+          setLoaded({ document: diff, loading: false, error: null });
         }
       },
       (e: unknown) => {
         if (live) {
-          setLoaded({ diff: null, loading: false, error: describeError(e) });
+          setLoaded({ document: null, loading: false, error: describeError(e) });
         }
       },
     );
@@ -70,7 +72,8 @@ export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
       path={path}
       areaLabel={`${S.diff.commitLabel(shortHash(oid))} · ${doc.repoName}`}
       note={doc.merge ? S.diff.mergeFirstParent : undefined}
-      diff={loaded.diff}
+      diff={loaded.document?.diff ?? null}
+      document={loaded.document}
       loading={loaded.loading}
       error={loaded.error}
       onRetry={() => setAttempt((n) => n + 1)}
@@ -78,7 +81,7 @@ export function FolderCommitDiff({ doc }: { doc: CommitDiffTarget }) {
       onModeChange={ws.setMode}
       options={ws.options}
       onOptionsChange={ws.setOptions}
-      onLoadFull={() => setFull(true)}
+      onLoadFull={() => setFullTarget(targetKey)}
       onDifftool={
         repoActions
           ? () => repoActions.difftool(repoPath, { kind: 'commit', oid, path })

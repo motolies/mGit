@@ -1,4 +1,4 @@
-import { presentableDiff } from '@codemirror/merge';
+import { diff as characterDiff, presentableDiff } from '@codemirror/merge';
 
 /** 구문 강조 조각 */
 export interface Span {
@@ -30,6 +30,56 @@ export function wordRanges(del: string, add: string): { del: Range[]; add: Range
     del: changes.filter((c) => c.toA > c.fromA).map((c) => [c.fromA, c.toA]),
     add: changes.filter((c) => c.toB > c.fromB).map((c) => [c.fromB, c.toB]),
   };
+}
+
+export type HighlightMode = 'character' | 'word' | 'line';
+
+const rangeCache = new Map<string, { del: Range[]; add: Range[] }>();
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** UTF-16 변경 범위를 한글 조합·이모지의 실제 글자 경계까지 확장한다. */
+function graphemeRanges(text: string, ranges: Range[]): Range[] {
+  const boundaries = [...segmenter.segment(text)].map((segment) => segment.index);
+  boundaries.push(text.length);
+  return ranges.map(([from, to]) => {
+    let start = 0;
+    let end = text.length;
+    for (const boundary of boundaries) {
+      if (boundary <= from) start = boundary;
+      if (boundary >= to) {
+        end = boundary;
+        break;
+      }
+    }
+    return [start, end];
+  });
+}
+
+/** 보이는 변경 쌍만 계산하고 제한 초과 시 줄 배경을 유지한다. 캐시는 유한하게 유지한다. */
+export function changeRanges(
+  del: string,
+  add: string,
+  mode: HighlightMode,
+): { del: Range[]; add: Range[] } {
+  if (mode === 'line' || del === add || del.length + add.length > 20000)
+    return { del: [], add: [] };
+  const key = JSON.stringify([mode, del, add]);
+  const cached = rangeCache.get(key);
+  if (cached) return cached;
+  let ranges: { del: Range[]; add: Range[] };
+  if (mode === 'word') {
+    ranges = wordRanges(del, add);
+  } else {
+    const changes = characterDiff(del, add, { scanLimit: 500, timeout: 50 });
+    ranges = {
+      del: changes.filter((c) => c.toA > c.fromA).map((c) => [c.fromA, c.toA]),
+      add: changes.filter((c) => c.toB > c.fromB).map((c) => [c.fromB, c.toB]),
+    };
+  }
+  ranges = { del: graphemeRanges(del, ranges.del), add: graphemeRanges(add, ranges.add) };
+  if (rangeCache.size >= 1000) rangeCache.clear();
+  rangeCache.set(key, ranges);
+  return ranges;
 }
 
 /** 구문 조각을 강조 범위 경계에서 잘라 `changed` 플래그를 붙인다 */

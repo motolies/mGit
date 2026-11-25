@@ -9,6 +9,7 @@ import {
 } from '@mgit/ipc';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionStore, isDefaultGraphQuery } from '../store/session-store';
+import { documentOf } from './diff-document-fixture';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -21,7 +22,7 @@ function client(): IpcClient {
     ...createNullClient(),
     findRow: vi.fn(async (_s, oid: string) => (oid === A ? 2 : oid === B ? 5 : null)),
     rangeFiles: vi.fn(async () => ({ base: BASE, files: changed })),
-    workTreeDiff: vi.fn(async () => null),
+    workTreeDiffDocument: vi.fn(async () => documentOf()),
     setGraphQuery: vi.fn(async () => {}),
     blame: vi.fn(async () => [
       {
@@ -42,7 +43,7 @@ function client(): IpcClient {
       { oid: A, subject: 's', authorName: 'me', authorTime: 1, path: 'old.txt' },
     ]),
     compareRefs: vi.fn(async () => changed),
-    compareFileDiff: vi.fn(async () => null),
+    compareFileDiffDocument: vi.fn(async () => documentOf()),
     searchAdvanced: vi.fn(async () => ({ rows: [3, 7], total: 2, truncated: false })),
   };
 }
@@ -87,26 +88,29 @@ describe('SessionStore (A3 diff·히스토리·그래프)', () => {
   it('diff 옵션이 코어 호출에 실리고 바꾸면 다시 읽는다', async () => {
     const { store, client: c } = setup();
     await store.getState().openFile('a.txt', false);
-    expect(c.workTreeDiff).toHaveBeenLastCalledWith(1, 'a.txt', false, false, {
+    expect(c.workTreeDiffDocument).toHaveBeenLastCalledWith(1, 'a.txt', false, false, {
       ignoreWhitespace: false,
       context: 3,
     });
     store.getState().setDiffOptions({ ignoreWhitespace: true, context: 1 });
     await tick();
-    expect(c.workTreeDiff).toHaveBeenLastCalledWith(1, 'a.txt', false, false, {
+    expect(c.workTreeDiffDocument).toHaveBeenLastCalledWith(1, 'a.txt', false, false, {
       ignoreWhitespace: true,
       context: 1,
     });
     // 뷰 전용 옵션은 다시 읽지 않는다
-    const calls = (c.workTreeDiff as ReturnType<typeof vi.fn>).mock.calls.length;
+    const calls = (c.workTreeDiffDocument as ReturnType<typeof vi.fn>).mock.calls.length;
     store.getState().setDiffOptions({ wrap: false, tabWidth: 8 });
     await tick();
-    expect((c.workTreeDiff as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+    expect((c.workTreeDiffDocument as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
     expect(store.getState().diffOptions).toEqual({
       ignoreWhitespace: true,
       context: 1,
       wrap: false,
       tabWidth: 8,
+      fullFile: true,
+      horizontalSync: true,
+      highlightMode: 'character',
     });
   });
 
@@ -164,14 +168,14 @@ describe('SessionStore (A3 diff·히스토리·그래프)', () => {
     await store.getState().openCompare('main', 'feat', true);
     expect(store.getState().compare?.files).toHaveLength(1);
     await store.getState().compareSelectFile('f.txt');
-    expect(c.compareFileDiff).toHaveBeenCalledWith(
+    expect(c.compareFileDiffDocument).toHaveBeenCalledWith(
       1,
       'main',
       'feat',
       true,
       'f.txt',
       { ignoreWhitespace: false, context: 3 },
-      true,
+      false,
     );
     expect(store.getState().compare?.path).toBe('f.txt');
     store.getState().closeCompare();
@@ -194,5 +198,115 @@ describe('SessionStore (A3 diff·히스토리·그래프)', () => {
     expect(store.getState().search.rows).toEqual([3, 7]);
     expect(store.getState().search.advanced?.author).toBe('me');
     expect(store.getState().scrollToRow).toBe(3);
+  });
+});
+
+describe('전체 파일 diff 조회와 선택 유효성', () => {
+  it('같은 파일 옵션을 연속 변경해도 늦은 성공과 오류가 최신 문서를 덮지 않는다', async () => {
+    const { store, client: c } = setup();
+    let fail!: (error: Error) => void;
+    let finish!: (document: ReturnType<typeof documentOf>) => void;
+    c.workTreeDiffDocument = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<ReturnType<typeof documentOf>>((_, reject) => {
+            fail = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<ReturnType<typeof documentOf>>((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue(documentOf(null, 'latest'));
+    const initial = store.getState().openFile('same.txt', false);
+    store.getState().setDiffOptions({ ignoreWhitespace: true });
+    store.getState().setDiffOptions({ context: 7 });
+    await tick();
+    expect(store.getState().diffDocument?.revision).toBe('latest');
+    finish(documentOf(null, 'stale'));
+    fail(new Error('stale failure'));
+    await initial;
+    await tick();
+    expect(store.getState().diffDocument?.revision).toBe('latest');
+    expect(store.getState().diffError).toBeNull();
+  });
+
+  it('재조회 중과 이전 revision 의 부분 작업을 차단하고 현재 revision 을 서버에 전달한다', async () => {
+    const { store, client: c } = setup();
+    c.stageLines = vi.fn(async () => {});
+    await store.getState().openFile('f.txt', false);
+    await store.getState().applyHunk(0, 'outdated');
+    expect(c.stageLines).not.toHaveBeenCalled();
+    await store.getState().applyHunk(0, 'revision-1');
+    expect(c.stageLines).toHaveBeenCalledWith(
+      1,
+      'f.txt',
+      [{ hunk: 0, lines: [] }],
+      false,
+      { ignoreWhitespace: false, context: 3 },
+      'revision-1',
+    );
+    vi.mocked(c.stageLines).mockClear();
+    let finish!: (document: ReturnType<typeof documentOf>) => void;
+    c.workTreeDiffDocument = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof documentOf>>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    store.getState().setDiffOptions({ ignoreWhitespace: true });
+    expect(store.getState().diffDocument).toBeNull();
+    await store.getState().applyHunk(0);
+    expect(c.stageLines).not.toHaveBeenCalled();
+    finish(documentOf());
+    await tick();
+  });
+
+  it('비교 대화상자를 닫은 뒤 늦은 오류가 새 화면의 오류로 나타나지 않는다', async () => {
+    const { store, client: c } = setup();
+    let fail!: (error: Error) => void;
+    c.compareFileDiffDocument = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof documentOf>>((_, reject) => {
+          fail = reject;
+        }),
+    );
+    await store.getState().openCompare('main', 'topic', true);
+    const loading = store.getState().compareSelectFile('f.txt');
+    store.getState().closeCompare();
+    fail(new Error('obsolete compare'));
+    await loading;
+    expect(store.getState().compare).toBeNull();
+    expect(store.getState().actionError).toBeNull();
+  });
+
+  it('기존 유효한 설정은 유지하고 새 기본값과 손상된 값만 보완한다', () => {
+    localStorage.setItem(
+      'mgit.diffOptions',
+      JSON.stringify({
+        wrap: true,
+        context: 7,
+        tabWidth: -5,
+        highlightMode: 'invalid',
+        horizontalSync: 'yes',
+      }),
+    );
+    localStorage.setItem('mgit.diffMode', JSON.stringify('unified'));
+    const { store } = setup();
+    expect(store.getState().diffMode).toBe('unified');
+    expect(store.getState().diffOptions).toEqual({
+      ignoreWhitespace: false,
+      wrap: true,
+      context: 7,
+      tabWidth: 4,
+      fullFile: true,
+      horizontalSync: true,
+      highlightMode: 'character',
+    });
+    store.getState().setDiffMode('split');
+    expect(setup().store.getState().diffMode).toBe('split');
   });
 });

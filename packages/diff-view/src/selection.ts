@@ -66,3 +66,32 @@ export function rangeKeys(h: Hunk, hunk: number, a: number, b: number): string[]
     .filter((i) => i >= from && i <= to)
     .map((i) => lineKey(hunk, i));
 }
+
+/** 텍스트 선택의 시작·끝 위치. 부분 작업 거터 선택과 독립적이다. */
+export interface TextPosition {
+  row: number;
+  offset: number;
+}
+
+/** 좌우 행이 DOM에 섞여 있어도 복사할 때는 선택한 패널의 원문만 반환한다. */
+export function selectedText(
+  rows: import('./rows').DiffRow[],
+  anchor: TextPosition,
+  focus: TextPosition,
+  side: 'left' | 'right',
+): string {
+  const [from, to] =
+    anchor.row < focus.row || (anchor.row === focus.row && anchor.offset <= focus.offset)
+      ? [anchor, focus]
+      : [focus, anchor];
+  return rows
+    .slice(from.row, to.row + 1)
+    .flatMap((row, index) => {
+      const ref = row.kind === 'line' ? row.ref : row.kind === 'split' ? row[side] : null;
+      if (!ref) return [];
+      const start = index === 0 ? from.offset : 0;
+      const end = from.row + index === to.row ? to.offset : ref.line.text.length;
+      return [ref.line.text.slice(start, end)];
+    })
+    .join('\n');
+}

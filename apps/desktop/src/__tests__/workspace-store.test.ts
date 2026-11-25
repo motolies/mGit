@@ -378,7 +378,7 @@ describe('커밋 파일 diff 문서 (ED-02·03)', () => {
     localStorage.clear();
     const store = createWorkspaceStore('folder');
     expect(store.getState().diffOptions).toEqual(DEFAULT_DIFF_OPTIONS);
-    expect(store.getState().diffMode).toBe('unified');
+    expect(store.getState().diffMode).toBe('split');
     store.getState().setDiffOptions({ ignoreWhitespace: true, context: 7 });
     store.getState().setDiffMode('split');
     expect(store.getState().diffMode).toBe('split');

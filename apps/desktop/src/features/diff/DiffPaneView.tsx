@@ -1,7 +1,9 @@
 import { type DiffActions, type DiffMode, type DiffNavigation, DiffView } from '@mgit/diff-view';
-import type { DiffOptions, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
+import type { DiffDocument, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
 import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
+import { useCallback, useState } from 'react';
 import { registerCommand } from '../../command-registry';
+import type { DiffViewOptions } from '../../store/session-store';
 import styles from './DiffPane.module.css';
 
 /** Diff 본문의 구간 이동을 앱 공통 명령에 연결한다 */
@@ -32,10 +34,7 @@ function clampInt(text: string, min: number, max: number, fallback: number): num
 }
 
 /** diff 보기 옵션 (DIFF-03). 공백 무시·문맥은 코어가, 줄바꿈·탭 폭은 뷰가 쓴다 */
-export interface DiffPaneOptions extends DiffOptions {
-  wrap: boolean;
-  tabWidth: number;
-}
+export type DiffPaneOptions = DiffViewOptions;
 
 export interface DiffPaneViewProps {
   /** 머리에 보일 경로 (구문 강조 언어도 이 경로로 고른다) */
@@ -45,6 +44,7 @@ export interface DiffPaneViewProps {
   /** 머리 아래 안내 한 줄 (머지 commit 의 비교 기준 등) */
   note?: string;
   diff: FileDiff | null;
+  document?: DiffDocument | null;
   loading: boolean;
   error: string | null;
   /** 있으면 오류 줄에 "다시 시도" 를 둔다 */
@@ -75,6 +75,7 @@ export function DiffPaneView({
   areaLabel,
   note,
   diff,
+  document,
   loading,
   error,
   onRetry,
@@ -88,6 +89,12 @@ export function DiffPaneView({
   actions,
   submoduleLog,
 }: DiffPaneViewProps) {
+  const [navigation, setNavigation] = useState<DiffNavigation | null>(null);
+  /** 현재 변경 위치를 도구 모음에 반영하고 키보드 명령과 같은 이동 동작을 사용한다. */
+  const onNavigationReady = useCallback((element: HTMLElement, next: DiffNavigation) => {
+    setNavigation(next);
+    return registerNavigation(element, next);
+  }, []);
   return (
     <div className={styles.pane} data-diff-pane>
       <header className={styles.header}>
@@ -96,51 +103,144 @@ export function DiffPaneView({
           {path}
         </span>
         <span className={styles.area}>{areaLabel}</span>
-        <span className={styles.options}>
-          <label className={styles.opt}>
-            <input
-              type="checkbox"
-              checked={options.ignoreWhitespace}
-              onChange={(e) => onOptionsChange({ ignoreWhitespace: e.target.checked })}
-            />
-            {S.diff.ignoreWhitespace}
-          </label>
-          <label className={styles.opt}>
-            {S.diff.context}
-            <input
-              type="number"
-              className={styles.num}
-              min={0}
-              max={99}
-              value={options.context}
-              onChange={(e) => onOptionsChange({ context: clampInt(e.target.value, 0, 99, 3) })}
-            />
-          </label>
-          <label className={styles.opt}>
-            <input
-              type="checkbox"
-              checked={options.wrap}
-              onChange={(e) => onOptionsChange({ wrap: e.target.checked })}
-            />
-            {S.diff.wrap}
-          </label>
-          <label className={styles.opt}>
-            {S.diff.tabWidth}
-            <select
-              className={styles.num}
-              value={options.tabWidth}
-              onChange={(e) => onOptionsChange({ tabWidth: clampInt(e.target.value, 1, 16, 4) })}
-            >
-              {[2, 4, 8].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-          {onDifftool ? <Button onClick={onDifftool}>{S.history.difftool}</Button> : null}
-        </span>
+        {onDifftool ? <Button onClick={onDifftool}>{S.history.difftool}</Button> : null}
       </header>
+      <div className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
+        <span className={styles.segment}>
+          <Button aria-pressed={mode === 'split'} onClick={() => onModeChange('split')}>
+            {S.diff.split}
+          </Button>
+          <Button aria-pressed={mode === 'unified'} onClick={() => onModeChange('unified')}>
+            {S.diff.unified}
+          </Button>
+        </span>
+        <span className={styles.segment}>
+          <Button
+            aria-pressed={options.fullFile}
+            onClick={() => onOptionsChange({ fullFile: true })}
+          >
+            {S.diff.fullFile}
+          </Button>
+          <Button
+            aria-pressed={!options.fullFile}
+            onClick={() => onOptionsChange({ fullFile: false })}
+          >
+            {S.diff.contextOnly}
+          </Button>
+        </span>
+        <label className={styles.opt}>
+          <input
+            type="checkbox"
+            checked={options.ignoreWhitespace}
+            onChange={(e) => onOptionsChange({ ignoreWhitespace: e.target.checked })}
+          />
+          {S.diff.ignoreWhitespace}
+        </label>
+        <label className={styles.opt}>
+          <input
+            type="checkbox"
+            checked={options.wrap}
+            onChange={(e) => onOptionsChange({ wrap: e.target.checked })}
+          />
+          {S.diff.wrap}
+        </label>
+        <label className={styles.opt}>
+          <input
+            type="checkbox"
+            checked={options.horizontalSync}
+            onChange={(e) => onOptionsChange({ horizontalSync: e.target.checked })}
+          />
+          {S.diff.horizontalSync}
+        </label>
+        <label className={styles.opt}>
+          {S.diff.highlight}
+          <select
+            className={styles.select}
+            value={options.highlightMode}
+            onChange={(e) =>
+              onOptionsChange({ highlightMode: e.target.value as DiffPaneOptions['highlightMode'] })
+            }
+          >
+            <option value="character">{S.diff.highlightCharacter}</option>
+            <option value="word">{S.diff.highlightWord}</option>
+            <option value="line">{S.diff.highlightLine}</option>
+          </select>
+        </label>
+        <span className={styles.segment}>
+          <Button
+            title={`${S.diff.previousChange} (Shift+F7)`}
+            disabled={loading || !diff || !navigation?.available}
+            onClick={() => navigation?.moveHunk(-1)}
+          >
+            ↑ {S.diff.previousChange}
+          </Button>
+          <span aria-live="polite">
+            {loading || !diff ? 0 : (navigation?.current ?? 0)} /{' '}
+            {loading || !diff ? 0 : (navigation?.total ?? 0)}
+          </span>
+          <Button
+            title={`${S.diff.nextChange} (F7)`}
+            disabled={loading || !diff || !navigation?.available}
+            onClick={() => navigation?.moveHunk(1)}
+          >
+            ↓ {S.diff.nextChange}
+          </Button>
+        </span>
+        <details className={styles.viewOptions}>
+          <summary>{S.diff.viewOptions}</summary>
+          <div className={styles.optionPopup}>
+            <label className={styles.opt}>
+              {S.diff.context}
+              <input
+                type="number"
+                className={styles.num}
+                min={0}
+                max={99}
+                value={options.context}
+                onChange={(e) => onOptionsChange({ context: clampInt(e.target.value, 0, 99, 3) })}
+              />
+            </label>
+            <label className={styles.opt}>
+              {S.diff.tabWidth}
+              <select
+                className={styles.num}
+                value={options.tabWidth}
+                onChange={(e) => onOptionsChange({ tabWidth: clampInt(e.target.value, 1, 16, 4) })}
+              >
+                {Array.from({ length: 16 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </details>
+      </div>
+      {document?.limitReason ? (
+        <div className={styles.note}>
+          {document.limitReason === 'line-limit'
+            ? S.diff.lineLimit(document.old.lineCount, document.new.lineCount)
+            : document.limitReason === 'unsupported-file-type'
+              ? S.diff.unsupportedFileType
+              : document.limitReason === 'non-utf8'
+                ? S.diff.nonUtf8
+                : document.limitReason === 'binary'
+                  ? S.diff.binaryTextUnavailable
+                  : document.limitReason}
+          {document.limitReason === 'line-limit' ? (
+            <Button onClick={onLoadFull} disabled={loading}>
+              {S.diff.loadFullFile}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {document &&
+      options.ignoreWhitespace &&
+      !document.diff.hunks.length &&
+      !document.limitReason ? (
+        <div className={styles.note}>{S.diff.noWhitespaceChanges}</div>
+      ) : null}
       {note ? <div className={styles.note}>{note}</div> : null}
       {error ? (
         <div className={styles.error}>
@@ -173,8 +273,13 @@ export function DiffPaneView({
       ) : null}
       <div className={styles.body}>
         <DiffView
-          onNavigationReady={registerNavigation}
+          onNavigationReady={onNavigationReady}
           diff={diff}
+          document={document}
+          fullFile={options.fullFile}
+          horizontalSync={options.horizontalSync}
+          highlightMode={options.highlightMode}
+          hideModeControls
           path={path}
           mode={mode}
           onModeChange={onModeChange}
@@ -182,7 +287,7 @@ export function DiffPaneView({
           wrap={options.wrap}
           tabWidth={options.tabWidth}
           onLoadFull={onLoadFull}
-          actions={actions}
+          actions={loading ? undefined : actions}
         />
       </div>
     </div>

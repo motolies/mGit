@@ -43,6 +43,8 @@ export type {
   CreatePrDto as CreatePr,
   DeviceCodesDto as DeviceCodes,
   DiffChange,
+  DiffDocument,
+  DiffDocumentSide,
   DiffLine,
   DiffOptionsDto as DiffOptions,
   DifftoolTargetDto as DifftoolTarget,

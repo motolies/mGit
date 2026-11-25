@@ -210,6 +210,7 @@ describe('작업 트리 diff 탭 (ED-05, 저장소당 하나)', () => {
       [{ hunk: 0, lines: [] }],
       false,
       expect.anything(),
+      expect.stringMatching(/^mock:/),
     );
     expect(stageLines.mock.calls.some((c) => c[0] === session(WEB))).toBe(false);
   });
@@ -243,6 +244,7 @@ describe('작업 트리 diff 탭 (ED-05, 저장소당 하나)', () => {
       ORDERS,
       [{ hunk: 0, lines: [] }],
       expect.anything(),
+      expect.stringMatching(/^mock:/),
     );
   });
 
@@ -268,7 +270,7 @@ describe('작업 트리 diff 탭 (ED-05, 저장소당 하나)', () => {
 
   it('일부만 stage 된 파일은 staged·작업 트리 diff 를 바꿔 볼 수 있다', async () => {
     const { mock } = await mountFolder();
-    const diff = vi.spyOn(mock, 'workTreeDiff');
+    const diff = vi.spyOn(mock, 'workTreeDiffDocument');
     await openRow('StatusFilter.tsx');
     const group = editor().getByRole('group', { name: S.workspace.diffArea });
     act(() => {

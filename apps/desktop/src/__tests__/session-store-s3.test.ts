@@ -7,7 +7,8 @@ import {
   type RepoOpened,
 } from '@mgit/ipc';
 import { describe, expect, it, vi } from 'vitest';
-import { createSessionStore } from '../store/session-store';
+import { createSessionStore, DEFAULT_DIFF_OPTIONS } from '../store/session-store';
+import { documentOf } from './diff-document-fixture';
 
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -71,16 +72,18 @@ function client(): IpcClient {
       }
     }),
     merge: vi.fn(async () => 'conflicts' as const),
-    commitFileDiff: vi.fn(async () => ({
-      oldPath: 'f.txt',
-      newPath: 'f.txt',
-      change: { kind: 'modified' as const },
-      binary: null,
-      hunks: [],
-      truncated: false,
-      totalLines: 0,
-      nonUtf8: false,
-    })),
+    commitFileDiffDocument: vi.fn(async () =>
+      documentOf({
+        oldPath: 'f.txt',
+        newPath: 'f.txt',
+        change: { kind: 'modified' as const },
+        binary: null,
+        hunks: [],
+        truncated: false,
+        totalLines: 0,
+        nonUtf8: false,
+      }),
+    ),
     stageLines: vi.fn(async () => {}),
     discardLines: vi.fn(async () => null),
   };
@@ -129,7 +132,7 @@ describe('SessionStore (S3)', () => {
     const { store, client: c } = setup();
     await store.getState().openCommitFile(HEAD, 'f.txt');
     // 옛 경로를 모르면 null 로 묻는다 (새 경로만)
-    expect(c.commitFileDiff).toHaveBeenCalledWith(1, HEAD, 'f.txt', null, false, {
+    expect(c.commitFileDiffDocument).toHaveBeenCalledWith(1, HEAD, 'f.txt', null, false, {
       ignoreWhitespace: false,
       context: 3,
     });
@@ -151,7 +154,7 @@ describe('SessionStore (S3)', () => {
     const { store, client: c } = setup();
     const opts = { ignoreWhitespace: false, context: 3 };
     await store.getState().openCommitFile(HEAD, 'src/new.ts', 'src/old.ts');
-    expect(c.commitFileDiff).toHaveBeenLastCalledWith(
+    expect(c.commitFileDiffDocument).toHaveBeenLastCalledWith(
       1,
       HEAD,
       'src/new.ts',
@@ -161,7 +164,7 @@ describe('SessionStore (S3)', () => {
     );
     expect(store.getState().selectedFile?.oldPath).toBe('src/old.ts');
     await store.getState().loadFullDiff();
-    expect(c.commitFileDiff).toHaveBeenLastCalledWith(
+    expect(c.commitFileDiffDocument).toHaveBeenLastCalledWith(
       1,
       HEAD,
       'src/new.ts',
@@ -171,7 +174,7 @@ describe('SessionStore (S3)', () => {
     );
     // 다른 파일을 열면 옛 경로가 남지 않는다
     await store.getState().openCommitFile(HEAD, 'g.txt');
-    expect(c.commitFileDiff).toHaveBeenLastCalledWith(1, HEAD, 'g.txt', null, false, opts);
+    expect(c.commitFileDiffDocument).toHaveBeenLastCalledWith(1, HEAD, 'g.txt', null, false, opts);
   });
 
   it('검색은 결과·커서·스크롤 행을 관리한다', async () => {
@@ -272,19 +275,39 @@ describe('SessionStore (S3)', () => {
     const { store, client: c } = setup();
     store.setState({
       selectedFile: { path: 'f.txt', staged: false, commit: null },
-      diffOptions: { ignoreWhitespace: true, context: 0, wrap: true, tabWidth: 4 },
+      diffDocument: documentOf(),
+      diffOptions: {
+        ...DEFAULT_DIFF_OPTIONS,
+        ignoreWhitespace: true,
+        context: 0,
+        wrap: true,
+        tabWidth: 4,
+      },
     });
     const selection = [{ hunk: 0, lines: [] }];
     await store.getState().applyHunk(0);
-    expect(c.stageLines).toHaveBeenCalledWith(1, 'f.txt', selection, false, {
-      ignoreWhitespace: true,
-      context: 0,
-    });
+    expect(c.stageLines).toHaveBeenCalledWith(
+      1,
+      'f.txt',
+      selection,
+      false,
+      {
+        ignoreWhitespace: true,
+        context: 0,
+      },
+      'revision-1',
+    );
     await store.getState().discardHunk(0);
-    expect(c.discardLines).toHaveBeenCalledWith(1, 'f.txt', selection, {
-      ignoreWhitespace: true,
-      context: 0,
-    });
+    expect(c.discardLines).toHaveBeenCalledWith(
+      1,
+      'f.txt',
+      selection,
+      {
+        ignoreWhitespace: true,
+        context: 0,
+      },
+      'revision-1',
+    );
   });
 
   it('merge 결과를 lastOutcome 에 남긴다', async () => {

@@ -625,7 +625,7 @@ describe('Commit 도구 창 → 작업 트리 diff 탭 (ED-05)', () => {
   it('파일을 누르면 그 저장소 세션으로 diff 탭을 연다 (작업 트리 쪽). 체크된 파일은 staged 쪽', async () => {
     const { mock, id } = await mountFolder();
     const open = vi.spyOn(mock, 'folderOpenRepoSession');
-    const diff = vi.spyOn(mock, 'workTreeDiff');
+    const diff = vi.spyOn(mock, 'workTreeDiffDocument');
     act(() => fireEvent.click(crow('orders.ts')));
     await tick();
     expect(open).toHaveBeenCalledWith(id, WEB, expect.any(Function));

@@ -1,6 +1,7 @@
 import type { IpcClient } from '../client';
 import { EMPTY_COMMIT_FILTER } from '../commit-filter';
 import type { AuthorList } from '../types';
+import { mockDiffDocument } from './mock-diff-document';
 import { emptyTagReport } from './mock-tags';
 
 /** 빈 작성자 후보 */
@@ -42,7 +43,9 @@ export function createNullClient(): IpcClient {
     stageAll: async () => {},
     unstageAll: async () => {},
     workTreeDiff: async () => null,
+    workTreeDiffDocument: async () => mockDiffDocument(null),
     commitFileDiff: async () => null,
+    commitFileDiffDocument: async () => mockDiffDocument(null),
     stageLines: async () => {},
     discardPaths: async () => [],
     rollbackPaths: async () => [],
@@ -191,6 +194,7 @@ export function createNullClient(): IpcClient {
     fileHistory: async () => [],
     compareRefs: async () => [],
     compareFileDiff: async () => null,
+    compareFileDiffDocument: async () => mockDiffDocument(null),
     rangeFiles: async () => ({ base: '', files: [] }),
     searchAdvanced: async () => ({ rows: [], total: 0, truncated: false }),
     openDifftool: async () => {},
@@ -277,6 +281,7 @@ export function createNullClient(): IpcClient {
     folderCommitDetail: noSession,
     folderCommitContainingRefs: noSession,
     folderCommitFileDiff: async () => null,
+    folderCommitFileDiffDocument: async () => mockDiffDocument(null),
     fsListDir: noSession,
     fsReadFile: noSession,
     submodulePointerLog: noSession,

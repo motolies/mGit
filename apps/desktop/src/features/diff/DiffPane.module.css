@@ -55,8 +55,11 @@
 }
 
 .options {
-  margin-left: auto;
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
   align-items: center;
   gap: 10px;
   font-size: var(--font-size-small);
@@ -124,4 +127,40 @@
 .muted {
   color: var(--fg-muted);
   white-space: nowrap;
+}
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.segment button[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+.select {
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.viewOptions {
+  position: relative;
+}
+.viewOptions summary {
+  cursor: pointer;
+}
+.optionPopup {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }

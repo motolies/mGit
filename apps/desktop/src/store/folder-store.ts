@@ -5,9 +5,9 @@ import {
   type BatchOp,
   type BatchResult,
   type CommitDetail,
+  type DiffDocument,
   type DiffOptions,
   EMPTY_COMMIT_FILTER,
-  type FileDiff,
   type FolderBranch,
   type FolderBranches,
   type FolderOpened,
@@ -513,7 +513,7 @@ export interface FolderState {
   retryContaining(): void;
   /**
    * 폴더 저장소의 커밋 파일 diff 를 읽는다 (커밋 diff 탭의 로더, CD-05: 저장소 세션을 만들지 않는다).
-   * 변경이 없으면 null
+   * 변경이 없어도 양쪽 원문과 확정된 비교 기준을 반환한다.
    */
   readCommitFileDiff(
     repoPath: string,
@@ -522,7 +522,7 @@ export interface FolderState {
     oldPath: string | null,
     full: boolean,
     options: DiffOptions,
-  ): Promise<FileDiff | null>;
+  ): Promise<DiffDocument>;
   /**
    * 커밋의 지금 행 번호를 타임라인에서 다시 찾는다 (LG-10: 다시 읽힌 뒤 보던 커밋 근처에 머문다).
    * 같은 커밋이 저장소마다 한 행씩 있을 수 있어 저장소 번호가 필요하다. 못 찾으면 null
@@ -1700,7 +1700,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
 
       readCommitFileDiff(repoPath, oid, path, oldPath, full, options) {
-        return client.folderCommitFileDiff(id, repoPath, oid, path, oldPath, full, options);
+        return client.folderCommitFileDiffDocument(id, repoPath, oid, path, oldPath, full, options);
       },
 
       resolveTimelineRow(oid, repo) {

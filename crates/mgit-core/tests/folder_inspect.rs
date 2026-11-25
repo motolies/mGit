@@ -1151,3 +1151,27 @@ async fn stash_file_diffs_follow_the_first_parent() {
         "untracked 파일은 셋째 부모에 있다"
     );
 }
+
+/// 폴더 문서도 저장소 세션을 만들지 않고 원문과 첫 부모 기준을 제공한다.
+#[tokio::test]
+async fn folder_diff_document_has_originals_without_repo_session() {
+    let core = core().await;
+    let fx = fixture("document");
+    let (fid, _rx) = open_only(&core, &fx.root).await;
+    let doc = core
+        .folder_commit_file_diff_document(
+            fid,
+            &fx.a,
+            &fx.c2,
+            "src/lib.rs",
+            None,
+            false,
+            DiffOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(doc.old.content.as_deref(), Some(LIB_V1));
+    assert_eq!(doc.new.content.as_deref(), Some(LIB_V2));
+    assert_eq!(doc.old.label, fx.c1.to_hex());
+    assert!(core.sessions().is_empty());
+}

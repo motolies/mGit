@@ -38,19 +38,23 @@ export const commands = {
 	unstageAll: (session: number) => __TAURI_INVOKE<null>("unstage_all", { session }),
 	/**  작업 트리 diff. 변경이 없으면 `None` */
 	workTreeDiff: (session: number, path: string, staged: boolean, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<FileDiff_Serialize | null>("work_tree_diff", { session, path, staged, full, options }),
+	/**  전체 원문과 확정된 비교 기준을 함께 조회한다. */
+	workTreeDiffDocument: (session: number, path: string, staged: boolean, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<DiffDocument_Serialize>("work_tree_diff_document", { session, path, staged, full, options }),
 	/**
 	 *  커밋 하나에서 파일 하나의 diff. 머지 커밋은 첫 부모 기준. `old_path` 는 이름이 바뀐 파일의 옛 경로
 	 *  (상세의 `oldPath`)로, 주면 rename 으로 짝지어 실제 변경분만 나온다
 	 */
 	commitFileDiff: (session: number, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<FileDiff_Serialize | null>("commit_file_diff", { session, oid, path, oldPath, full, options }),
+	/**  전체 원문과 확정된 비교 기준을 함께 조회한다. */
+	commitFileDiffDocument: (session: number, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<DiffDocument_Serialize>("commit_file_diff_document", { session, oid, path, oldPath, full, options }),
 	/**  고른 hunk·줄만 stage(`unstage=false`) 또는 unstage. `options` 는 화면의 diff 와 같아야 한다 */
-	stageLines: (session: number, path: string, selection: LineSelection[], unstage: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<null>("stage_lines", { session, path, selection, unstage, options }),
+	stageLines: (session: number, path: string, selection: LineSelection[], unstage: boolean, options: DiffOptionsDto | null, expectedRevision: string | null) => __TAURI_INVOKE<null>("stage_lines", { session, path, selection, unstage, options, expectedRevision }),
 	/**  작업 트리 변경을 버린다 (백업 뒤). 백업 id 목록을 돌려준다 */
 	discardPaths: (session: number, paths: string[]) => __TAURI_INVOKE<number[]>("discard_paths", { session, paths }),
 	/**  경로(파일·폴더)의 변경을 HEAD 기준으로 되돌린다 (stage 된 변경 포함, 백업 뒤). 백업 id 목록을 돌려준다 */
 	rollbackPaths: (session: number, paths: string[]) => __TAURI_INVOKE<number[]>("rollback_paths", { session, paths }),
 	/**  고른 hunk·줄만 작업 트리에서 되돌린다 (백업 뒤). `options` 는 화면의 diff 와 같아야 한다 */
-	discardLines: (session: number, path: string, selection: LineSelection[], options: DiffOptionsDto | null) => __TAURI_INVOKE<number | null>("discard_lines", { session, path, selection, options }),
+	discardLines: (session: number, path: string, selection: LineSelection[], options: DiffOptionsDto | null, expectedRevision: string | null) => __TAURI_INVOKE<number | null>("discard_lines", { session, path, selection, options, expectedRevision }),
 	/**  discard 백업 목록 (최신 순) */
 	listBackups: (session: number, limit: number) => __TAURI_INVOKE<BackupRecord[]>("list_backups", { session, limit }),
 	/**  백업 사본을 작업 트리로 되돌린다 */
@@ -372,6 +376,8 @@ export const commands = {
 	compareRefs: (session: number, a: string, b: string, threeDot: boolean) => __TAURI_INVOKE<ChangedFile_Serialize[]>("compare_refs", { session, a, b, threeDot }),
 	/**  두 ref 비교 — 파일 diff */
 	compareFileDiff: (session: number, a: string, b: string, threeDot: boolean, path: string, options: DiffOptionsDto, full: boolean) => __TAURI_INVOKE<FileDiff_Serialize | null>("compare_file_diff", { session, a, b, threeDot, path, options, full }),
+	/**  전체 원문과 확정된 비교 기준을 함께 조회한다. */
+	compareFileDiffDocument: (session: number, a: string, b: string, threeDot: boolean, path: string, options: DiffOptionsDto, full: boolean) => __TAURI_INVOKE<DiffDocument_Serialize>("compare_file_diff_document", { session, a, b, threeDot, path, options, full }),
 	/**  연속 commit 범위의 변경 파일 (GRAPH-10) */
 	rangeFiles: (session: number, newer: string, older: string) => __TAURI_INVOKE<RangeFiles_Serialize>("range_files", { session, newer, older }),
 	/**  고급 검색 (GRAPH-07) */
@@ -507,6 +513,8 @@ export const commands = {
 	 *  변경이 없으면 `None`
 	 */
 	folderCommitFileDiff: (session: number, repo: string, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<FileDiff_Serialize | null>("folder_commit_file_diff", { session, repo, oid, path, oldPath, full, options }),
+	/**  전체 원문과 확정된 비교 기준을 함께 조회한다. */
+	folderCommitFileDiffDocument: (session: number, repo: string, oid: string, path: string, oldPath: string | null, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<DiffDocument_Serialize>("folder_commit_file_diff_document", { session, repo, oid, path, oldPath, full, options }),
 	/**
 	 *  세션 루트 기준 상대 디렉터리 하나의 항목 (FS-01~05·09). `dir` 이 빈 문자열이면 루트, `limit` 이 없으면
 	 *  2,000 (1~50,000 으로 맞춘다). 루트 밖·`..`·절대 경로·`.git`·링크 나열·경로 중간의 링크는 거부한다
@@ -1196,6 +1204,46 @@ export type DeviceCodesDto_Serialize = {
 
 /**  파일 수준 변경 종류 */
 export type DiffChange = { kind: "added" } | { kind: "deleted" } | { kind: "modified" } | { kind: "renamed"; similarity: number } | { kind: "copied"; similarity: number } | { kind: "typeChanged" };
+
+/**  원래 Git 패치와 양쪽 파일 원문, 읽기 제한 및 쓰기 검증 지문. */
+export type DiffDocument = DiffDocument_Serialize | DiffDocument_Deserialize;
+
+/**  전체 비교 화면의 한쪽 원문과 확정된 비교 레이블. */
+export type DiffDocumentSide = DiffDocumentSide_Serialize | DiffDocumentSide_Deserialize;
+
+/**  전체 비교 화면의 한쪽 원문과 확정된 비교 레이블. */
+export type DiffDocumentSide_Deserialize = {
+	path?: string | null,
+	label: string,
+	content?: string | null,
+	lineCount: number,
+};
+
+/**  전체 비교 화면의 한쪽 원문과 확정된 비교 레이블. */
+export type DiffDocumentSide_Serialize = {
+	path: string | null,
+	label: string,
+	content: string | null,
+	lineCount: number,
+};
+
+/**  원래 Git 패치와 양쪽 파일 원문, 읽기 제한 및 쓰기 검증 지문. */
+export type DiffDocument_Deserialize = {
+	diff: FileDiff_Deserialize,
+	old: DiffDocumentSide_Deserialize,
+	new: DiffDocumentSide_Deserialize,
+	revision: string,
+	limitReason?: string | null,
+};
+
+/**  원래 Git 패치와 양쪽 파일 원문, 읽기 제한 및 쓰기 검증 지문. */
+export type DiffDocument_Serialize = {
+	diff: FileDiff_Serialize,
+	old: DiffDocumentSide_Serialize,
+	new: DiffDocumentSide_Serialize,
+	revision: string,
+	limitReason: string | null,
+};
 
 /**  diff 한 줄 */
 export type DiffLine = DiffLine_Serialize | DiffLine_Deserialize;

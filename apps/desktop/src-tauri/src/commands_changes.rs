@@ -118,17 +118,19 @@ pub async fn stage_lines(
     selection: Vec<LineSelection>,
     unstage: bool,
     options: Option<DiffOptionsDto>,
+    expected_revision: Option<String>,
 ) -> Result<(), IpcError> {
     let selection: Vec<mgit_core::LineSelection> = selection.into_iter().map(Into::into).collect();
     state
         .core()?
         .core
-        .stage_lines(
+        .stage_lines_checked(
             SessionId(session),
             &path,
             &selection,
             unstage,
             options.map(Into::into).unwrap_or_default(),
+            expected_revision.as_deref(),
         )
         .await?;
     Ok(())
@@ -175,16 +177,18 @@ pub async fn discard_lines(
     path: String,
     selection: Vec<LineSelection>,
     options: Option<DiffOptionsDto>,
+    expected_revision: Option<String>,
 ) -> Result<Option<u32>, IpcError> {
     let selection: Vec<mgit_core::LineSelection> = selection.into_iter().map(Into::into).collect();
     let id = state
         .core()?
         .core
-        .discard_lines(
+        .discard_lines_checked(
             SessionId(session),
             &path,
             &selection,
             options.map(Into::into).unwrap_or_default(),
+            expected_revision.as_deref(),
         )
         .await?;
     Ok(id.map(crate::dto::narrow_u64))
@@ -275,4 +279,59 @@ pub async fn commit_message(
         .core
         .commit_message(SessionId(session), &oid)
         .await?)
+}
+
+/// 전체 원문과 확정된 비교 기준을 함께 조회한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn work_tree_diff_document(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+    staged: bool,
+    full: bool,
+    options: Option<DiffOptionsDto>,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    let diff = state
+        .core()?
+        .core
+        .work_tree_diff_document(
+            SessionId(session),
+            &path,
+            staged,
+            full,
+            options.map(Into::into).unwrap_or_default(),
+        )
+        .await?;
+    Ok(diff.into())
+}
+
+/// 전체 원문과 확정된 비교 기준을 함께 조회한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn commit_file_diff_document(
+    state: State<'_, AppState>,
+    session: u32,
+    oid: String,
+    path: String,
+    old_path: Option<String>,
+    full: bool,
+    options: Option<DiffOptionsDto>,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    let oid = Oid::from_hex(oid.as_bytes()).map_err(|e| IpcError::Internal {
+        message: e.to_string(),
+    })?;
+    let diff = state
+        .core()?
+        .core
+        .commit_file_diff_document(
+            SessionId(session),
+            &oid,
+            &path,
+            old_path.as_deref(),
+            full,
+            options.map(Into::into).unwrap_or_default(),
+        )
+        .await?;
+    Ok(diff.into())
 }

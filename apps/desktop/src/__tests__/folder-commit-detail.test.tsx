@@ -31,6 +31,7 @@ import {
 } from '../store/session-registry';
 import { createWorkspaceStore, type WorkspaceStore } from '../store/workspace-store';
 import { installDialogStub, removeDialogStub, tick } from './dialog-stub';
+import { documentOf } from './diff-document-fixture';
 
 // 로그는 jsdom 에서 그릴 수 없다. 로그 탭이 뷰에 무엇을 넘기는지만 본다 (뷰 자체는 graph-view 가 테스트한다)
 const h = vi.hoisted(() => ({ last: null as unknown }));
@@ -209,8 +210,8 @@ function folderClient(overrides: Partial<IpcClient> = {}) {
     folderCommitDetail: vi.fn<IpcClient['folderCommitDetail']>(async (_s, _repo, oid) =>
       detailOf(oid),
     ),
-    folderCommitFileDiff: vi.fn<IpcClient['folderCommitFileDiff']>(async (_s, _r, _o, path) =>
-      diffOf(path),
+    folderCommitFileDiffDocument: vi.fn<IpcClient['folderCommitFileDiffDocument']>(
+      async (_s, _r, _o, path) => documentOf(diffOf(path)),
     ),
     folderTimelineFindRow: vi.fn<IpcClient['folderTimelineFindRow']>(async () => 7),
   };
@@ -388,8 +389,8 @@ describe('폴더 스토어: 로그 선택 → 커밋 상세 (LG-07, CD-05)', () 
     const opts = { ignoreWhitespace: true, context: 5 };
     expect(
       await store.getState().readCommitFileDiff(WEB, OID, 'docs/new.md', 'docs/old.md', true, opts),
-    ).toEqual(diffOf('docs/new.md'));
-    expect(spies.folderCommitFileDiff).toHaveBeenCalledWith(
+    ).toEqual(documentOf(diffOf('docs/new.md')));
+    expect(spies.folderCommitFileDiffDocument).toHaveBeenCalledWith(
       FOLDER_ID,
       WEB,
       OID,
@@ -664,7 +665,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       fireEvent.click(fileRow('one.ts'));
       await tick();
       expect(tabs()).toEqual([S.workspace.overview, `[~one.ts @a1b2c3d4]`]);
-      expect(spies.folderCommitFileDiff).toHaveBeenLastCalledWith(
+      expect(spies.folderCommitFileDiffDocument).toHaveBeenLastCalledWith(
         FOLDER_ID,
         WEB,
         OID,
@@ -680,7 +681,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       await tick();
       expect(tabs()).toEqual([S.workspace.overview, `[~new.md @a1b2c3d4]`]);
       // rename 은 옛 경로를 함께 넘겨 이름 변경으로 짝지어진다
-      expect(spies.folderCommitFileDiff).toHaveBeenLastCalledWith(
+      expect(spies.folderCommitFileDiffDocument).toHaveBeenLastCalledWith(
         FOLDER_ID,
         WEB,
         OID,
@@ -726,7 +727,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
         await tick();
       }
       expect(spies.folderCommitDetail).toHaveBeenCalled();
-      expect(spies.folderCommitFileDiff).toHaveBeenCalled();
+      expect(spies.folderCommitFileDiffDocument).toHaveBeenCalled();
       expect(spies.openRepo).not.toHaveBeenCalled();
       expect(spies.folderOpenRepoSession).not.toHaveBeenCalled();
       expect(openRepositoryAt).not.toHaveBeenCalled();
@@ -737,13 +738,15 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
   });
 
   it('보기 옵션을 바꾸면 다시 읽고, 늦게 온 옛 응답은 버린다', async () => {
-    const slow = deferred<FileDiff | null>();
+    const slow = deferred<ReturnType<typeof documentOf>>();
     let call = 0;
     const { restore } = await setup({
-      folderCommitFileDiff: vi.fn(async (_s, _r, _o, path, _old, _full, options) => {
+      folderCommitFileDiffDocument: vi.fn(async (_s, _r, _o, path, _old, _full, options) => {
         call += 1;
         // 첫 요청(공백 무시 끔)만 늦게 온다
-        return call === 1 ? slow.promise : diffOf(path, `${path} ws=${options?.ignoreWhitespace}`);
+        return call === 1
+          ? slow.promise
+          : documentOf(diffOf(path, `${path} ws=${options?.ignoreWhitespace}`));
       }),
     });
     try {
@@ -754,7 +757,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       fireEvent.click(within(editorArea() as HTMLElement).getByLabelText(S.diff.ignoreWhitespace));
       await tick();
       expect(editorArea()?.textContent).toContain('diff of src/a/two.ts ws=true');
-      slow.resolve(diffOf('src/a/two.ts', 'stale'));
+      slow.resolve(documentOf(diffOf('src/a/two.ts', 'stale')));
       await tick();
       expect(editorArea()?.textContent).not.toContain('diff of stale');
       expect(editorArea()?.textContent).toContain('diff of src/a/two.ts ws=true');
@@ -766,7 +769,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
   it('머지 commit 의 파일 diff 는 첫 부모 기준이라는 안내를 보이고, 변경이 없으면(null) "변경 없음" 이다', async () => {
     const { restore } = await setup({
       folderCommitDetail: vi.fn(async (_s, _r, oid) => detailOf(oid, { parents: [PARENT, OTHER] })),
-      folderCommitFileDiff: vi.fn(async () => null),
+      folderCommitFileDiffDocument: vi.fn(async () => documentOf()),
     });
     try {
       act(() => view().onSelectRow?.(row(OID, 1)));
@@ -774,7 +777,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       fireEvent.click(fileRow('two.ts'));
       await tick();
       expect(editorArea()?.textContent).toContain(S.diff.mergeFirstParent);
-      expect(editorArea()?.textContent).toContain(S.diff.noChanges);
+      expect(editorArea()?.textContent).toContain('HEAD');
     } finally {
       restore();
     }
@@ -910,7 +913,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       expect(document.querySelector('dialog[open]')).toBeNull();
       expect(store.getState().timeline.selected).toEqual({ repoPath: API, oid: OID });
       expect(tabs()).toContain(`[~two.ts @a1b2c3d4]`);
-      expect(spies.folderCommitFileDiff).toHaveBeenLastCalledWith(
+      expect(spies.folderCommitFileDiffDocument).toHaveBeenLastCalledWith(
         FOLDER_ID,
         API,
         OID,

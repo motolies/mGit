@@ -34,6 +34,7 @@ import {
   mockUnresolveCommand,
   mockUpdateLocalBranch,
 } from './mock-console';
+import { mockDiffDocument } from './mock-diff-document';
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
 import { pick } from './mock-l10n';
@@ -2050,6 +2051,34 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
 
     ...stubChanges(),
     ...sceneMethods,
+    async workTreeDiffDocument(session, path, staged, full, options) {
+      return mockDiffDocument(
+        await this.workTreeDiff(session, path, staged, full, options),
+        staged ? 'HEAD' : 'Index',
+        staged ? 'Index' : 'Working tree',
+      );
+    },
+    async commitFileDiffDocument(session, oid, path, oldPath, full, options) {
+      return mockDiffDocument(
+        await this.commitFileDiff(session, oid, path, oldPath, full, options),
+        `${oid}^`,
+        oid,
+      );
+    },
+    async compareFileDiffDocument(session, a, b, threeDot, path, options, full) {
+      return mockDiffDocument(
+        await this.compareFileDiff(session, a, b, threeDot, path, options, full),
+        a,
+        b,
+      );
+    },
+    async folderCommitFileDiffDocument(session, repo, oid, path, oldPath, full, options) {
+      return mockDiffDocument(
+        await this.folderCommitFileDiff(session, repo, oid, path, oldPath, full, options),
+        `${oid}^`,
+        oid,
+      );
+    },
 
     // 화면 언어 (다국어 L3): OS 로캘 대신 브라우저 언어를 준다. `setLanguage` 는 Rust 가 없으니 빈 구현(위 stubChanges)
     async systemLocale() {

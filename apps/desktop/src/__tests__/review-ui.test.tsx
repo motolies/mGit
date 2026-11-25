@@ -38,6 +38,7 @@ import { useAppStore } from '../store';
 import { type DockState, externalKey } from '../store/app-store';
 import { DEFAULT_GRAPH_QUERY } from '../store/session-store';
 import { installDialogStub, removeDialogStub, tick } from './dialog-stub';
+import { documentOf } from './diff-document-fixture';
 
 const h = vi.hoisted(() => ({
   session: {} as Record<string, unknown>,
@@ -1101,6 +1102,7 @@ describe('hunk·줄 되돌리기 확인', () => {
           },
         ],
       },
+      diffDocument: documentOf(),
       diffLoading: false,
       diffError: null,
       diffMode: 'unified',
@@ -1132,7 +1134,7 @@ describe('hunk·줄 되돌리기 확인', () => {
     );
     fireEvent.submit(document.querySelector('dialog[open] form') as HTMLFormElement);
     await tick();
-    expect(discardHunk).toHaveBeenCalledWith(0);
+    expect(discardHunk).toHaveBeenCalledWith(0, 'revision-1');
   });
 });
 

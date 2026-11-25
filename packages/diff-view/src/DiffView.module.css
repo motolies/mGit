@@ -68,7 +68,8 @@
 .scroller {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .inner {
@@ -152,6 +153,7 @@
 }
 
 .no {
+  box-sizing: content-box;
   flex: 0 0 auto;
   padding: 0 6px;
   text-align: right;
@@ -174,6 +176,7 @@
   white-space: pre-wrap;
   word-break: break-all;
   padding-right: 8px;
+  overflow: hidden;
 }
 
 .word {
@@ -189,7 +192,7 @@
 
 .split {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: var(--diff-split, 50%) minmax(0, 1fr);
 }
 
 .half {
@@ -218,4 +221,134 @@
 .scroller:focus-within .rowWrap[data-cursor="true"] {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+}
+
+.viewport {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.viewport .scroller {
+  min-width: 0;
+}
+
+.codeText {
+  display: block;
+  min-width: 0;
+}
+
+.scroller[data-wrap="false"] .codeText {
+  width: max-content;
+  min-width: 100%;
+}
+
+.scroller[data-wrap="false"] .code[data-side="left"] .codeText {
+  transform: translateX(calc(-1 * var(--diff-left-scroll, 0px)));
+}
+
+.scroller[data-wrap="false"] .code[data-side="right"] .codeText {
+  transform: translateX(calc(-1 * var(--diff-right-scroll, 0px)));
+}
+
+.divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--diff-split, 50%) - 6px);
+  width: 5px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.divider:hover,
+.divider:focus-visible {
+  background: var(--accent);
+}
+
+.overview {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.overview button {
+  position: absolute;
+  left: 2px;
+  width: 8px;
+  min-height: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.overview button:hover,
+.overview button:focus-visible {
+  outline: 2px solid var(--fg);
+}
+
+.horizontalSplit,
+.horizontalUnified {
+  display: grid;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.horizontalSplit {
+  grid-template-columns: var(--diff-split, 50%) minmax(0, 1fr);
+}
+
+.horizontal {
+  overflow-x: scroll;
+  overflow-y: hidden;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  padding-top: 2px;
+}
+
+.hunk {
+  flex-wrap: wrap;
+}
+
+.hunkHeader {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.hunkActions {
+  flex-wrap: wrap;
+}
+
+.sideLabels {
+  display: grid;
+  grid-template-columns: var(--diff-split, 50%) minmax(0, 1fr);
+  padding-right: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+}
+
+.sideLabels span {
+  padding: 5px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+
+.sideLabels[data-mode="unified"] {
+  grid-template-columns: 1fr;
 }

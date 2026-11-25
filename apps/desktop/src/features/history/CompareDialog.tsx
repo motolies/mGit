@@ -1,9 +1,9 @@
-import { DiffView } from '@mgit/diff-view';
 import { Button, S } from '@mgit/ui';
 import { ActionErrorBar } from '../../components/ActionErrorBar';
 import { useModal } from '../../components/use-modal';
 import { useSession } from '../../store';
 import { changeLetter } from '../detail/change-letter';
+import { DiffPaneView } from '../diff/DiffPaneView';
 import styles from './history.module.css';
 
 /** 두 ref 비교 (DIFF-06): 변경 파일 목록 + 고른 파일의 diff */
@@ -16,6 +16,7 @@ export function CompareDialog() {
     mode: st.diffMode,
     setMode: st.setDiffMode,
     options: st.diffOptions,
+    setOptions: st.setDiffOptions,
   }));
   const ref = useModal(s.c !== null);
   const c = s.c;
@@ -76,14 +77,18 @@ export function CompareDialog() {
             </ul>
             <div className={styles.diffArea}>
               {path ? (
-                <DiffView
+                <DiffPaneView
                   diff={c.diff}
+                  document={c.diffDocument}
+                  areaLabel={S.diff.compareLabel(c.a, c.b, c.threeDot)}
+                  error={null}
+                  options={s.options}
+                  onOptionsChange={s.setOptions}
+                  onLoadFull={() => void s.select(path, true)}
                   path={path}
                   mode={s.mode}
                   onModeChange={s.setMode}
                   loading={c.diffLoading}
-                  wrap={s.options.wrap}
-                  tabWidth={s.options.tabWidth}
                 />
               ) : (
                 <div className={styles.empty}>{S.history.pickFile}</div>

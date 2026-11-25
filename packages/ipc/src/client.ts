@@ -26,6 +26,7 @@ import type {
   ContainingRefs,
   CreatePr,
   DeviceCodes,
+  DiffDocument,
   DiffOptions,
   DifftoolTarget,
   ExternalApps,
@@ -146,6 +147,13 @@ export interface IpcClient {
     full: boolean,
     options?: DiffOptions | null,
   ): Promise<FileDiff | null>;
+  workTreeDiffDocument(
+    session: SessionId,
+    path: string,
+    staged: boolean,
+    full: boolean,
+    options?: DiffOptions | null,
+  ): Promise<DiffDocument>;
   /**
    * 커밋 하나에서 파일 하나의 diff. 머지 커밋은 첫 부모 기준(상세의 파일 목록과 같다). `oldPath` 는 이름이
    * 바뀐 파일의 옛 경로(상세의 `ChangedFile.oldPath`)로, 주면 rename 으로 짝지어 실제 변경분만 나온다.
@@ -159,6 +167,14 @@ export interface IpcClient {
     full: boolean,
     options?: DiffOptions | null,
   ): Promise<FileDiff | null>;
+  commitFileDiffDocument(
+    session: SessionId,
+    oid: string,
+    path: string,
+    oldPath: string | null,
+    full: boolean,
+    options?: DiffOptions | null,
+  ): Promise<DiffDocument>;
   stageLines(
     session: SessionId,
     path: string,
@@ -166,6 +182,7 @@ export interface IpcClient {
     unstage: boolean,
     /** 화면의 diff 옵션. `selection` 의 번호가 이 옵션 기준이다 */
     options: DiffOptions,
+    expectedRevision?: string | null,
   ): Promise<void>;
   /** 백업 id 목록을 돌려준다 */
   discardPaths(session: SessionId, paths: string[]): Promise<number[]>;
@@ -177,6 +194,7 @@ export interface IpcClient {
     selection: LineSelection[],
     /** 화면의 diff 옵션. `selection` 의 번호가 이 옵션 기준이다 */
     options: DiffOptions,
+    expectedRevision?: string | null,
   ): Promise<number | null>;
   listBackups(session: SessionId, limit: number): Promise<BackupRecord[]>;
   restoreBackup(session: SessionId, id: number): Promise<void>;
@@ -443,6 +461,15 @@ export interface IpcClient {
     options: DiffOptions,
     full: boolean,
   ): Promise<FileDiff | null>;
+  compareFileDiffDocument(
+    session: SessionId,
+    a: string,
+    b: string,
+    threeDot: boolean,
+    path: string,
+    options: DiffOptions,
+    full: boolean,
+  ): Promise<DiffDocument>;
   rangeFiles(session: SessionId, newer: string, older: string): Promise<RangeFiles>;
   searchAdvanced(session: SessionId, query: AdvancedSearch, limit: number): Promise<SearchResult>;
   openDifftool(session: SessionId, target: DifftoolTarget): Promise<void>;
@@ -572,6 +599,15 @@ export interface IpcClient {
     full: boolean,
     options?: DiffOptions | null,
   ): Promise<FileDiff | null>;
+  folderCommitFileDiffDocument(
+    session: SessionId,
+    repo: string,
+    oid: string,
+    path: string,
+    oldPath: string | null,
+    full: boolean,
+    options?: DiffOptions | null,
+  ): Promise<DiffDocument>;
 
   // 파일 트리·파일 보기 (W10, FS-01~10). 루트는 세션이 정한다 — 저장소 세션은 작업 트리, 폴더 세션은
   // 폴더 경로. 경로는 그 루트 기준 상대 경로이고 `/` 로 잇는다. 루트 밖·`..`·`.`·절대 경로·`.git`(대소문자
@@ -776,14 +812,24 @@ export function createTauriClient(): IpcClient {
     unstageAll: (session) => voidCall(() => commands.unstageAll(session)),
     workTreeDiff: (session, path, staged, full, options) =>
       call(() => commands.workTreeDiff(session, path, staged, full, options ?? null)),
+    workTreeDiffDocument: (session, path, staged, full, options) =>
+      call(() => commands.workTreeDiffDocument(session, path, staged, full, options ?? null)),
     commitFileDiff: (session, oid, path, oldPath, full, options) =>
       call(() => commands.commitFileDiff(session, oid, path, oldPath, full, options ?? null)),
-    stageLines: (session, path, selection, unstage, options) =>
-      voidCall(() => commands.stageLines(session, path, selection, unstage, options)),
+    commitFileDiffDocument: (session, oid, path, oldPath, full, options) =>
+      call(() =>
+        commands.commitFileDiffDocument(session, oid, path, oldPath, full, options ?? null),
+      ),
+    stageLines: (session, path, selection, unstage, options, expectedRevision) =>
+      voidCall(() =>
+        commands.stageLines(session, path, selection, unstage, options, expectedRevision ?? null),
+      ),
     discardPaths: (session, paths) => call(() => commands.discardPaths(session, paths)),
     rollbackPaths: (session, paths) => call(() => commands.rollbackPaths(session, paths)),
-    discardLines: (session, path, selection, options) =>
-      call(() => commands.discardLines(session, path, selection, options)),
+    discardLines: (session, path, selection, options, expectedRevision) =>
+      call(() =>
+        commands.discardLines(session, path, selection, options, expectedRevision ?? null),
+      ),
     listBackups: (session, limit) => call(() => commands.listBackups(session, limit)),
     restoreBackup: (session, id) => voidCall(() => commands.restoreBackup(session, id)),
     verifyStaged: (session) => call(() => commands.verifyStaged(session)),
@@ -951,6 +997,8 @@ export function createTauriClient(): IpcClient {
       call(() => commands.compareRefs(session, a, b, threeDot)),
     compareFileDiff: (session, a, b, threeDot, path, options, full) =>
       call(() => commands.compareFileDiff(session, a, b, threeDot, path, options, full)),
+    compareFileDiffDocument: (session, a, b, threeDot, path, options, full) =>
+      call(() => commands.compareFileDiffDocument(session, a, b, threeDot, path, options, full)),
     rangeFiles: (session, newer, older) => call(() => commands.rangeFiles(session, newer, older)),
     searchAdvanced: (session, query, limit) =>
       call(() => commands.searchAdvanced(session, query, limit)),
@@ -1026,6 +1074,18 @@ export function createTauriClient(): IpcClient {
     folderCommitFileDiff: (session, repo, oid, path, oldPath, full, options) =>
       call(() =>
         commands.folderCommitFileDiff(session, repo, oid, path, oldPath, full, options ?? null),
+      ),
+    folderCommitFileDiffDocument: (session, repo, oid, path, oldPath, full, options) =>
+      call(() =>
+        commands.folderCommitFileDiffDocument(
+          session,
+          repo,
+          oid,
+          path,
+          oldPath,
+          full,
+          options ?? null,
+        ),
       ),
     fsListDir: (session, dir, limit) => call(() => commands.fsListDir(session, dir, limit ?? null)),
     fsReadFile: (session, path) => call(() => commands.fsReadFile(session, path)),

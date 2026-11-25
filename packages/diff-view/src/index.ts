@@ -7,6 +7,8 @@ export {
 } from './DiffView';
 export { highlightHunk, parserFor, plainSpans, tokenize } from './highlight';
 export {
+  buildContextRows,
+  buildDocumentRows,
   buildRows,
   buildSplitRows,
   buildUnifiedRows,
@@ -14,6 +16,7 @@ export {
   hunkHeader,
   type LineRef,
   pairChanges,
+  sourceLines,
 } from './rows';
 export {
   changeLineIndices,
@@ -23,4 +26,12 @@ export {
   selectionFromKeys,
 } from './selection';
 export { type HighlightMap, useHighlight } from './use-highlight';
-export { applyRanges, type Piece, type Range, type Span, wordRanges } from './word-diff';
+export {
+  applyRanges,
+  changeRanges,
+  type HighlightMode,
+  type Piece,
+  type Range,
+  type Span,
+  wordRanges,
+} from './word-diff';

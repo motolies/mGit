@@ -108,6 +108,8 @@ function runner(root, overrides = {}) {
       });
     if (program === 'pnpm') {
       assert.equal(options.env.APPLE_SIGNING_IDENTITY, PIN.sha1);
+      assert.equal(options.env.CI, 'true');
+      assert.equal(options.env.TAURI_BUNDLER_DMG_IGNORE_CI, 'false');
       assert.equal(options.env.APPLE_PASSWORD, undefined);
       assert.equal(options.env.APPLE_API_KEY_PATH, undefined);
       assert.deepEqual(args.slice(-2), ['--', '--locked']);
@@ -182,7 +184,12 @@ function context(root, overrides = {}) {
     root,
     platform: 'darwin',
     arch: 'arm64',
-    env: { APPLE_PASSWORD: 'must-not-inherit', APPLE_API_KEY_PATH: '/private/key' },
+    env: {
+      APPLE_PASSWORD: 'must-not-inherit',
+      APPLE_API_KEY_PATH: '/private/key',
+      CI: 'false',
+      TAURI_BUNDLER_DMG_IGNORE_CI: 'true',
+    },
     now: new Date('2026-01-01'),
   };
 }

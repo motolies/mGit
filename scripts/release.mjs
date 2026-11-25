@@ -313,9 +313,15 @@ export function verifyDmg(run, dmg, expected, scratch, appInfo) {
   }
 }
 
-/** mock·공증 자격 증명·외부 Tauri override를 넘기지 않고 지정 identity만 사용한다. */
+/** 지정 identity로 빌드하고 Finder를 여는 DMG 레이아웃 단계는 생략한다. */
 function buildEnvironment(env, identity, targetDir) {
-  const result = { ...env, APPLE_SIGNING_IDENTITY: identity.sha1, CARGO_TARGET_DIR: targetDir };
+  const result = {
+    ...env,
+    APPLE_SIGNING_IDENTITY: identity.sha1,
+    CARGO_TARGET_DIR: targetDir,
+    CI: 'true',
+    TAURI_BUNDLER_DMG_IGNORE_CI: 'false',
+  };
   for (const key of [
     ...MOCK_KEYS,
     'TAURI_CONFIG',

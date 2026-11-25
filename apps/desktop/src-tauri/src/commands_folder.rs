@@ -8,6 +8,7 @@ use mgit_core::{
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::commands_branch_delete::{BranchDeleteTarget, BranchDeletionResult};
 use crate::commands_history::{AuthorListDto, DiffOptionsDto, GraphLayoutPrefsDto, GraphQueryDto};
 use crate::commands_refs::{CommitDetail, ContainingRefsDto, parse_oid};
 use crate::dto::{GraphWindow, HeadState, StatusEntry, StatusSummary};
@@ -80,6 +81,13 @@ impl From<FolderSettingsDto> for FolderSettings {
     rename_all_fields = "camelCase"
 )]
 pub enum BatchOpDto {
+    DeleteRemoteBranch {
+        targets: Vec<BranchDeleteTarget>,
+        delete_local: bool,
+    },
+    DeleteLocalBranches {
+        targets: Vec<BranchDeleteTarget>,
+    },
     Fetch {
         prune: bool,
     },
@@ -120,6 +128,16 @@ impl From<BatchOpDto> for BatchOp {
     /// wire → 코어
     fn from(op: BatchOpDto) -> Self {
         match op {
+            BatchOpDto::DeleteRemoteBranch {
+                targets,
+                delete_local,
+            } => BatchOp::DeleteRemoteBranch {
+                targets: targets.into_iter().map(Into::into).collect(),
+                delete_local,
+            },
+            BatchOpDto::DeleteLocalBranches { targets } => BatchOp::DeleteLocalBranches {
+                targets: targets.into_iter().map(Into::into).collect(),
+            },
             BatchOpDto::Fetch { prune } => BatchOp::Fetch { prune },
             BatchOpDto::Pull => BatchOp::Pull,
             BatchOpDto::Push => BatchOp::Push,
@@ -187,6 +205,9 @@ pub struct RepoResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
     pub moved: Option<RefMove>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub branch_deletion: Option<BranchDeletionResult>,
 }
 
 /// 일괄 작업 결과
@@ -215,6 +236,7 @@ impl From<mgit_core::BatchResult> for BatchResult {
                     skipped: r.skipped,
                     message: r.message,
                     moved: r.moved.map(Into::into),
+                    branch_deletion: r.branch_deletion.map(Into::into),
                 })
                 .collect(),
             succeeded: b.succeeded,

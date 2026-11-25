@@ -7,6 +7,7 @@ mod app_events;
 mod commands;
 mod commands_app;
 mod commands_assist;
+mod commands_branch_delete;
 mod commands_changes;
 mod commands_conflict;
 mod commands_folder;
@@ -82,6 +83,10 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_refs::rename_branch,
             commands_refs::delete_branch,
             commands_refs::delete_remote_branch,
+            commands_branch_delete::inspect_remote_branch_deletion,
+            commands_branch_delete::inspect_folder_remote_branch_deletion,
+            commands_branch_delete::delete_remote_branch_with_locals,
+            commands_branch_delete::force_delete_local_branches,
             commands_refs::set_upstream,
             commands_refs::update_branch,
             commands_refs::create_tag,

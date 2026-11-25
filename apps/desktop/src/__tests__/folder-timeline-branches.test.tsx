@@ -1,6 +1,7 @@
 import type { GraphViewProps } from '@mgit/graph-view';
 import {
   type BatchResult,
+  type BranchDeleteTarget,
   createNullClient,
   type FolderBranch,
   type FolderBranches,
@@ -513,10 +514,59 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
     expect(menu.map((m) => m.textContent)).toEqual([
       S.branches.menu.checkout,
       S.branches.menu.newBranchHere,
+      S.menu.deleteRemote,
       S.branches.menu.showOnly,
       S.branches.addFavorite,
       S.menu.copyName,
     ]);
+  });
+
+  it('원격 삭제는 로그 범위와 무관하게 사전조회한 전체 저장소를 전달하고 로컬 옵션을 묻는다', async () => {
+    const targets: BranchDeleteTarget[] = ['api', 'docs'].map((name) => ({
+      path: pathOf(name),
+      remote: 'origin',
+      name: 'hotfix',
+      remoteOid: 'a'.repeat(40),
+      remoteUrl: '/remote.git',
+      excluded: name === 'docs',
+      error: null,
+      locals: [
+        {
+          name: 'local-hotfix',
+          oid: 'b'.repeat(40),
+          upstream: 'refs/remotes/origin/hotfix',
+          checkedOut: null,
+        },
+      ],
+    }));
+    const inspect = vi.fn(async () => targets);
+    const { store, batch } = await setup(async () => ({ ...RESULT, label: 'remote delete' }), {
+      inspectFolderRemoteBranchDeletion: inspect,
+    });
+    await act(async () => {
+      await store.getState().setTimelineScope([pathOf('api')]);
+    });
+    const menu = await openMenu(REMOTE('origin/hotfix'));
+    act(() =>
+      fireEvent.click(menu.find((item) => item.textContent === S.menu.deleteRemote) as HTMLElement),
+    );
+    await tick();
+    expect(inspect).toHaveBeenCalledWith(FOLDER_ID, 'origin', 'hotfix');
+    const opened = dialog() as HTMLDialogElement;
+    const check = within(opened).getByRole('checkbox', {
+      name: (name) => name.startsWith(S.branches.deletion.together),
+    }) as HTMLInputElement;
+    expect(check.checked).toBe(false);
+    expect(opened.textContent).toContain('docs');
+    expect(opened.textContent).toContain(S.branches.deletion.excluded);
+    act(() => fireEvent.click(check));
+    act(() => fireEvent.submit(opened.querySelector('form') as HTMLFormElement));
+    await tick();
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      { kind: 'deleteRemoteBranch', targets, deleteLocal: true },
+      [pathOf('api'), pathOf('docs')],
+    );
   });
 
   it('업데이트 (BR-09): 업스트림이 있는 저장소에서만 일괄 UpdateBranch 를 부르고 결과를 알린다. 원격 branch 에는 없다', async () => {

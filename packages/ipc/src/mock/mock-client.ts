@@ -22,6 +22,11 @@ import type {
   TagRefResult,
 } from '../types';
 import {
+  mockBranchDeleteTarget,
+  mockDeleteBranches,
+  mockFolderDeleteTargets,
+} from './mock-branch-delete';
+import {
   applyMockBatchMoves,
   applyMockBatchRenames,
   createMockRecorder,
@@ -1723,6 +1728,42 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         folderChanges: async (session, repos) =>
           onlyRepos(folderOf(session).data.folderChanges, repos),
         // 브랜치 목록은 타임라인을 만들지 않고 답한다
+        async inspectFolderRemoteBranchDeletion(session, remote, name) {
+          const folder = folderOf(session);
+          return mockFolderDeleteTargets(folder.data.folderBranches, remote, name, []);
+        },
+        async inspectRemoteBranchDeletion(session, remote, name) {
+          const entry = entryOf(session);
+          return mockBranchDeleteTarget(entry.path, remote, name, stateOf(entry).refs.labels);
+        },
+        async deleteRemoteBranchWithLocals(session, target, deleteLocal) {
+          const entry = entryOf(session);
+          const result = mockDeleteBranches(target, deleteLocal, false);
+          const state = stateOf(entry);
+          const removed = new Set(
+            result.locals
+              .filter((local) => local.status === 'deleted')
+              .map((local) => `refs/heads/${local.name}`),
+          );
+          if (result.remote.status === 'deleted')
+            removed.add(`refs/remotes/${target.remote}/${target.name}`);
+          state.refs.labels = state.refs.labels.filter((label) => !removed.has(label.fullName));
+          entry.emit({ type: 'refsChanged', session, refs: state.refs });
+          return result;
+        },
+        async forceDeleteLocalBranches(session, target) {
+          const entry = entryOf(session);
+          const result = mockDeleteBranches(target, true, true);
+          const state = stateOf(entry);
+          const removed = new Set(
+            result.locals
+              .filter((local) => local.status === 'deleted')
+              .map((local) => `refs/heads/${local.name}`),
+          );
+          state.refs.labels = state.refs.labels.filter((label) => !removed.has(label.fullName));
+          entry.emit({ type: 'refsChanged', session, refs: state.refs });
+          return result;
+        },
         async folderBranches(session, repos) {
           const all = folderOf(session).data.folderBranches;
           const kept = onlyRepos(all.repos, repos);

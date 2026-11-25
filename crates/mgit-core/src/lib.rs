@@ -8,6 +8,7 @@
 mod authors;
 mod auto_fetch;
 mod branch;
+mod branch_delete;
 mod branch_update;
 mod changes;
 mod diff_document;
@@ -64,6 +65,10 @@ mod write;
 
 pub use authors::AUTHORS_MAX;
 pub use branch::{CheckoutTarget, is_not_fully_merged};
+pub use branch_delete::{
+    BranchDeleteLocalTarget, BranchDeleteTarget, BranchDeletionResult, BranchDeletionStatus,
+    BranchDeletionStep, LocalBranchDeletionResult,
+};
 pub use branch_update::BranchUpdate;
 pub use changes::CommitSpec;
 pub use commit_table::CommitTable;

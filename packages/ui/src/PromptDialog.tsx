@@ -80,6 +80,7 @@ export interface PromptDialogProps {
   message?: string;
   /** 영향 범위 목록 (tag 이름 등). 설명 아래에 20개까지 보이고 나머지는 "외 N개" (`ConfirmDialog` 와 같은 모양) */
   items?: readonly string[];
+  expandableItems?: boolean;
   fields: readonly PromptField[];
   confirmLabel?: string;
   /**
@@ -183,6 +184,7 @@ export function PromptDialog({
   title,
   message,
   items,
+  expandableItems,
   fields,
   confirmLabel,
   danger = false,
@@ -369,7 +371,7 @@ export function PromptDialog({
             {message}
           </p>
         ) : null}
-        <DialogItems items={items} />
+        <DialogItems items={items} expandable={expandableItems} />
         {promptSegments(fields).flatMap((segment) =>
           segment.group === null
             ? segment.fields.map(({ field, index }) => renderField(field, index))

@@ -783,6 +783,8 @@ export const enRepository: Pick<
         worktree: 'Batch worktree',
         updateBranch: 'Batch update',
         renameBranch: 'Batch rename',
+        deleteRemoteBranch: 'Batch delete remote branch',
+        deleteLocalBranches: 'Batch force-delete local branches',
         commit: 'Batch commit',
       },
     },

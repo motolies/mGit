@@ -199,3 +199,12 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.expandItems {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+}

@@ -164,6 +164,7 @@ function setup(
   const copyText = vi.fn();
   const openTagsDoc = vi.fn();
   const deps: RepoBranchDeps = {
+    deleteRemoteWithLocals: vi.fn(async () => {}),
     state: {
       id: 3,
       path: PATH,
@@ -624,7 +625,7 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
   });
 
   it('원격 branch: checkout 은 (원격, branch) 로, 표시·비교·merge·rebase·복사는 origin/x 로. 원격 삭제는 위험 확인 뒤', async () => {
-    const { deps, session, confirm, copyText } = setup();
+    const { deps, session, copyText } = setup();
     const items = repoBranchMenu(T.originMain, deps);
     await select(items, S.menu.checkout);
     expect(session.checkout).toHaveBeenCalledWith({
@@ -644,13 +645,8 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     await select(items, S.menu.rebaseCurrentOnto('origin/main'));
     expect(session.rebase).toHaveBeenCalledWith('origin/main', true);
     await select(items, S.menu.deleteRemote);
-    expect(confirm).toHaveBeenCalledWith({
-      title: S.dialog.deleteRemoteBranch('origin', 'main'),
-      message: S.dialog.deleteRemoteBranchMessage,
-      confirmLabel: S.dialog.delete,
-      danger: true,
-    });
-    expect(session.deleteRemoteBranch).toHaveBeenCalledWith('origin', 'main');
+    expect(deps.deleteRemoteWithLocals).toHaveBeenCalledWith('origin', 'main');
+    expect(session.deleteRemoteBranch).not.toHaveBeenCalled();
     await select(items, S.menu.copyName);
     expect(copyText).toHaveBeenCalledWith('origin/main');
   });

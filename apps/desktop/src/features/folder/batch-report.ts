@@ -6,6 +6,7 @@ import type { BatchResult, RepoResult } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { useCallback } from 'react';
 import { getFolderStore, useAppStore, useFolder } from '../../store';
+import { branchDeletionLines } from '../branches/remote-branch-delete';
 
 /** 토스트에 적는 저장소별 줄(건너뜀·실패 사유, 갱신)의 상한. 넘는 것은 "외 N개" 로 줄인다 */
 const BATCH_PROBLEM_LINES = 5;
@@ -38,6 +39,7 @@ export function batchSummary(result: BatchResult): string {
 /** 저장소 한 줄의 상태 글자: `건너뜀: 사유`, `실패`, 옮겼으면 `master ← commit 3개`·`이미 최신`, 그 밖의 성공은 `완료` */
 export function repoResultState(r: RepoResult): string {
   const t = S.folder.batch;
+  if (r.branchDeletion) return branchDeletionLines(r.branchDeletion).join(' · ');
   if (r.skipped) {
     return `${t.skipped}: ${r.skipped}`;
   }
@@ -63,9 +65,12 @@ export function batchNotice(result: BatchResult): {
 } {
   const problems = result.results
     .filter((r) => r.skipped || !r.ok)
-    .map((r) => `${r.name}: ${r.skipped ?? r.message}`);
+    .map(
+      (r) =>
+        `${r.name}: ${r.branchDeletion ? [...branchDeletionLines(r.branchDeletion), ...(r.message ? [r.message] : [])].join(' · ') : (r.skipped ?? r.message)}`,
+    );
   const updates = result.results
-    .filter((r) => r.ok && !r.skipped && (r.moved?.commits ?? 0) > 0)
+    .filter((r) => r.ok && !r.skipped && (r.branchDeletion || (r.moved?.commits ?? 0) > 0))
     .map((r) => `${r.name}: ${repoResultState(r)}`);
   const lines = [...problems, ...updates];
   const more = lines.length - BATCH_PROBLEM_LINES;

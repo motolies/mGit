@@ -46,6 +46,7 @@ import {
   selectedLocalBranch,
   updateTargetsOf,
 } from '../branches/folder-branch-tree';
+import { useRemoteBranchDelete } from '../branches/use-remote-branch-delete';
 import {
   clearedQuery,
   conditionSummary,
@@ -264,6 +265,7 @@ export function FolderTimeline() {
 
   // 브랜치 트리·세로 툴바에서 실행한 일괄 작업의 결과는 토스트로 알린다
   const flows = useFolderBatchFlows(useBatchReport());
+  const deletion = useRemoteBranchDelete('folder', folderId);
 
   const revealCommit = f?.revealTimelineCommit;
   /**
@@ -436,7 +438,7 @@ export function FolderTimeline() {
       if (!branch) {
         return [];
       }
-      const running = flowsRef.current.running;
+      const running = flowsRef.current.running || deletion.running;
       // branch 업데이트 (BR-09): 로컬 branch 만. 그 branch 가 있고 업스트림이 있는 저장소가 없으면 사유를 이름에 적고 끈다
       const targets = updateTargetsOf(branch);
       const update: MenuItem[] = branch.remote
@@ -481,6 +483,19 @@ export function FolderTimeline() {
             ),
         },
         ...rename,
+        ...(branch.remote
+          ? [
+              {
+                label: S.menu.deleteRemote,
+                danger: true,
+                disabled: running,
+                onSelect: () => {
+                  const target = remoteBranchParts(branch);
+                  if (target) void deletion.execute(target.remote, target.branch);
+                },
+              },
+            ]
+          : []),
         {
           label: S.branches.menu.showOnly,
           onSelect: () => setRevs({ kind: 'solo', name: branch.name }),
@@ -496,7 +511,16 @@ export function FolderTimeline() {
         },
       ];
     },
-    [branchOf, checkout, setRevs, toggleFavorite, branchRepos, renameBranch],
+    [
+      branchOf,
+      checkout,
+      setRevs,
+      toggleFavorite,
+      branchRepos,
+      renameBranch,
+      deletion.running,
+      deletion.execute,
+    ],
   );
 
   if (!f) {
@@ -767,6 +791,7 @@ export function FolderTimeline() {
       }
     >
       {flows.dialogs.element}
+      {deletion.element}
     </GitLogSplit>
   );
 }

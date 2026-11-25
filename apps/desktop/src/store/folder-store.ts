@@ -4,6 +4,7 @@ import {
   type AutoFetchedRepo,
   type BatchOp,
   type BatchResult,
+  type BranchDeleteTarget,
   type CommitDetail,
   type DiffDocument,
   type DiffOptions,
@@ -424,6 +425,7 @@ export interface FolderState {
    * 남긴다 (이미 일괄 작업 중이라 부르지 않았으면 남기지 않는다)
    */
   runBatch(op: BatchOp, repos?: readonly string[]): Promise<BatchResult | null>;
+  inspectRemoteBranchDeletion(remote: string, name: string): Promise<BranchDeleteTarget[]>;
   /** 작업 기록을 비운다 (작업 기록 탭의 "기록 지우기") */
   clearTaskHistory(): void;
   loadChanges(): Promise<void>;
@@ -1281,6 +1283,10 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         const { markSelected } = fileTree.getState();
         markSelected(rels(false), false);
         markSelected(rels(true), true);
+      },
+
+      inspectRemoteBranchDeletion(remote, name) {
+        return client.inspectFolderRemoteBranchDeletion(id, remote, name);
       },
 
       async runBatch(op, repos) {

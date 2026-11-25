@@ -6,6 +6,8 @@ import type {
   BatchOp,
   BatchResult,
   BlameLine,
+  BranchDeleteTarget,
+  BranchDeletionResult,
   BranchUpdate,
   ChangedFile,
   CheckoutTarget,
@@ -718,6 +720,12 @@ export interface SessionState {
   renameBranch(oldName: string, newName: string): Promise<void>;
   deleteBranch(name: string, force: boolean): Promise<void>;
   deleteRemoteBranch(remote: string, name: string): Promise<void>;
+  inspectRemoteBranchDeletion(remote: string, name: string): Promise<BranchDeleteTarget | null>;
+  deleteRemoteBranchWithLocals(
+    target: BranchDeleteTarget,
+    deleteLocal: boolean,
+  ): Promise<BranchDeletionResult | null>;
+  forceDeleteLocalBranches(target: BranchDeleteTarget): Promise<BranchDeletionResult | null>;
   setUpstream(branch: string, upstream: string | null): Promise<void>;
   /**
    * 로컬 branch 를 업스트림으로 fast-forward (BR-09): checkout 하지 않은 branch 도 갱신하고 Undo 할 수 있다. 결과는
@@ -2895,6 +2903,23 @@ export function createSessionStore(
 
       deleteRemoteBranch(remote, name) {
         return run(() => client.deleteRemoteBranch(id, remote, name)).then(() => {});
+      },
+
+      async inspectRemoteBranchDeletion(remote, name) {
+        if (get().busy) return null;
+        return (await run(() => client.inspectRemoteBranchDeletion(id, remote, name))) ?? null;
+      },
+
+      async deleteRemoteBranchWithLocals(target, deleteLocal) {
+        if (get().busy) return null;
+        return (
+          (await run(() => client.deleteRemoteBranchWithLocals(id, target, deleteLocal))) ?? null
+        );
+      },
+
+      async forceDeleteLocalBranches(target) {
+        if (get().busy) return null;
+        return (await run(() => client.forceDeleteLocalBranches(id, target))) ?? null;
       },
 
       setUpstream(branch, upstream) {

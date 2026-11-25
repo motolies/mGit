@@ -27,6 +27,7 @@ import type {
   StatusEntry,
   UnresolveMode,
 } from '../types';
+import { applyMockBranchDeletion, mockDeleteBranches } from './mock-branch-delete';
 import { mockReason, pick } from './mock-l10n';
 import { type MockFolderData, mockFolderEntries } from './mock-workspace';
 
@@ -110,6 +111,10 @@ function shortRef(name: string): string {
 /** 일괄 작업의 진행 라벨 (코어 `BatchOp::label`, 화면 언어로) */
 export function mockBatchLabel(op: BatchOp): string {
   switch (op.kind) {
+    case 'deleteRemoteBranch':
+      return pick('원격 브랜치 일괄 삭제', 'Delete remote branches');
+    case 'deleteLocalBranches':
+      return pick('로컬 브랜치 강제 삭제', 'Force delete local branches');
     case 'fetch':
       return pick('일괄 fetch', 'Batch fetch');
     case 'pull':
@@ -215,6 +220,9 @@ function batchStep(
   const url = `${MOCK_REMOTE_HOST}/${name}.git`;
   const key = `${repo}:${op.kind}`;
   switch (op.kind) {
+    case 'deleteRemoteBranch':
+    case 'deleteLocalBranches':
+      return { skip: 'Handled by deletion flow' };
     case 'fetch': {
       const args = ['fetch', '--all', ...(op.prune ? ['--prune'] : [])];
       const stderr =
@@ -457,7 +465,10 @@ export function mockFolderBatch(
   op: BatchOp,
   repos: readonly string[],
 ): MockBatchRun {
+  const deletion =
+    op.kind === 'deleteRemoteBranch' || op.kind === 'deleteLocalBranches' ? op : null;
   const targets = data.openFolder
+    .filter((repo) => !deletion || deletion.targets.some((target) => target.path === repo.path))
     .filter((r) => repos.length === 0 || repos.includes(r.path))
     .map((r) => r.path)
     .sort();
@@ -473,6 +484,21 @@ export function mockFolderBatch(
     const name = summary?.name ?? path.split('/').pop() ?? path;
     if (!summary) {
       return { path, name, ok: false, skipped: null, message: `not a git repository: ${path}` };
+    }
+    if (deletion) {
+      const target = deletion.targets.find((item) => item.path === path);
+      if (!target)
+        return { path, name, ok: false, skipped: null, message: 'Missing deletion target' };
+      if (target.excluded) return { path, name, ok: true, skipped: 'Excluded', message: '' };
+      const branchDeletion = mockDeleteBranches(
+        target,
+        deletion.kind === 'deleteRemoteBranch' && deletion.deleteLocal,
+        deletion.kind === 'deleteLocalBranches',
+      );
+      applyMockBranchDeletion(data.folderBranches, target, branchDeletion);
+      const ok =
+        !target.error && branchDeletion.locals.every((local) => local.status === 'deleted');
+      return { path, name, ok, skipped: null, message: target.error ?? '', branchDeletion };
     }
     const step = batchStep(data, op, path, summary);
     if ('skip' in step) {

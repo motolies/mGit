@@ -241,6 +241,8 @@ export const enTools: Pick<
     run: 'Run',
   },
   confirm: {
+    showAllItems: (n: number) => `Show all ${n} items`,
+    collapseItems: 'Collapse',
     ok: 'OK',
     cancel: 'Cancel',
     more: (n: number) => `… and ${formatNumber(n)} more`,

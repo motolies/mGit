@@ -92,6 +92,8 @@ export interface RepoBranchDeps {
   state: RepoBranchMenuState;
   session: RepoBranchSession;
   dialogs: RepoBranchDialogs;
+  /** 원격 삭제 및 추적 로컬의 선택·추가 확인 흐름 */
+  deleteRemoteWithLocals: (remote: string, name: string) => Promise<void>;
   /** 저장소를 탭으로 연다 (워크트리 열기, 격리 병합 워크트리) */
   openRepositoryAt: (path: string, parent?: SessionId | null) => Promise<SessionId | null>;
   /** 글자를 클립보드에 넣는다 (이름 복사) */
@@ -314,7 +316,7 @@ function remoteItems(
   target: Extract<RepoBranchTarget, { kind: 'remote' }>,
   deps: RepoBranchDeps,
 ): MenuItem[] {
-  const { state, session: s, dialogs } = deps;
+  const { state, session: s } = deps;
   const name = remoteBranchName(target.label);
   const short = target.label.shortName;
   const disabled = writeBlocked(state);
@@ -350,15 +352,7 @@ function remoteItems(
       danger: true,
       separator: true,
       disabled: state.busy,
-      onSelect: () =>
-        void dialogs
-          .confirm({
-            title: S.dialog.deleteRemoteBranch(target.remote, name),
-            message: S.dialog.deleteRemoteBranchMessage,
-            confirmLabel: S.dialog.delete,
-            danger: true,
-          })
-          .then((ok) => (ok ? s.deleteRemoteBranch(target.remote, name) : undefined)),
+      onSelect: () => void deps.deleteRemoteWithLocals(target.remote, name),
     },
     { label: S.menu.copyName, separator: true, onSelect: () => deps.copyText(short) },
   ];

@@ -5,6 +5,7 @@ interface ConfirmSpec {
   title: string;
   message: string;
   items?: readonly string[];
+  expandableItems?: boolean;
   confirmLabel?: string;
   danger?: boolean;
 }
@@ -23,6 +24,7 @@ interface PromptSpec {
   message?: string;
   /** 영향 범위 목록 (20개까지 보이고 나머지는 "외 N개") */
   items?: readonly string[];
+  expandableItems?: boolean;
   fields: readonly PromptField[];
   confirmLabel?: string;
   /** 확인 단추를 빨갛게 하고 체크 칸의 Enter 로 제출하지 않는다 (기본 false) */
@@ -82,6 +84,7 @@ export function useDialogs() {
         title={confirmSpec?.title ?? ''}
         message={confirmSpec?.message ?? ''}
         items={confirmSpec?.items}
+        expandableItems={confirmSpec?.expandableItems}
         confirmLabel={confirmSpec?.confirmLabel}
         danger={confirmSpec?.danger}
         secondaryLabel={confirmSpec?.secondaryLabel}
@@ -103,6 +106,7 @@ export function useDialogs() {
         title={promptSpec?.title ?? ''}
         message={promptSpec?.message}
         items={promptSpec?.items}
+        expandableItems={promptSpec?.expandableItems}
         fields={promptSpec?.fields ?? []}
         confirmLabel={promptSpec?.confirmLabel}
         danger={promptSpec?.danger}

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import styles from './ConfirmDialog.module.css';
 import { S } from './strings';
 
@@ -8,17 +9,37 @@ export const DIALOG_ITEMS_MAX = 20;
  * 대화상자의 영향 범위 목록 (파일 경로·tag 이름 등). `ConfirmDialog`·`PromptDialog` 가 함께 쓴다.
  * 앞의 20개만 보이고 나머지는 "외 N개" 한 줄이며, 목록이 없거나 비었으면 그리지 않는다
  */
-export function DialogItems({ items }: { items?: readonly string[] }) {
+export function DialogItems({
+  items,
+  expandable = false,
+}: {
+  items?: readonly string[];
+  expandable?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
   if (!items || items.length === 0) {
     return null;
   }
   return (
     <ul className={styles.items}>
-      {items.slice(0, DIALOG_ITEMS_MAX).map((it) => (
+      {(expanded ? items : items.slice(0, DIALOG_ITEMS_MAX)).map((it) => (
         <li key={it}>{it}</li>
       ))}
       {items.length > DIALOG_ITEMS_MAX ? (
-        <li>{S.confirm.more(items.length - DIALOG_ITEMS_MAX)}</li>
+        <li>
+          {expandable ? (
+            <button
+              type="button"
+              className={styles.expandItems}
+              aria-expanded={expanded}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? S.confirm.collapseItems : S.confirm.showAllItems(items.length)}
+            </button>
+          ) : (
+            S.confirm.more(items.length - DIALOG_ITEMS_MAX)
+          )}
+        </li>
       ) : null}
     </ul>
   );

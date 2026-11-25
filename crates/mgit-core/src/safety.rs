@@ -23,7 +23,7 @@ use crate::write::WriteSpec;
 /// 백업 ref 네임스페이스
 pub const BACKUP_NS: &str = "refs/mgit/backup/";
 /// 백업 이름 일련번호
-static BACKUP_SEQ: AtomicU64 = AtomicU64::new(0);
+pub(crate) static BACKUP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// 설정 키: 앱 커밋 템플릿 목록
 const TEMPLATES_KEY: &str = "commitTemplates";
 

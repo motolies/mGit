@@ -86,6 +86,14 @@ export const commands = {
 	deleteBranch: (session: number, name: string, force: boolean) => __TAURI_INVOKE<null>("delete_branch", { session, name, force }),
 	/**  원격 브랜치 삭제 */
 	deleteRemoteBranch: (session: number, remote: string, name: string) => __TAURI_INVOKE<null>("delete_remote_branch", { session, remote, name }),
+	/**  브랜치 삭제 대상·결과를 코어에 위임한다. */
+	inspectRemoteBranchDeletion: (session: number, remote: string, name: string) => __TAURI_INVOKE<BranchDeleteTarget_Serialize>("inspect_remote_branch_deletion", { session, remote, name }),
+	/**  브랜치 삭제 대상·결과를 코어에 위임한다. */
+	inspectFolderRemoteBranchDeletion: (session: number, remote: string, name: string) => __TAURI_INVOKE<BranchDeleteTarget_Serialize[]>("inspect_folder_remote_branch_deletion", { session, remote, name }),
+	/**  브랜치 삭제 대상·결과를 코어에 위임한다. */
+	deleteRemoteBranchWithLocals: (session: number, target: BranchDeleteTarget_Deserialize, deleteLocal: boolean) => __TAURI_INVOKE<BranchDeletionResult>("delete_remote_branch_with_locals", { session, target, deleteLocal }),
+	/**  브랜치 삭제 대상·결과를 코어에 위임한다. */
+	forceDeleteLocalBranches: (session: number, target: BranchDeleteTarget_Deserialize) => __TAURI_INVOKE<BranchDeletionResult>("force_delete_local_branches", { session, target }),
 	/**  업스트림 지정·해제 */
 	setUpstream: (session: number, branch: string, upstream: string | null) => __TAURI_INVOKE<null>("set_upstream", { session, branch, upstream }),
 	/**
@@ -639,11 +647,11 @@ export type AdvancedSearchDto_Serialize = {
 };
 
 /**  앱 이벤트 (TS 쪽 `type` 태그와 1:1) */
-export type AppEvent = 
+export type AppEvent =
 /**  두 번째 실행 인자·드롭 등으로 경로 열기가 요청됐다 */
-{ type: "openRequested"; paths: string[] } | 
+{ type: "openRequested"; paths: string[] } |
 /**  git·ssh 가 자격 증명을 묻는다 (AU-01). 프런트는 `credential_reply` 로 답한다 */
-{ type: "credentialRequested"; reqId: number; 
+{ type: "credentialRequested"; reqId: number;
 /**  `username` | `password` | `passphrase` | `other` */
 kind: string; target: string; prompt: string };
 
@@ -734,24 +742,24 @@ export type BackupRef = {
 export type BatchOpDto = BatchOpDto_Serialize | BatchOpDto_Deserialize;
 
 /**  일괄 작업 */
-export type BatchOpDto_Deserialize = { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Deserialize = { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean;
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
-startPoint?: string | null } | { kind: "checkout"; name: string } | 
+startPoint?: string | null } | { kind: "checkout"; name: string } |
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
-{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } | 
+{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } |
 /**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
-{ kind: "updateBranch"; name: string } | 
+{ kind: "updateBranch"; name: string } |
 /**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
 { kind: "renameBranch"; from: string; to: string };
 
 /**  일괄 작업 */
-export type BatchOpDto_Serialize = { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Serialize = { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean;
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
-startPoint: string | null } | { kind: "checkout"; name: string } | 
+startPoint: string | null } | { kind: "checkout"; name: string } |
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
-{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } | 
+{ kind: "checkoutRemote"; remote: string; branch: string } | { kind: "worktree"; branch: string; destRoot: string; createBranch: boolean } |
 /**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
-{ kind: "updateBranch"; name: string } | 
+{ kind: "updateBranch"; name: string } |
 /**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
 { kind: "renameBranch"; from: string; to: string };
 
@@ -833,6 +841,67 @@ export type Block = { kind: "clean"; lines: string[] } | { kind: "conflict"; our
 /**  블록 분류 */
 export type BlockClassDto = "identical" | "oursOnly" | "theirsOnly" | "whitespaceOnly" | "adjacent" | "real";
 
+/**  확인창에서 고정한 로컬 브랜치와 조회 당시 상태. */
+export type BranchDeleteLocalTarget = BranchDeleteLocalTarget_Serialize | BranchDeleteLocalTarget_Deserialize;
+
+/**  확인창에서 고정한 로컬 브랜치와 조회 당시 상태. */
+export type BranchDeleteLocalTarget_Deserialize = {
+	name: string,
+	oid: string,
+	upstream: string,
+	checkedOut?: string | null,
+};
+
+/**  확인창에서 고정한 로컬 브랜치와 조회 당시 상태. */
+export type BranchDeleteLocalTarget_Serialize = {
+	name: string,
+	oid: string,
+	upstream: string,
+	checkedOut: string | null,
+};
+
+/**  저장소별 삭제 범위. 실행 때 경로·설정·ref를 다시 검사한다. */
+export type BranchDeleteTarget = BranchDeleteTarget_Serialize | BranchDeleteTarget_Deserialize;
+
+/**  저장소별 삭제 범위. 실행 때 경로·설정·ref를 다시 검사한다. */
+export type BranchDeleteTarget_Deserialize = {
+	path: string,
+	remote: string,
+	name: string,
+	remoteOid?: string | null,
+	remoteUrl: string,
+	locals: BranchDeleteLocalTarget_Deserialize[],
+	error?: string | null,
+	excluded: boolean,
+};
+
+/**  저장소별 삭제 범위. 실행 때 경로·설정·ref를 다시 검사한다. */
+export type BranchDeleteTarget_Serialize = {
+	path: string,
+	remote: string,
+	name: string,
+	remoteOid: string | null,
+	remoteUrl: string,
+	locals: BranchDeleteLocalTarget_Serialize[],
+	error: string | null,
+	excluded: boolean,
+};
+
+/**  원격과 로컬 결과를 별도로 보존한다. 로컬 재시도는 원격을 다시 삭제하지 않는다. */
+export type BranchDeletionResult = {
+	remote: BranchDeletionStep,
+	locals: LocalBranchDeletionResult[],
+};
+
+/**  단계별 결과. 미병합만 명시적 강제 재시도 대상이다. */
+export type BranchDeletionStatus = "deleted" | "alreadyAbsent" | "failed" | "unknown" | "notRun" | "notMerged" | "checkedOut" | "stale";
+
+/**  원격 삭제 단계 결과. */
+export type BranchDeletionStep = {
+	status: BranchDeletionStatus,
+	message: string,
+};
+
 /**  `--branch` 헤더 */
 export type BranchHeader = BranchHeader_Serialize | BranchHeader_Deserialize;
 
@@ -855,13 +924,13 @@ export type BranchHeader_Serialize = {
 };
 
 /**  branch 업데이트 결과 (BR-09) */
-export type BranchUpdateDto = 
+export type BranchUpdateDto =
 /**  갱신함: `from` → `to` (받은 commit 수) */
-{ kind: "updated"; from: string; to: string; commits: number } | 
+{ kind: "updated"; from: string; to: string; commits: number } |
 /**  이미 최신 */
-{ kind: "upToDate" } | 
+{ kind: "upToDate" } |
 /**  로컬이 앞섬 (받을 것 없음) */
-{ kind: "ahead"; commits: number } | 
+{ kind: "ahead"; commits: number } |
 /**  갈라짐 (갱신하지 않음) */
 { kind: "diverged"; ahead: number; behind: number };
 
@@ -886,12 +955,12 @@ export type ChangedFile_Serialize = {
 export type CheckoutTargetDto = CheckoutTargetDto_Serialize | CheckoutTargetDto_Deserialize;
 
 /**  checkout 대상 (프런트 → 코어) */
-export type CheckoutTargetDto_Deserialize = { kind: "branch"; name: string } | 
+export type CheckoutTargetDto_Deserialize = { kind: "branch"; name: string } |
 /**  `local` 은 만들 로컬 브랜치 이름. 없으면 원격 브랜치 이름을 쓴다 */
 { kind: "remoteBranch"; remote: string; name: string; local?: string | null } | { kind: "commit"; oid: string } | { kind: "newBranch"; name: string; start?: string | null };
 
 /**  checkout 대상 (프런트 → 코어) */
-export type CheckoutTargetDto_Serialize = { kind: "branch"; name: string } | 
+export type CheckoutTargetDto_Serialize = { kind: "branch"; name: string } |
 /**  `local` 은 만들 로컬 브랜치 이름. 없으면 원격 브랜치 이름을 쓴다 */
 { kind: "remoteBranch"; remote: string; name: string; local: string | null } | { kind: "commit"; oid: string } | { kind: "newBranch"; name: string; start: string | null };
 
@@ -1295,7 +1364,7 @@ export type ExternalApps = {
 };
 
 /**  외부 앱 종류 */
-export type ExternalKind = 
+export type ExternalKind =
 /**  파일 탐색기에서 보기 (Finder / 탐색기) */
 "reveal" | "editor" | "terminal";
 
@@ -1469,26 +1538,26 @@ export type FoundRepo = {
 export type FsDirListingDto = FsDirListingDto_Serialize | FsDirListingDto_Deserialize;
 
 /**  디렉터리 나열 결과 */
-export type FsDirListingDto_Deserialize = 
+export type FsDirListingDto_Deserialize =
 /**
  *  디렉터리 먼저 대소문자 무시 이름순으로 정렬한 뒤 앞에서 `limit` 개. `total` 은 자르기 전 수
  *  (`.git`·UTF-8 아닌 이름 제외), `nonUtf8Names` 는 이름이 UTF-8 이 아니어서 뺀 항목 수
  */
-{ kind: "listed"; entries: FsEntryDto_Deserialize[]; total: number; truncated: boolean; nonUtf8Names: number } | 
+{ kind: "listed"; entries: FsEntryDto_Deserialize[]; total: number; truncated: boolean; nonUtf8Names: number } |
 /**  디렉터리가 없다 (지워졌거나 디렉터리가 아니다) */
-{ kind: "missing" } | 
+{ kind: "missing" } |
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
 
 /**  디렉터리 나열 결과 */
-export type FsDirListingDto_Serialize = 
+export type FsDirListingDto_Serialize =
 /**
  *  디렉터리 먼저 대소문자 무시 이름순으로 정렬한 뒤 앞에서 `limit` 개. `total` 은 자르기 전 수
  *  (`.git`·UTF-8 아닌 이름 제외), `nonUtf8Names` 는 이름이 UTF-8 이 아니어서 뺀 항목 수
  */
-{ kind: "listed"; entries: FsEntryDto_Serialize[]; total: number; truncated: boolean; nonUtf8Names: number } | 
+{ kind: "listed"; entries: FsEntryDto_Serialize[]; total: number; truncated: boolean; nonUtf8Names: number } |
 /**  디렉터리가 없다 (지워졌거나 디렉터리가 아니다) */
-{ kind: "missing" } | 
+{ kind: "missing" } |
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
 
@@ -1523,24 +1592,24 @@ export type FsEntryDto_Serialize = {
 };
 
 /**  항목 종류. 심볼릭 링크는 종류만 알린다 */
-export type FsEntryKindDto = "dir" | "file" | "symlink" | 
+export type FsEntryKindDto = "dir" | "file" | "symlink" |
 /**  FIFO·소켓·장치 등 */
 "other";
 
 /**  파일 읽기 결과. 본문은 `text` 일 때만 있다 */
-export type FsFileDto = 
+export type FsFileDto =
 /**  UTF-8 텍스트 (BOM·CRLF 그대로) */
-{ kind: "text"; text: string; size: number } | 
+{ kind: "text"; text: string; size: number } |
 /**  앞 8,000 바이트 안에 NUL 이 있다 */
-{ kind: "binary"; size: number } | 
+{ kind: "binary"; size: number } |
 /**  UTF-8 이 아니다 */
-{ kind: "notUtf8"; size: number } | 
+{ kind: "notUtf8"; size: number } |
 /**  크기가 `limit` 을 넘는다 */
-{ kind: "tooLarge"; size: number; limit: number } | 
+{ kind: "tooLarge"; size: number; limit: number } |
 /**  정규 파일이 아니다 (디렉터리·심볼릭 링크·FIFO 등) */
-{ kind: "unsupported"; fileKind: FsEntryKindDto } | 
+{ kind: "unsupported"; fileKind: FsEntryKindDto } |
 /**  파일이 없다 (지워졌다) */
-{ kind: "missing" } | 
+{ kind: "missing" } |
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
 
@@ -1603,7 +1672,7 @@ export type GraphQueryDto_Serialize = {
 };
 
 /**  그래프 ref 선택 */
-export type GraphRevsDto = { kind: "all" } | { kind: "branches"; names: string[] } | { kind: "solo"; name: string } | 
+export type GraphRevsDto = { kind: "all" } | { kind: "branches"; names: string[] } | { kind: "solo"; name: string } |
 /**  HEAD 에서 닿는 커밋만. 통합 타임라인에서는 저장소마다 자기 HEAD 다 (BT-03) */
 { kind: "head" };
 
@@ -1772,9 +1841,9 @@ export type InProgressOp_Serialize = { kind: "merge"; head: string } | { kind: "
  *  폴더 stage·unstage 의 대상. "이 경로들" 과 "이 저장소의 전부" 는 다른 모양이다 — 빈 경로 목록은 전부가
  *  아니라 아무것도 하지 않는다
  */
-export type IndexTargetDto = 
+export type IndexTargetDto =
 /**  작업 트리 기준 상대 경로들 (파일이나 디렉터리 — 디렉터리면 그 아래 전부). 글자 그대로 해석된다 */
-{ kind: "paths"; paths: string[] } | 
+{ kind: "paths"; paths: string[] } |
 /**  이 저장소의 전부 */
 { kind: "all" };
 
@@ -1796,32 +1865,32 @@ export type IpcError = IpcError_Serialize | IpcError_Deserialize;
  *  프런트로 넘어가는 오류. 프런트는 `kind` 로 분기해 화면 언어의 안내 문구로 바꿔 쓴다. `message` 는 셸이 받은
  *  화면 언어(`set_language`)로 만든 문구다
  */
-export type IpcError_Deserialize = { kind: "notARepository"; path: string } | 
+export type IpcError_Deserialize = { kind: "notARepository"; path: string } |
 /**  하위 저장소를 품은 폴더. 멀티 저장소 대시보드(MR)가 생기기 전까지는 안내만 한다 */
-{ kind: "multiRepoFolder"; path: string; repos: string[] } | { kind: "gitNotFound" } | { kind: "gitTooOld"; found: string; required: string } | { kind: "sessionNotFound"; session: number } | 
+{ kind: "multiRepoFolder"; path: string; repos: string[] } | { kind: "gitNotFound" } | { kind: "gitTooOld"; found: string; required: string } | { kind: "sessionNotFound"; session: number } |
 /**  쓰기 명령이 실패했다. `stderr` 는 원문, `hint` 는 분류 결과 */
-{ kind: "gitFailed"; args: string[]; status?: number | null; stderr: string; hint?: GitHint | null } | { kind: "cancelled" } | 
+{ kind: "gitFailed"; args: string[]; status?: number | null; stderr: string; hint?: GitHint | null } | { kind: "cancelled" } |
 /**  stage 된 내용에 충돌 마커가 남아 있다 (CF-24) */
-{ kind: "conflictMarkers"; files: string[] } | 
+{ kind: "conflictMarkers"; files: string[] } |
 /**  `.git` 을 품은 미등록 하위 저장소 (SUB-11) */
-{ kind: "nestedRepos"; paths: string[] } | 
+{ kind: "nestedRepos"; paths: string[] } |
 /**
  *  원격 브랜치 체크아웃: 같은 이름의 로컬 브랜치가 다른 곳을 추적한다 (BR-02).
  *  `upstream` 은 그 로컬 브랜치의 현재 업스트림 full ref, 없으면 null
  */
-{ kind: "localBranchTracksOther"; local: string; remote: string; name: string; upstream?: string | null } | 
+{ kind: "localBranchTracksOther"; local: string; remote: string; name: string; upstream?: string | null } |
 /**
  *  push 대상이 로컬과 이름이 다른 업스트림 브랜치다 (RM-04). git 을 실행하지 않았다.
  *  확인하면 `confirmUpstreamMismatch` 로 다시 부른다. `upstream` 은 원격 쪽 브랜치 이름
  */
-{ kind: "pushUpstreamMismatch"; local: string; remote: string; upstream: string } | 
+{ kind: "pushUpstreamMismatch"; local: string; remote: string; upstream: string } |
 /**  가벼운(Light) 세션에 그래프 API 를 불렀다. 로드는 시작하지 않았다 (그 세션은 그래프가 없다) */
-{ kind: "graphUnavailable"; session: number } | 
+{ kind: "graphUnavailable"; session: number } |
 /**
  *  폴더가 잡은 가벼운 세션이 이미 상한이라 열지 않았다. `sessions` 는 그 폴더가 지금 잡은 가벼운 세션들 —
  *  하나를 `folderReleaseRepoSession` 으로 내려놓고 다시 연다
  */
-{ kind: "lightSessionLimit"; limit: number; sessions: number[] } | 
+{ kind: "lightSessionLimit"; limit: number; sessions: number[] } |
 /**
  *  커밋 필터를 쓸 수 없다 (잘못된 정규식, 줄바꿈·NUL 이 든 값). 질의는 바뀌지 않았다 — 결과 0개(빈 그래프)와
  *  구분된다. `message` 는 화면 언어의 안내 + git 의 거부 사유(원문)
@@ -1832,32 +1901,32 @@ export type IpcError_Deserialize = { kind: "notARepository"; path: string } |
  *  프런트로 넘어가는 오류. 프런트는 `kind` 로 분기해 화면 언어의 안내 문구로 바꿔 쓴다. `message` 는 셸이 받은
  *  화면 언어(`set_language`)로 만든 문구다
  */
-export type IpcError_Serialize = { kind: "notARepository"; path: string } | 
+export type IpcError_Serialize = { kind: "notARepository"; path: string } |
 /**  하위 저장소를 품은 폴더. 멀티 저장소 대시보드(MR)가 생기기 전까지는 안내만 한다 */
-{ kind: "multiRepoFolder"; path: string; repos: string[] } | { kind: "gitNotFound" } | { kind: "gitTooOld"; found: string; required: string } | { kind: "sessionNotFound"; session: number } | 
+{ kind: "multiRepoFolder"; path: string; repos: string[] } | { kind: "gitNotFound" } | { kind: "gitTooOld"; found: string; required: string } | { kind: "sessionNotFound"; session: number } |
 /**  쓰기 명령이 실패했다. `stderr` 는 원문, `hint` 는 분류 결과 */
-{ kind: "gitFailed"; args: string[]; status: number | null; stderr: string; hint: GitHint | null } | { kind: "cancelled" } | 
+{ kind: "gitFailed"; args: string[]; status: number | null; stderr: string; hint: GitHint | null } | { kind: "cancelled" } |
 /**  stage 된 내용에 충돌 마커가 남아 있다 (CF-24) */
-{ kind: "conflictMarkers"; files: string[] } | 
+{ kind: "conflictMarkers"; files: string[] } |
 /**  `.git` 을 품은 미등록 하위 저장소 (SUB-11) */
-{ kind: "nestedRepos"; paths: string[] } | 
+{ kind: "nestedRepos"; paths: string[] } |
 /**
  *  원격 브랜치 체크아웃: 같은 이름의 로컬 브랜치가 다른 곳을 추적한다 (BR-02).
  *  `upstream` 은 그 로컬 브랜치의 현재 업스트림 full ref, 없으면 null
  */
-{ kind: "localBranchTracksOther"; local: string; remote: string; name: string; upstream: string | null } | 
+{ kind: "localBranchTracksOther"; local: string; remote: string; name: string; upstream: string | null } |
 /**
  *  push 대상이 로컬과 이름이 다른 업스트림 브랜치다 (RM-04). git 을 실행하지 않았다.
  *  확인하면 `confirmUpstreamMismatch` 로 다시 부른다. `upstream` 은 원격 쪽 브랜치 이름
  */
-{ kind: "pushUpstreamMismatch"; local: string; remote: string; upstream: string } | 
+{ kind: "pushUpstreamMismatch"; local: string; remote: string; upstream: string } |
 /**  가벼운(Light) 세션에 그래프 API 를 불렀다. 로드는 시작하지 않았다 (그 세션은 그래프가 없다) */
-{ kind: "graphUnavailable"; session: number } | 
+{ kind: "graphUnavailable"; session: number } |
 /**
  *  폴더가 잡은 가벼운 세션이 이미 상한이라 열지 않았다. `sessions` 는 그 폴더가 지금 잡은 가벼운 세션들 —
  *  하나를 `folderReleaseRepoSession` 으로 내려놓고 다시 연다
  */
-{ kind: "lightSessionLimit"; limit: number; sessions: number[] } | 
+{ kind: "lightSessionLimit"; limit: number; sessions: number[] } |
 /**
  *  커밋 필터를 쓸 수 없다 (잘못된 정규식, 줄바꿈·NUL 이 든 값). 질의는 바뀌지 않았다 — 결과 0개(빈 그래프)와
  *  구분된다. `message` 는 화면 언어의 안내 + git 의 거부 사유(원문)
@@ -1927,6 +1996,14 @@ export type LineKind = "context" | "add" | "del";
 export type LineSelection = {
 	hunk: number,
 	lines: number[],
+};
+
+/**  로컬별 결과와 강제 확인에서 재검증할 OID. */
+export type LocalBranchDeletionResult = {
+	name: string,
+	oid: string,
+	status: BranchDeletionStatus,
+	message: string,
 };
 
 /**
@@ -2082,16 +2159,16 @@ export type ProfileDto_Serialize = {
 export type PtyEvent = PtyEvent_Serialize | PtyEvent_Deserialize;
 
 /**  프런트로 보내는 터미널 이벤트 */
-export type PtyEvent_Deserialize = 
+export type PtyEvent_Deserialize =
 /**  출력 (UTF-8 경계에 맞춰 잘라 보낸다) */
-{ kind: "data"; id: number; data: string } | 
+{ kind: "data"; id: number; data: string } |
 /**  셸이 끝났다 */
 { kind: "exit"; id: number; code?: number | null };
 
 /**  프런트로 보내는 터미널 이벤트 */
-export type PtyEvent_Serialize = 
+export type PtyEvent_Serialize =
 /**  출력 (UTF-8 경계에 맞춰 잘라 보낸다) */
-{ kind: "data"; id: number; data: string } | 
+{ kind: "data"; id: number; data: string } |
 /**  셸이 끝났다 */
 { kind: "exit"; id: number; code: number | null };
 
@@ -2504,6 +2581,7 @@ export type RepoResult_Deserialize = {
 	 *  `RepoResult` 를 만들기 때문이다
 	 */
 	moved?: RefMove | null,
+	branchDeletion?: BranchDeletionResult | null,
 };
 
 /**  저장소 하나의 결과 */
@@ -2518,6 +2596,7 @@ export type RepoResult_Serialize = {
 	 *  `RepoResult` 를 만들기 때문이다
 	 */
 	moved?: RefMove,
+	branchDeletion?: BranchDeletionResult,
 };
 
 /**  `folder_release_repo_session` 응답. 이미 닫혔거나 잡지 않은 세션도 오류가 아니라 이 모양이다 */
@@ -2729,23 +2808,23 @@ export type SessionEvent = SessionEvent_Serialize | SessionEvent_Deserialize;
  *  세션 이벤트. 그래프 이벤트의 `generation` 이 현재 값보다 작으면 프런트는 무시한다.
  *  변형 이름은 TS 쪽 `type` 태그(`graphLoadStarted` 등)와 1:1 이라 접두사를 유지한다.
  */
-export type SessionEvent_Deserialize = { type: "graphLoadStarted"; session: number; generation: number } | { type: "graphFirstChunk"; session: number; generation: number; rows: number } | { type: "graphProgress"; session: number; generation: number; rows: number } | { type: "graphLoadFinished"; session: number; generation: number; rows: number; laneCount: number; elapsedMs: number; commitGraphSuggested: boolean } | { type: "graphLoadFailed"; session: number; generation: number; message: string } | { type: "graphReloaded"; session: number; generation: number; rows: number; laneCount: number } | { type: "graphReloadFailed"; session: number; message: string } | 
+export type SessionEvent_Deserialize = { type: "graphLoadStarted"; session: number; generation: number } | { type: "graphFirstChunk"; session: number; generation: number; rows: number } | { type: "graphProgress"; session: number; generation: number; rows: number } | { type: "graphLoadFinished"; session: number; generation: number; rows: number; laneCount: number; elapsedMs: number; commitGraphSuggested: boolean } | { type: "graphLoadFailed"; session: number; generation: number; message: string } | { type: "graphReloaded"; session: number; generation: number; rows: number; laneCount: number } | { type: "graphReloadFailed"; session: number; message: string } |
 /**  질의의 ref 가 사라져 코어가 질의를 좁혔다. `query` 가 이제 세션의 질의다 */
-{ type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Deserialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Deserialize; op?: InProgressOp_Deserialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Deserialize } | 
+{ type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Deserialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Deserialize; op?: InProgressOp_Deserialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Deserialize } |
 /**  자동 fetch 로 바뀐 원격 추적 ref (UX-09) */
-{ type: "autoFetched"; session: number; refs: string[] } | 
+{ type: "autoFetched"; session: number; refs: string[] } |
 /**
  *  폴더 자동 fetch 한 바퀴의 결과 (RM-02). 폴더 세션 채널로만 온다. ref 가 바뀌었거나 실패한 저장소만 싣고, 그런
  *  저장소가 없으면 오지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `folderChanged`(`refs: true`)가 따로 온다
  */
-{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Deserialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent?: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Deserialize } | 
+{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Deserialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent?: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Deserialize } |
 /**
  *  폴더 세션의 하위 저장소가 바뀌었다 (MR-03). `refs` 면 타임라인도 다시 읽는다.
  *  `repo` 는 바뀐 저장소의 경로다 (PF-02). 없으면 어느 저장소인지 모르는 것이라 전부 다시 읽는다
  */
-{ type: "folderChanged"; session: number; refs: boolean; repo?: string | null } | 
+{ type: "folderChanged"; session: number; refs: boolean; repo?: string | null } |
 /**  하위 저장소를 다시 스캔했다 (MR-10) */
-{ type: "folderRescanned"; session: number; repos: FoundRepo[] } | 
+{ type: "folderRescanned"; session: number; repos: FoundRepo[] } |
 /**
  *  폴더의 저장소에서 쓰기·네트워크 명령 하나가 끝났다 (W19 ② 폴더 콘솔). 폴더 세션 채널로만 온다. `repo` 는 폴더
  *  목록의 대표 경로(워크트리에서 돈 명령이면 원 저장소 — 요약의 `path` 와 같은 꼴), 실제 작업 디렉터리는
@@ -2757,23 +2836,23 @@ export type SessionEvent_Deserialize = { type: "graphLoadStarted"; session: numb
  *  세션 이벤트. 그래프 이벤트의 `generation` 이 현재 값보다 작으면 프런트는 무시한다.
  *  변형 이름은 TS 쪽 `type` 태그(`graphLoadStarted` 등)와 1:1 이라 접두사를 유지한다.
  */
-export type SessionEvent_Serialize = { type: "graphLoadStarted"; session: number; generation: number } | { type: "graphFirstChunk"; session: number; generation: number; rows: number } | { type: "graphProgress"; session: number; generation: number; rows: number } | { type: "graphLoadFinished"; session: number; generation: number; rows: number; laneCount: number; elapsedMs: number; commitGraphSuggested: boolean } | { type: "graphLoadFailed"; session: number; generation: number; message: string } | { type: "graphReloaded"; session: number; generation: number; rows: number; laneCount: number } | { type: "graphReloadFailed"; session: number; message: string } | 
+export type SessionEvent_Serialize = { type: "graphLoadStarted"; session: number; generation: number } | { type: "graphFirstChunk"; session: number; generation: number; rows: number } | { type: "graphProgress"; session: number; generation: number; rows: number } | { type: "graphLoadFinished"; session: number; generation: number; rows: number; laneCount: number; elapsedMs: number; commitGraphSuggested: boolean } | { type: "graphLoadFailed"; session: number; generation: number; message: string } | { type: "graphReloaded"; session: number; generation: number; rows: number; laneCount: number } | { type: "graphReloadFailed"; session: number; message: string } |
 /**  질의의 ref 가 사라져 코어가 질의를 좁혔다. `query` 가 이제 세션의 질의다 */
-{ type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Serialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Serialize; op: InProgressOp_Serialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Serialize } | 
+{ type: "graphQueryAdjusted"; session: number; query: GraphQueryDto_Serialize; dropped: string[] } | { type: "statusChanged"; session: number; status: WorkTreeStatus_Serialize; op: InProgressOp_Serialize | null } | { type: "refsChanged"; session: number; refs: RepoRefs_Serialize } |
 /**  자동 fetch 로 바뀐 원격 추적 ref (UX-09) */
-{ type: "autoFetched"; session: number; refs: string[] } | 
+{ type: "autoFetched"; session: number; refs: string[] } |
 /**
  *  폴더 자동 fetch 한 바퀴의 결과 (RM-02). 폴더 세션 채널로만 온다. ref 가 바뀌었거나 실패한 저장소만 싣고, 그런
  *  저장소가 없으면 오지 않는다. ref 가 바뀐 저장소마다 이 이벤트 앞에 `folderChanged`(`refs: true`)가 따로 온다
  */
-{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Serialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Serialize } | 
+{ type: "folderAutoFetched"; session: number; repos: AutoFetchedRepoDto_Serialize[] } | { type: "operationStarted"; session: number; opId: number; kind: string; label: string } | { type: "operationProgress"; session: number; opId: number; phase: string; percent: number | null; message: string } | { type: "operationOutput"; session: number; opId: number; stderr: boolean; text: string } | { type: "operationFinished"; session: number; opId: number; ok: boolean; cancelled: boolean; message: string; lockLeft: boolean } | { type: "commandLogged"; session: number; record: CommandLogRecord_Serialize } |
 /**
  *  폴더 세션의 하위 저장소가 바뀌었다 (MR-03). `refs` 면 타임라인도 다시 읽는다.
  *  `repo` 는 바뀐 저장소의 경로다 (PF-02). 없으면 어느 저장소인지 모르는 것이라 전부 다시 읽는다
  */
-{ type: "folderChanged"; session: number; refs: boolean; repo: string | null } | 
+{ type: "folderChanged"; session: number; refs: boolean; repo: string | null } |
 /**  하위 저장소를 다시 스캔했다 (MR-10) */
-{ type: "folderRescanned"; session: number; repos: FoundRepo[] } | 
+{ type: "folderRescanned"; session: number; repos: FoundRepo[] } |
 /**
  *  폴더의 저장소에서 쓰기·네트워크 명령 하나가 끝났다 (W19 ② 폴더 콘솔). 폴더 세션 채널로만 온다. `repo` 는 폴더
  *  목록의 대표 경로(워크트리에서 돈 명령이면 원 저장소 — 요약의 `path` 와 같은 꼴), 실제 작업 디렉터리는
@@ -2818,7 +2897,7 @@ export type SigningInfo_Serialize = {
 };
 
 /**  건너뛴 이유 */
-export type SkipReasonDto = 
+export type SkipReasonDto =
 /**  충돌 중인 경로 (충돌 편집기에서 해결한다) */
 "unmerged";
 
@@ -3090,7 +3169,7 @@ export type TagRefResultDto_Serialize = {
 };
 
 /**  tag 하나의 작업 결과 상태 (코어 `TagRefStatus` 와 1:1) */
-export type TagRefStatusDto = "pushed" | "upToDate" | "deleted" | "alreadyAbsent" | "fetched" | "diverged" | "rejectedExists" | "rejectedStale" | "rejectedRemote" | "failed" | "unknown" | 
+export type TagRefStatusDto = "pushed" | "upToDate" | "deleted" | "alreadyAbsent" | "fetched" | "diverged" | "rejectedExists" | "rejectedStale" | "rejectedRemote" | "failed" | "unknown" |
 /**  확인 대기로 실행하지 않음 (원격 삭제에서 같은 호출의 다른 tag 가 diverged). 성공도 실패도 아니다 */
 "notRun";
 
@@ -3161,7 +3240,7 @@ export type TagSyncReportDto_Serialize = {
 };
 
 /**  원격 하나에 대한 tag 하나의 상태 (코어 `TagSyncState` 와 1:1) */
-export type TagSyncStateDto = { kind: "localOnly" } | { kind: "remoteOnly" } | { kind: "same" } | 
+export type TagSyncStateDto = { kind: "localOnly" } | { kind: "remoteOnly" } | { kind: "same" } |
 /**  `sameCommit` 이면 벗긴 commit 은 같다 (예: 원격 경량, 로컬 annotated) */
 { kind: "diverged"; sameCommit: boolean } | { kind: "unknown" };
 

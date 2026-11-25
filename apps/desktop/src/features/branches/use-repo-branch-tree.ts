@@ -7,7 +7,7 @@
 
 import type { SessionId } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { createElement, Fragment, type ReactNode, useCallback, useEffect, useMemo } from 'react';
 import { openTagsDoc } from '../../actions';
 import { useDialogs } from '../../components/use-dialogs';
 import type { GitLogSide } from '../../layout/GitLogSplit';
@@ -36,6 +36,7 @@ import {
   repoBranchTarget,
   repoTargetCommit,
 } from './repo-branch-tree';
+import { useRemoteBranchDelete } from './use-remote-branch-delete';
 
 /** 컨테이너가 만든 것: 세로 툴바와 트리의 props, 대화상자 요소 */
 export interface RepoBranchTreeParts {
@@ -117,6 +118,7 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
   const setTagsView = useWorkspace((w) => w.setTagsView);
   const [favorites, setFavorites] = useBranchFavorites(s.path === '' ? null : s.path);
   const dialogs = useDialogs();
+  const deletion = useRemoteBranchDelete('repo', s.id);
   const { confirm, confirmChoice, prompt } = dialogs;
   const remoteNames = useMemo(() => s.remotes.map((r) => r.name), [s.remotes]);
   // 트리가 보이면 이미 확인한 보고서를 네트워크 없이 읽는다 (같은 저장소의 다른 탭이 확인한 캐시 포함, TG-08 ②)
@@ -166,7 +168,7 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
       state: {
         id: s.id,
         path: s.path,
-        busy: s.busy,
+        busy: s.busy || deletion.running,
         inOp: s.op !== null,
         headBranch: s.headBranch,
         isolatedBranch: s.isolatedBranch,
@@ -178,6 +180,7 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
       },
       session: s,
       dialogs: { confirm, confirmChoice, prompt },
+      deleteRemoteWithLocals: deletion.execute,
       openRepositoryAt,
       copyText,
       openTagsDoc: (request) =>
@@ -188,7 +191,18 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
           request,
         ),
     }),
-    [s, confirm, confirmChoice, prompt, remoteNames, openRepositoryAt, openDoc, setTagsView],
+    [
+      s,
+      confirm,
+      confirmChoice,
+      prompt,
+      remoteNames,
+      openRepositoryAt,
+      openDoc,
+      setTagsView,
+      deletion.running,
+      deletion.execute,
+    ],
   );
 
   const jumpToCommit = s.jumpToCommit;
@@ -286,6 +300,6 @@ export function useRepoBranchTree(side: GitLogSide): RepoBranchTreeParts {
       onSearchChange,
       rowActions,
     },
-    dialogs: dialogs.element,
+    dialogs: createElement(Fragment, null, dialogs.element, deletion.element),
   };
 }

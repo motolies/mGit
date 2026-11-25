@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::branch_delete::{self, BranchDeleteTarget, BranchDeletionResult};
 use crate::branch_update::{self, BranchUpdate, NotUpdatable};
 use crate::core::{Core, CoreInner};
 use crate::error::CoreError;
@@ -86,6 +87,13 @@ impl FolderSettings {
     rename_all_fields = "camelCase"
 )]
 pub enum BatchOp {
+    DeleteRemoteBranch {
+        targets: Vec<BranchDeleteTarget>,
+        delete_local: bool,
+    },
+    DeleteLocalBranches {
+        targets: Vec<BranchDeleteTarget>,
+    },
     Fetch {
         prune: bool,
     },
@@ -136,6 +144,12 @@ impl BatchOp {
     /// 진행 표시용 라벨
     pub fn label(&self) -> String {
         match self {
+            BatchOp::DeleteRemoteBranch { .. } => {
+                pick("원격 브랜치 일괄 삭제", "Delete remote branches").into()
+            }
+            BatchOp::DeleteLocalBranches { .. } => {
+                pick("로컬 브랜치 강제 삭제", "Force delete local branches").into()
+            }
             BatchOp::Fetch { .. } => pick("일괄 fetch", "Batch fetch").into(),
             BatchOp::Pull => pick("일괄 pull", "Batch pull").into(),
             BatchOp::Push => pick("일괄 push", "Batch push").into(),
@@ -176,6 +190,17 @@ impl BatchOp {
     /// 사용자 입력 검증 (브랜치 이름·시작점·경로)
     fn validate(&self) -> Result<(), CoreError> {
         match self {
+            BatchOp::DeleteRemoteBranch { targets, .. }
+            | BatchOp::DeleteLocalBranches { targets } => {
+                if targets.is_empty() {
+                    return Err(CoreError::Invalid("No deletion targets".into()));
+                }
+                for target in targets {
+                    check_ref_name(&target.remote)?;
+                    check_ref_name(&target.name)?;
+                }
+                Ok(())
+            }
             BatchOp::CreateBranch {
                 name, start_point, ..
             } => {
@@ -283,6 +308,8 @@ pub struct RepoResult {
     /// 옮긴 branch (pull·branch 업데이트가 성공했을 때만)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved: Option<RefMove>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_deletion: Option<BranchDeletionResult>,
 }
 
 impl RepoResult {
@@ -295,6 +322,7 @@ impl RepoResult {
             skipped: None,
             message: String::new(),
             moved: None,
+            branch_deletion: None,
         }
     }
 
@@ -392,11 +420,26 @@ pub(crate) async fn run_git_env(
     network: bool,
     env: &[(&str, &str)],
 ) -> (bool, String) {
+    run_git_env_cancel(inner, work_tree, args, network, env, None).await
+}
+
+/// 취소 가능한 삭제 명령도 같은 인증·출력 처리 경로를 사용한다.
+pub(crate) async fn run_git_env_cancel(
+    inner: &CoreInner,
+    work_tree: &Path,
+    args: &[String],
+    network: bool,
+    env: &[(&str, &str)],
+    cancel: Option<CancelToken>,
+) -> (bool, String) {
     let mut req = GitRequest::new(work_tree, args.iter().cloned()).with_env(if network {
         EnvProfile::Network
     } else {
         EnvProfile::Write
     });
+    if let Some(cancel) = cancel {
+        req = req.with_cancel(cancel);
+    }
     let auth_tag = network.then(|| inner.auth_tag());
     if let Some(tag) = &auth_tag {
         req = req.with_env_var(mgit_helper::ENV_TAG, tag);
@@ -469,6 +512,27 @@ async fn run_batch_one(
         r.skip(messages::cancelled());
         return r;
     }
+    if let BatchOp::DeleteRemoteBranch { targets, .. } | BatchOp::DeleteLocalBranches { targets } =
+        &*op
+    {
+        let Some(target) = targets.iter().find(|target| target.path == found.path) else {
+            r.skip("No confirmed deletion target");
+            return r;
+        };
+        let delete_local = matches!(
+            &*op,
+            BatchOp::DeleteRemoteBranch {
+                delete_local: true,
+                ..
+            }
+        );
+        let force = matches!(&*op, BatchOp::DeleteLocalBranches { .. });
+        let result = branch_delete::execute(&inner, target, delete_local, force, &cancel).await;
+        r.ok = result.ok();
+        r.message = result.message();
+        r.branch_deletion = Some(result);
+        return r;
+    }
     let status = match scanned_repo_status(runner, &d.work_tree).await {
         Ok(s) => s,
         Err(e) => {
@@ -484,6 +548,9 @@ async fn run_batch_one(
         .flatten()
         .is_some();
     let (args, network): (Vec<String>, bool) = match &*op {
+        BatchOp::DeleteRemoteBranch { .. } | BatchOp::DeleteLocalBranches { .. } => {
+            unreachable!("deletion handled above")
+        }
         BatchOp::Fetch { prune } => {
             let mut a = strs(&["fetch", "--all"]);
             if *prune {
@@ -896,7 +963,23 @@ impl Core {
         let inner = self.inner_arc();
         let folder = inner.folders_get(session)?;
         let settings = Arc::new(self.folder_settings(session)?);
-        let all = folder.repos();
+        let all = if let BatchOp::DeleteRemoteBranch { targets, .. }
+        | BatchOp::DeleteLocalBranches { targets } = &op
+        {
+            let paths: Vec<_> = targets.iter().map(|target| target.path.clone()).collect();
+            let groups = folder.select_groups(&paths)?;
+            if groups
+                .iter()
+                .any(|group| !paths.contains(&group.found.path))
+            {
+                return Err(CoreError::Invalid(
+                    "Deletion target must use the primary repository path".into(),
+                ));
+            }
+            groups.into_iter().map(|group| group.found).collect()
+        } else {
+            folder.repos()
+        };
         let wanted = canonical_paths(repos);
         let targets: Vec<FoundRepo> = if wanted.is_empty() {
             all

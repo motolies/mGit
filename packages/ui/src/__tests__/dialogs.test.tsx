@@ -670,3 +670,25 @@ describe('PromptDialog 여러 줄 입력 크기 (메시지 수정 대화상자)'
     expect(textarea).toMatch(/max-height:/);
   });
 });
+
+describe('삭제 대상 전체 보기', () => {
+  it('명시적으로 허용한 영향 목록은 20개 초과 항목까지 펼치고 다시 접을 수 있다', () => {
+    const items = Array.from({ length: 25 }, (_, i) => `repo-${i}`);
+    render(
+      <ConfirmDialog
+        open
+        title="delete"
+        message="targets"
+        items={items}
+        expandableItems
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.queryByText('repo-24')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.showAllItems(25) }));
+    expect(screen.getByText('repo-24')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.collapseItems }));
+    expect(screen.queryByText('repo-24')).toBeNull();
+  });
+});

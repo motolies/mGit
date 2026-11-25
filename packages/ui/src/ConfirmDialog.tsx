@@ -11,6 +11,7 @@ export interface ConfirmDialogProps {
   message: string;
   /** 영향 범위 목록 (파일 경로 등) */
   items?: readonly string[];
+  expandableItems?: boolean;
   confirmLabel?: string;
   /** 파괴적 작업이면 확인 버튼을 빨갛게 */
   danger?: boolean;
@@ -31,6 +32,7 @@ export function ConfirmDialog({
   title,
   message,
   items,
+  expandableItems,
   confirmLabel,
   danger,
   secondaryLabel,
@@ -73,7 +75,7 @@ export function ConfirmDialog({
         <p id={messageId} className={styles.message}>
           {message}
         </p>
-        <DialogItems items={items} />
+        <DialogItems items={items} expandable={expandableItems} />
         <div className={styles.actions}>
           <Button ref={cancelRef} type="button" onClick={onCancel}>
             {S.confirm.cancel}

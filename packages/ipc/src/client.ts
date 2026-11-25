@@ -9,6 +9,8 @@ import type {
   BatchOp,
   BatchResult,
   BlameLine,
+  BranchDeleteTarget,
+  BranchDeletionResult,
   BranchUpdate,
   ChangedFile,
   CheckoutTarget,
@@ -230,6 +232,25 @@ export interface IpcClient {
   renameBranch(session: SessionId, oldName: string, newName: string): Promise<void>;
   deleteBranch(session: SessionId, name: string, force: boolean): Promise<void>;
   deleteRemoteBranch(session: SessionId, remote: string, name: string): Promise<void>;
+  inspectRemoteBranchDeletion(
+    session: SessionId,
+    remote: string,
+    name: string,
+  ): Promise<BranchDeleteTarget>;
+  inspectFolderRemoteBranchDeletion(
+    session: SessionId,
+    remote: string,
+    name: string,
+  ): Promise<BranchDeleteTarget[]>;
+  deleteRemoteBranchWithLocals(
+    session: SessionId,
+    target: BranchDeleteTarget,
+    deleteLocal: boolean,
+  ): Promise<BranchDeletionResult>;
+  forceDeleteLocalBranches(
+    session: SessionId,
+    target: BranchDeleteTarget,
+  ): Promise<BranchDeletionResult>;
   setUpstream(session: SessionId, branch: string, upstream: string | null): Promise<void>;
   /** 로컬 branch 하나를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
   updateBranch(session: SessionId, name: string): Promise<BranchUpdate>;
@@ -867,6 +888,14 @@ export function createTauriClient(): IpcClient {
       voidCall(() => commands.deleteBranch(session, name, force)),
     deleteRemoteBranch: (session, remote, name) =>
       voidCall(() => commands.deleteRemoteBranch(session, remote, name)),
+    inspectRemoteBranchDeletion: (session, remote, name) =>
+      call(() => commands.inspectRemoteBranchDeletion(session, remote, name)),
+    inspectFolderRemoteBranchDeletion: (session, remote, name) =>
+      call(() => commands.inspectFolderRemoteBranchDeletion(session, remote, name)),
+    deleteRemoteBranchWithLocals: (session, target, deleteLocal) =>
+      call(() => commands.deleteRemoteBranchWithLocals(session, target, deleteLocal)),
+    forceDeleteLocalBranches: (session, target) =>
+      call(() => commands.forceDeleteLocalBranches(session, target)),
     setUpstream: (session, branch, upstream) =>
       voidCall(() => commands.setUpstream(session, branch, upstream)),
     updateBranch: (session, name) => call(() => commands.updateBranch(session, name)),

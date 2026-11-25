@@ -26,25 +26,46 @@ pub trait SecretVault: Send + Sync + 'static {
 }
 
 /// OS 키체인 (macOS Keychain, Windows Credential Manager). 블로킹 API 라 `spawn_blocking` 안에서 부른다
-#[derive(Debug, Default)]
-pub struct KeyringVault;
+#[derive(Debug)]
+pub struct KeyringVault {
+    service: String,
+}
+
+impl KeyringVault {
+    /// 실행 환경이 정한 키체인 service를 사용한다.
+    pub fn new(service: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+        }
+    }
+}
+
+impl Default for KeyringVault {
+    /// 배포 앱의 기존 키체인 service를 유지한다.
+    fn default() -> Self {
+        Self::new(SERVICE)
+    }
+}
 
 impl SecretVault for KeyringVault {
     /// 저장된 비밀
     fn get(&self, key: &str) -> Option<String> {
-        keyring::Entry::new(SERVICE, key).ok()?.get_password().ok()
+        keyring::Entry::new(&self.service, key)
+            .ok()?
+            .get_password()
+            .ok()
     }
 
     /// 저장 (덮어쓰기)
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        keyring::Entry::new(SERVICE, key)
+        keyring::Entry::new(&self.service, key)
             .and_then(|e| e.set_password(secret))
             .map_err(|e| e.to_string())
     }
 
     /// 삭제 (없어도 무시)
     fn delete(&self, key: &str) {
-        if let Ok(e) = keyring::Entry::new(SERVICE, key) {
+        if let Ok(e) = keyring::Entry::new(&self.service, key) {
             let _ = e.delete_credential();
         }
     }

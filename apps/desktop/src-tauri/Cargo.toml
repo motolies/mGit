@@ -21,6 +21,9 @@ tauri-plugin-dialog = "2"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 specta-typescript = "=0.0.13"
+dunce = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

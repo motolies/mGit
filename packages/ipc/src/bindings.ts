@@ -5,6 +5,12 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	/**  스토어 초기화 전에 실행 환경을 확인한다. */
+	runtimeProfile: () => __TAURI_INVOKE<RuntimeInfo>("runtime_profile"),
+	/**  설정 어댑터 초기화를 위한 전체 snapshot을 읽는다. */
+	uiSettingsSnapshot: () => __TAURI_INVOKE<{ [key in string]: string }>("ui_settings_snapshot"),
+	/**  메모리에 반영한 설정 키 하나를 디스크에 저장한다. null은 삭제다. */
+	uiSettingsSet: (key: string, value: string | null) => __TAURI_INVOKE<null>("ui_settings_set", { key, value }),
 	/**  시스템 git 의 버전과 실제 경로를 돌려준다 */
 	gitVersion: () => __TAURI_INVOKE<GitVersionInfo>("git_version"),
 	/**
@@ -300,7 +306,7 @@ export const commands = {
 	externalAppsGet: () => __TAURI_INVOKE<ExternalApps>("external_apps_get"),
 	/**  외부 앱 설정 저장 */
 	externalAppsSet: (apps: ExternalApps) => __TAURI_INVOKE<null>("external_apps_set", { apps }),
-	/**  자동 fetch 간격 읽기 (분, 0 이면 끔). 저장된 값이 없으면 5분이다 */
+	/**  자동 fetch 간격 읽기 (분, 0 이면 끔). 첫 실행의 기본값은 실행 환경을 따른다 */
 	autoFetchGet: () => __TAURI_INVOKE<number>("auto_fetch_get"),
 	/**
 	 *  자동 fetch 간격 저장 (분, 0~1440, 0 이면 끔). 저장한 뒤 곧바로 적용한다 — 열린 저장소 탭과 폴더의 자동 fetch 를
@@ -2924,6 +2930,14 @@ export type RuleResultDto = {
 	ok: boolean,
 	message: string,
 };
+
+export type RuntimeInfo = {
+	kind: RuntimeKind,
+	id: string,
+	title: string,
+};
+
+export type RuntimeKind = "production" | "development" | "test";
 
 /**  검색 결과 */
 export type SearchResult = {

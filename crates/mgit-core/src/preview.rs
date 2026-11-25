@@ -154,7 +154,13 @@ impl Core {
             return Ok(None);
         }
         let wt = s.info.work_tree.clone();
-        let tmp = std::env::temp_dir().join(format!(
+        let temp_root = self
+            .config()
+            .temp_dir
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        std::fs::create_dir_all(&temp_root)?;
+        let tmp = temp_root.join(format!(
             "mgit-wip-index-{}-{}",
             std::process::id(),
             mgit_model::now_millis()

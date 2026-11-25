@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { S } from '@mgit/ui';
 import type { ReactNode } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
@@ -12,7 +13,10 @@ export interface CommitDetailPaneProps {
 
 /** 단일·멀티 저장소와 범위 상세가 같은 높이 설정을 공유하는 변경 파일/정보 분할이다. */
 export function CommitDetailPane({ files, info, focusArea = false }: CommitDetailPaneProps) {
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'git-detail' });
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    storage: settingsStorage,
+    id: 'git-detail',
+  });
   return (
     <div
       className={styles.pane}

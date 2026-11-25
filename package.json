@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "scripts": {
-    "dev": "pnpm -F @mgit/desktop tauri dev",
+    "dev": "node scripts/dev.mjs",
     "build": "pnpm -F @mgit/desktop tauri build",
     "tauri": "pnpm -F @mgit/desktop tauri",
     "test": "vitest run",
@@ -25,7 +25,10 @@
     "signing:import": "swift -suppress-warnings scripts/signing-identity.swift import",
     "signing:verify-backup": "swift -suppress-warnings scripts/signing-identity.swift verify-backup",
     "test:signing": "node --test scripts/signing-tests/signing.test.mjs",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "dev:web": "node scripts/dev.mjs --web",
+    "dev:test": "node scripts/dev.mjs --test",
+    "test:runtime": "node --test scripts/__tests__/dev.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",

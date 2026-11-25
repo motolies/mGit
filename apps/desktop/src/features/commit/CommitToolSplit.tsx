@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { S } from '@mgit/ui';
 import type { ReactNode } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
@@ -33,7 +34,10 @@ export interface CommitToolSplitProps {
  * 최소 크기(104px)보다 커서 싣지 않았다 (W21·W23 판단)
  */
 export function CommitToolSplit({ changes, commit }: CommitToolSplitProps) {
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: COMMIT_SPLIT_LAYOUT_ID });
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    storage: settingsStorage,
+    id: COMMIT_SPLIT_LAYOUT_ID,
+  });
   return (
     <Group orientation="vertical" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
       <Panel

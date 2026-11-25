@@ -1,4 +1,5 @@
 import type { DiffDocument, FileDiff, LineSelection } from '@mgit/ipc';
+import { settingsStorage } from '@mgit/storage';
 import { Button, isImeKey, S } from '@mgit/ui';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -103,7 +104,7 @@ export interface DiffViewProps {
 /** 저장된 분할 폭이 유효할 때만 재사용한다. 저장소 접근이 막히면 기본 50:50을 쓴다. */
 function readSplitRatio(): number {
   try {
-    const saved = Number(globalThis.localStorage?.getItem('mgit.diff.splitRatio'));
+    const saved = Number(settingsStorage.getItem('mgit.diff.splitRatio'));
     return Number.isFinite(saved) && saved >= 20 && saved <= 80 ? saved : 50;
   } catch {
     return 50;
@@ -274,7 +275,7 @@ export function DiffView({
   /** 분할 폭도 다른 보기 설정처럼 다음 파일과 세션에서 재사용한다. */
   useEffect(() => {
     try {
-      globalThis.localStorage?.setItem('mgit.diff.splitRatio', String(splitRatio));
+      settingsStorage.setItem('mgit.diff.splitRatio', String(splitRatio));
     } catch {
       /* 저장이 막힌 환경에서도 현재 화면은 유지한다. */
     }

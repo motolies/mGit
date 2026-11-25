@@ -31,7 +31,9 @@ IntelliJ IDEA 와 비슷한 화면으로, 여러 Git 저장소가 든 폴더를 
 
 ```bash
 pnpm install   # 의존성 설치
-pnpm dev       # 개발 실행 — 화면과 Rust 를 함께 빌드해 앱을 띄웁니다
+pnpm dev       # 워크트리별 데이터·포트로 개발 앱을 띄웁니다
+pnpm dev:web   # 웹 개발 실행
+pnpm dev:test  # 실행별로 격리된 네이티브 목 앱을 띄웁니다
 pnpm build     # .app·.dmg 만들기 → target/release/bundle/
 ```
 

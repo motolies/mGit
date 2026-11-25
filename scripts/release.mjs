@@ -9,7 +9,7 @@ const JSON_MANIFESTS = [
   'package.json',
   'apps/desktop/package.json',
   'apps/desktop/src-tauri/tauri.conf.json',
-  ...['ipc', 'ui', 'graph-view', 'diff-view', 'merge-editor', 'terminal'].map(
+  ...['ipc', 'ui', 'graph-view', 'diff-view', 'merge-editor', 'terminal', 'storage'].map(
     (name) => `packages/${name}/package.json`,
   ),
 ];
@@ -169,6 +169,52 @@ export function checkMock(root, env) {
         );
     }
   }
+}
+
+/** 개발·테스트 환경과 배포 설정 변경을 버전 파일·커밋·태그 변경 전에 차단한다. */
+export function checkReleaseEnvironment(root, env) {
+  const forbidden =
+    /^(?:MGIT_(?:RUNTIME_.*|CHECKOUT_ROOT|WORKTREE_ID|TEST_RUN_ID)|VITE_MGIT_RUNTIME_.*|TAURI_CONFIG|TAURI_ENV_DEBUG)$/;
+  for (const key of Object.keys(env)) {
+    if (forbidden.test(key) && (env[key] ?? '').trim())
+      throw new Error(`Unset ${key} before releasing.`);
+  }
+  for (const directory of [root, path.join(root, 'apps/desktop')]) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (
+        !entry.isFile() ||
+        !/^\.env(?:\..*)?$/.test(entry.name) ||
+        /\.(example|sample)$/.test(entry.name)
+      )
+        continue;
+      const content = fs.readFileSync(path.join(directory, entry.name), 'utf8');
+      for (const match of content.matchAll(/^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=/gm)) {
+        if (forbidden.test(match[1]))
+          throw new Error(
+            `Runtime setting in environment file: ${path.relative(root, path.join(directory, entry.name))}`,
+          );
+      }
+    }
+  }
+  for (const name of ['tauri.conf.json', 'tauri.macos.conf.json']) {
+    const file = path.join(root, 'apps/desktop/src-tauri', name);
+    if (!fs.existsSync(file)) continue;
+    const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (
+      (config.identifier !== undefined && config.identifier !== 'io.github.motolies.mgit') ||
+      (config.productName !== undefined && config.productName !== 'mGit') ||
+      config.app?.windows?.some(
+        (window) =>
+          window.dataStoreIdentifier != null ||
+          window.dataDirectory != null ||
+          (window.title !== undefined && window.title !== 'mGit'),
+      ) ||
+      config.app?.appDirectoriesOverride != null
+    ) {
+      throw new Error(`Non-production Tauri runtime configuration: ${name}`);
+    }
+  }
+  checkMock(root, env);
 }
 
 /** 추적 파일과 추적되지 않은 일반 파일까지 확인해 태그와 다른 소스를 빌드하지 않는다. */
@@ -385,7 +431,6 @@ function packageMacos(ctx, info) {
 function releaseAll(ctx, requested, dryRun) {
   const version = requested === undefined ? checkVersions(ctx.root) : validateVersion(requested);
   cleanHead(ctx.run, ctx.root);
-  checkMock(ctx.root, ctx.env);
   if (ctx.platform !== 'darwin' || ctx.arch !== 'arm64')
     throw new Error('Release requires a native Apple Silicon macOS host.');
   checkIdentity(ctx.run, ctx.root, ctx.now);
@@ -449,6 +494,7 @@ export function main(args, options = {}) {
     (!['prepare', 'all'].includes(action) && versionArg !== undefined)
   )
     throw new Error('Usage: release.mjs prepare X.Y.Z|check|tag|macos|all [X.Y.Z] [--dry-run]');
+  checkReleaseEnvironment(ctx.root, ctx.env);
   if (action === 'all') return releaseAll(ctx, versionArg, dryRun);
   if (action === 'prepare') {
     const updates = versionUpdates(ctx.root, versionArg);
@@ -460,7 +506,6 @@ export function main(args, options = {}) {
   }
   const version = checkVersions(ctx.root);
   const commit = cleanHead(ctx.run, ctx.root);
-  checkMock(ctx.root, ctx.env);
   if (action === 'tag') {
     const tag = `v${version}`;
     const existing = ctx.run('git', ['tag', '--list', tag], { cwd: ctx.root });

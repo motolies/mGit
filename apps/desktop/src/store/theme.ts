@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 // 테마(UX-05): 라이트·다크·시스템 연동. 결과는 <html data-theme> 속성으로 적용하고
 // tokens.css 의 CSS 변수가 그 속성을 보고 색을 바꾼다.
 
@@ -31,7 +32,7 @@ export function applyTheme(resolved: ResolvedTheme): void {
 /** 저장된 선호를 읽는다. 저장소 접근이 막혀 있거나 값이 이상하면 system */
 export function loadThemePreference(): ThemePreference {
   try {
-    const raw = localStorage.getItem(THEME_STORAGE_KEY);
+    const raw = settingsStorage.getItem(THEME_STORAGE_KEY);
     if (raw === 'light' || raw === 'dark' || raw === 'system') {
       return raw;
     }
@@ -44,7 +45,7 @@ export function loadThemePreference(): ThemePreference {
 /** 선호를 저장한다. 실패해도 앱 동작에는 영향이 없으므로 무시한다 */
 export function saveThemePreference(pref: ThemePreference): void {
   try {
-    localStorage.setItem(THEME_STORAGE_KEY, pref);
+    settingsStorage.setItem(THEME_STORAGE_KEY, pref);
   } catch {
     // 무시
   }

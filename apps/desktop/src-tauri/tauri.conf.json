@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "io.github.motolies.mgit",
   "build": {
-    "beforeDevCommand": "pnpm dev:web",
+    "beforeDevCommand": "node ../../scripts/dev.mjs --direct",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build:web",
     "frontendDist": "../dist"

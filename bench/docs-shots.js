@@ -2,9 +2,9 @@
 // 실제 앱으로 찍으면 개인 저장소가 보일 수 있으므로 그림은 이 스크립트로만 만든다.
 //
 // 실행 방법
-//   1. 목 모드 개발 서버를 띄운다. 장면 환경 변수(VITE_MGIT_MOCK_SCENE)는 주지 않는다 — 그림마다 localStorage
+//   1. 목 모드 개발 서버를 띄운다. 장면 환경 변수(VITE_MGIT_MOCK_SCENE)는 주지 않는다 — 그림마다 환경별 설정
 //      `mgit.mock.scene` 으로 장면을 고르고 새로 고침만 한다.
-//        VITE_MGIT_MOCK=2000 pnpm -F @mgit/desktop dev:web          # http://localhost:1420
+//        VITE_MGIT_MOCK=2000 pnpm -F @mgit/desktop dev:web          # 런처가 출력한 URL
 //   2. Playwright MCP 의 browser_run_code_unsafe 를 `filename: "bench/docs-shots.js"`(저장소 루트 기준)로 부른다.
 //      파일 내용을 `code` 에 그대로 붙여 넣어도 된다. MCP 는 내용을 `(내용)(page)` 로 감싸 부르므로 이 파일은
 //      `async (page) => { … }` 식 하나여야 하고 끝에 `;` 가 없어야 한다 (그래서 아래 `biome-ignore format`).
@@ -13,12 +13,12 @@
 //      page.screenshot 이 바로 쓴다 (2026-11-20 확인). 쓰기가 막히는 환경이면 OUT_DIR 를 '.playwright-mcp' 로 바꿔
 //      찍은 뒤 docs/images/ 로 옮긴다 (.playwright-mcp/ 는 gitignore 대상). 반환값은 그림별
 //      { name, file, width, height, bytes } 와 실패한 그림의 { name, error } 다.
-//   4. 끝나면 서버를 내린다: lsof -ti tcp:1420 -sTCP:LISTEN | xargs kill
+//   4. 끝나면 서버를 내린다: 서버 터미널에서 Ctrl+C
 //
 // 그림 더하기: 아래 SHOTS 에 항목을 더한다.
 //   name     ASCII kebab (파일 이름이 된다)
 //   scene    'folder' | 'repo' | 'conflict' | 'none'(장면 없이 시작 화면)
-//   storage  더 넣을 localStorage 값 { 키: 값 } — 문자열이 아니면 JSON 으로 넣는다 (예: mgit.leftTool).
+//   storage  더 넣을 환경별 설정 값 { 키: 값 } — 문자열이 아니면 JSON 으로 넣는다 (예: mgit.leftTool).
 //            공통값 mgit.theme='dark'·mgit.language='ko'·mgit.mock.gitVersion=GIT_VERSION 이 먼저 들어간다
 //            (언어를 정하지 않으면 목 모드는 브라우저 언어를 따른다 — 영어 브라우저면 영어로 찍힌다)
 //   ready    (선택) 장면 준비 조건을 바꾸는 페이지 안 함수. 기본은 READY[scene] (예: 로그 칸을 숨긴 그림)
@@ -34,14 +34,15 @@
 // 목이 보여 주지 못하는 상태(충돌이 있는 병합 미리보기 등)는 steps 에서 h.sessionValue·h.patchSession 으로 지금 탭의
 // 세션 상태를 읽고 덮어쓴다 (페이지가 쓰는 같은 모듈 인스턴스 — 소스를 고쳐 HMR 이 돈 뒤에는 서버를 다시 띄울 것)
 //
-// 매 그림: localStorage.clear() → 공통값·scene·storage → 새로 고침 → 장면 준비 → steps → 마우스를 빈 곳으로 →
+// 매 그림: 환경별 설정 초기화 → 공통값·scene·storage → 새로 고침 → 장면 준비 → steps → 마우스를 빈 곳으로 →
 // 표식을 페이지 위에 겹쳐 그림(앱 DOM 밖의 fixed 레이어) → 찍기 → 표식 지우기.
 // 창 1400×900, 다크, PNG. MCP 브라우저는 deviceScaleFactor 1 이고, 찍을 때 scale: 'css' 로 CSS 픽셀 크기를 고정한다.
 
 // biome-ignore format: MCP 가 파일 내용을 `(내용)(page)` 로 감싸 부르므로 끝에 `;` 가 붙으면 안 된다
 async (page) => {
   // ── 설정 ──────────────────────────────────────────────────────────────────────
-  const BASE = 'http://localhost:1420/';
+  const BASE = new URL('/', page.url()).href;
+  if (!BASE.startsWith('http://127.0.0.1:')) throw new Error('먼저 런처가 출력한 웹 주소를 여세요.');
   const OUT_DIR = 'docs/images';
   const VIEW = { width: 1400, height: 900 };
   /** 상태 바에 보일 git 버전 (목 기본값 `2.54.0 (mock)` 대신) */
@@ -1166,7 +1167,7 @@ async (page) => {
 
   // ── 찍기 ──────────────────────────────────────────────────────────────────────
 
-  /** localStorage 를 비우고 공통값·장면·그림별 값을 넣은 뒤 새로 고쳐 장면이 준비될 때까지 기다린다 */
+  /** 환경별 설정을 비우고 공통값·장면·그림별 값을 넣은 뒤 새로 고쳐 장면이 준비될 때까지 기다린다 */
   async function load(shot) {
     if (!page.url().startsWith(BASE)) {
       await page.goto(BASE);
@@ -1180,14 +1181,21 @@ async (page) => {
     for (const [key, value] of Object.entries(shot.storage ?? {})) {
       storage[key] = typeof value === 'string' ? value : JSON.stringify(value);
     }
-    await page.evaluate((entries) => {
-      localStorage.clear();
-      for (const [key, value] of Object.entries(entries)) {
-        localStorage.setItem(key, value);
+    await page.evaluate(async (entries) => {
+      const response = await fetch('/__mgit/settings');
+      if (!response.ok) throw new Error('설정 조회 실패');
+      const previous = await response.json();
+      for (const key of new Set([...Object.keys(previous), ...Object.keys(entries)])) {
+        const result = await fetch('/__mgit/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, value: entries[key] ?? null }),
+        });
+        if (!result.ok) throw new Error('설정 저장 실패');
       }
     }, storage);
     await page.reload();
-    const scene = await page.evaluate(() => localStorage.getItem('mgit.mock.scene'));
+    const scene = await page.evaluate(async () => (await (await fetch('/__mgit/settings')).json())['mgit.mock.scene']);
     if (scene !== shot.scene) {
       throw new Error(`새로 고친 뒤 장면 값이 다르다: ${scene}`);
     }
@@ -1346,6 +1354,6 @@ async (page) => {
       failed.push({ name: shot.name, error: String(e?.message ?? e).slice(0, 500) });
     }
   }
-  await page.evaluate(() => localStorage.clear());
+  // 촬영 마지막 설정은 해당 checkout의 웹 설정에만 남긴다.
   return { done, failed };
 }

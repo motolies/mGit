@@ -24,6 +24,7 @@ mod commands_rebase;
 mod commands_refs;
 mod commands_remote;
 mod commands_repo;
+mod commands_runtime;
 mod commands_safety;
 mod commands_settings;
 mod commands_submodule;
@@ -38,6 +39,7 @@ mod export;
 mod messages;
 mod native_files;
 mod pty;
+mod runtime_profile;
 mod state;
 
 use std::path::Path;
@@ -49,6 +51,9 @@ use tauri_specta::{Builder, collect_commands};
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
+            commands_runtime::runtime_profile,
+            commands_runtime::ui_settings_snapshot,
+            commands_runtime::ui_settings_set,
             commands::git_version,
             commands::open_repo,
             commands::graph_window,
@@ -340,6 +345,9 @@ pub fn bindings_path() -> &'static str {
 
 /// Tauri 앱 조립: 플러그인, 상태(코어·저장소·감시자), 커맨드 핸들러, 디버그 빌드에서 바인딩 내보내기
 pub fn run() {
+    let profile = runtime_profile::RuntimeProfile::detect().expect("실행 환경 초기화 실패");
+    let mut context = tauri::generate_context!();
+    profile.configure(context.config_mut());
     let builder = specta_builder();
 
     #[cfg(debug_assertions)]
@@ -348,6 +356,7 @@ pub fn run() {
         .expect("TS 바인딩 내보내기 실패");
 
     tauri::Builder::default()
+        .manage(profile)
         // single-instance 는 반드시 첫 플러그인. 두 번째 실행의 인자를 열기 요청으로 바꾼다 (REPO-01)
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let paths = existing_paths(argv.iter().skip(1), Path::new(&cwd));
@@ -368,9 +377,19 @@ pub fn run() {
         .setup(|app| {
             // 앱 데이터 디렉터리(SQLite·백업)는 AppHandle 이 있어야 알 수 있다.
             // git 탐색·버전 검사는 창을 띄우기 전에 한 번만 한다 (실패해도 앱은 뜬다)
-            let data_dir = app.path().app_data_dir().ok();
+            let profile = app.state::<runtime_profile::RuntimeProfile>();
+            let data_dir = if profile.root.is_some() {
+                Some(app.path().app_data_dir()?)
+            } else {
+                app.path().app_data_dir().ok()
+            };
             let file_data_dir = data_dir.clone().unwrap_or_else(std::env::temp_dir);
-            let app_state = tauri::async_runtime::block_on(state::AppState::build(data_dir));
+            if profile.root.is_some() {
+                std::fs::create_dir_all(&file_data_dir)?;
+            }
+            app.manage(commands_runtime::UiSettings::new(file_data_dir.clone()));
+            let app_state =
+                tauri::async_runtime::block_on(state::AppState::build_profile(data_dir, &profile));
             app.manage(commands_fs_operations::FileOperationsState::new(
                 file_data_dir,
             ));
@@ -391,7 +410,7 @@ pub fn run() {
             }
         })
         .invoke_handler(builder.invoke_handler())
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("mGit 실행 실패")
         .run(|app, event| {
             // 메뉴 종료·Cmd+Q도 프런트의 초안 저장 보호를 거친다. 보호가 끝나 창을 파괴하면 종료를 허용한다.

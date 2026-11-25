@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
+import { testCacheDir } from '../../scripts/test-cache.ts';
 
 export default defineConfig({
+  cacheDir: testCacheDir('graph-view'),
   test: {
     name: 'graph-view',
     environment: 'jsdom',

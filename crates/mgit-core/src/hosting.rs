@@ -136,14 +136,18 @@ struct KeygenAskpass(PathBuf);
 #[cfg(unix)]
 impl KeygenAskpass {
     /// 임시 디렉터리에 새 파일(0700, 기존 파일 재사용 금지)로 만든다
-    fn create() -> std::io::Result<Self> {
+    fn create(root: Option<&Path>) -> std::io::Result<Self> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         use std::sync::atomic::{AtomicU32, Ordering};
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let seq = NEXT.fetch_add(1, Ordering::Relaxed);
         let name = format!("mgit-keygen-{}-{seq}.sh", std::process::id());
-        let path = std::env::temp_dir().join(name);
+        let root = root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(std::env::temp_dir);
+        std::fs::create_dir_all(&root)?;
+        let path = root.join(name);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -522,7 +526,14 @@ impl Core {
                 let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
             }
         }
-        Self::ssh_keygen_in(&dir, name, comment, passphrase).await
+        Self::ssh_keygen_with_temp(
+            &dir,
+            name,
+            comment,
+            passphrase,
+            self.config().temp_dir.as_deref(),
+        )
+        .await
     }
 
     /// 지정 디렉터리에 키 생성 (`ssh-keygen -t ed25519 -C <comment> -f <path>`)
@@ -531,6 +542,17 @@ impl Core {
         name: &str,
         comment: &str,
         passphrase: &str,
+    ) -> Result<SshKeyInfo, CoreError> {
+        Self::ssh_keygen_with_temp(dir, name, comment, passphrase, None).await
+    }
+
+    /// 앱에서 생성한 askpass 스크립트는 해당 실행 환경의 임시 루트에 둔다.
+    async fn ssh_keygen_with_temp(
+        dir: &Path,
+        name: &str,
+        comment: &str,
+        passphrase: &str,
+        temp_root: Option<&Path>,
     ) -> Result<SshKeyInfo, CoreError> {
         check_key_name(name)?;
         let path = dir.join(name);
@@ -543,7 +565,7 @@ impl Core {
         }
         #[cfg(unix)]
         let askpass = (!passphrase.is_empty())
-            .then(KeygenAskpass::create)
+            .then(|| KeygenAskpass::create(temp_root))
             .transpose()?;
         #[cfg(unix)]
         let script = askpass.as_ref().map(|a| a.0.as_path());

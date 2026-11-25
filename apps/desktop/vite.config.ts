@@ -1,13 +1,13 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-// Tauri 개발 서버 설정. 포트는 tauri.conf.json 의 devUrl 과 맞춘다.
+// 개발 런처가 바인딩한 주소를 Tauri에 전달하며 직접 Vite 실행도 loopback으로 제한한다.
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 1420,
-    strictPort: true,
+    host: '127.0.0.1',
+    strictPort: false,
     watch: {
       ignored: ['**/src-tauri/**'],
     },

@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import type { IpcClient } from '../client';
 import { IpcClientError } from '../client';
 import { EMPTY_COMMIT_FILTER, isEmptyCommitFilter } from '../commit-filter';
@@ -213,7 +214,7 @@ const SCALE_NAMES = [
 /** 저장해 둔 조절값 문자열. 없거나 읽을 수 없으면 null */
 function storedValue(key: string): string | null {
   try {
-    return globalThis.localStorage?.getItem(key) ?? null;
+    return settingsStorage.getItem(key) ?? null;
   } catch {
     return null;
   }
@@ -2235,6 +2236,14 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
 
     ...stubChanges(),
     ...sceneMethods,
+    /** 목 앱도 자동 fetch 설정은 환경별로 보존하며 첫 실행에는 꺼 둔다. */
+    async autoFetchGet() {
+      const minutes = Number(settingsStorage.getItem('mgit.mock.autoFetch') ?? 0);
+      return Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440 ? minutes : 0;
+    },
+    async autoFetchSet(minutes) {
+      settingsStorage.setItem('mgit.mock.autoFetch', String(minutes));
+    },
     async workTreeDiffDocument(session, path, staged, full, options) {
       return mockDiffDocument(
         await this.workTreeDiff(session, path, staged, full, options),

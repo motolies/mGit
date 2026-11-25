@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { S } from '@mgit/ui';
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
 import {
@@ -235,6 +236,7 @@ export function BottomDock({ children }: { children: ReactNode }) {
   const mode = dockModeOf({ tool, maximized });
   const groupRef = useGroupRef();
   const { defaultLayout: saved, onLayoutChanged: saveLayout } = useDefaultLayout({
+    storage: settingsStorage,
     id: DOCK_LAYOUT_ID,
   });
   // 보통 상태의 슬롯 높이. 숨김·최대화에서 돌아올 때 이 높이로 편다

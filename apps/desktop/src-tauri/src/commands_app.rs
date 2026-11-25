@@ -41,8 +41,6 @@ const LAUNCH_WAIT: Duration = Duration::from_secs(3);
 
 /// 자동 fetch 간격 설정 키. 값은 `{"minutes": n}`
 const AUTO_FETCH_KEY: &str = "autoFetch";
-/// 저장된 자동 fetch 간격이 없을 때의 값 (분). 저장소 탭의 이전 고정값과 같다
-pub(crate) const AUTO_FETCH_DEFAULT_MINUTES: u32 = 5;
 /// 자동 fetch 간격 상한 (분, 하루)
 const AUTO_FETCH_MAX_MINUTES: u32 = 1440;
 
@@ -54,7 +52,7 @@ struct AutoFetchSetting {
 
 /// 저장된 자동 fetch 간격 (분). 값이 없거나 읽지 못하거나 범위를 벗어나면 기본값이다. 앱 시작(`state.rs`)과
 /// `auto_fetch_get` 이 함께 쓴다
-pub(crate) fn saved_auto_fetch_minutes(store: &dyn mgit_model::Store) -> u32 {
+pub(crate) fn saved_auto_fetch_minutes(store: &dyn mgit_model::Store, default_minutes: u32) -> u32 {
     store
         .setting_get(AUTO_FETCH_KEY)
         .ok()
@@ -62,7 +60,7 @@ pub(crate) fn saved_auto_fetch_minutes(store: &dyn mgit_model::Store) -> u32 {
         .and_then(|j| serde_json::from_str::<AutoFetchSetting>(&j).ok())
         .map(|s| s.minutes)
         .filter(|m| *m <= AUTO_FETCH_MAX_MINUTES)
-        .unwrap_or(AUTO_FETCH_DEFAULT_MINUTES)
+        .unwrap_or(default_minutes)
 }
 
 /// 분 단위 간격을 코어 간격으로 바꾼다 (0 이면 끔)
@@ -143,12 +141,16 @@ pub async fn external_apps_set(
     Ok(())
 }
 
-/// 자동 fetch 간격 읽기 (분, 0 이면 끔). 저장된 값이 없으면 5분이다
+/// 자동 fetch 간격 읽기 (분, 0 이면 끔). 첫 실행의 기본값은 실행 환경을 따른다
 #[tauri::command]
 #[specta::specta]
-pub async fn auto_fetch_get(state: State<'_, AppState>) -> Result<u32, IpcError> {
+pub async fn auto_fetch_get(
+    state: State<'_, AppState>,
+    profile: State<'_, crate::runtime_profile::RuntimeProfile>,
+) -> Result<u32, IpcError> {
     Ok(saved_auto_fetch_minutes(
         state.core()?.core.store().as_ref(),
+        profile.auto_fetch_default(),
     ))
 }
 
@@ -443,7 +445,8 @@ mod tests {
     #[test]
     fn saved_auto_fetch_minutes_defaults_and_reads_back() {
         let store = mgit_model::MemoryStore::new();
-        assert_eq!(saved_auto_fetch_minutes(&store), 5);
+        assert_eq!(saved_auto_fetch_minutes(&store, 5), 5);
+        assert_eq!(saved_auto_fetch_minutes(&store, 0), 0);
         use mgit_model::Store as _;
         for (raw, want) in [
             (r#"{"minutes":0}"#, 0),
@@ -454,7 +457,7 @@ mod tests {
             ("not json", 5),
         ] {
             store.setting_set(AUTO_FETCH_KEY, raw).unwrap();
-            assert_eq!(saved_auto_fetch_minutes(&store), want, "{raw}");
+            assert_eq!(saved_auto_fetch_minutes(&store, 5), want, "{raw}");
         }
     }
 

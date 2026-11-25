@@ -99,8 +99,10 @@ fn shell_quote(path: &Path) -> String {
 
 /// 플랜용 임시 디렉터리 (`<tmp>/mgit-rebase/<pid>-<nanos>/`). 플랜마다 고유해 동시 rebase 가 서로 지우지
 /// 않고, 하루 지난 디렉터리만 정리한다 (edit·충돌로 멈춘 rebase 의 exec 줄이 메시지 파일을 나중에 읽는다)
-fn plan_dir() -> Result<PathBuf, CoreError> {
-    let root = std::env::temp_dir().join("mgit-rebase");
+fn plan_dir(temp_dir: Option<&Path>) -> Result<PathBuf, CoreError> {
+    let root = temp_dir
+        .map(|p| p.join("rebase"))
+        .unwrap_or_else(|| std::env::temp_dir().join("mgit-rebase"));
     std::fs::create_dir_all(&root)?;
     let day_ago = SystemTime::now() - std::time::Duration::from_secs(86_400);
     if let Ok(entries) = std::fs::read_dir(&root) {
@@ -300,7 +302,7 @@ impl Core {
                 .into(),
             ));
         }
-        let dir = plan_dir()?;
+        let dir = plan_dir(self.config().temp_dir.as_deref())?;
         let stacked = if plan.update_refs {
             self.stacked_branches(session).await?
         } else {
@@ -620,6 +622,39 @@ impl Core {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+
+    /// 개발 A의 오래된 자료 정리가 형제 환경 B의 자료에는 접근하지 않는다.
+    #[test]
+    fn plan_cleanup_stays_within_its_runtime_root() {
+        let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/rebase-isolation-tests")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let a = parent.join("a");
+        let b = parent.join("b");
+        let a_plan = super::plan_dir(Some(&a)).unwrap();
+        let b_plan = super::plan_dir(Some(&b)).unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(172_800);
+        std::fs::File::open(&a_plan)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        std::fs::File::open(&b_plan)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        let next = super::plan_dir(Some(&a)).unwrap();
+        assert!(!a_plan.exists());
+        assert!(b_plan.exists());
+        assert!(next.starts_with(a.join("rebase")));
+        std::fs::remove_dir_all(parent).unwrap();
+    }
     use super::*;
 
     #[test]

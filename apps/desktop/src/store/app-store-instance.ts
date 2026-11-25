@@ -5,13 +5,15 @@ import {
   parseMockScene,
   pickDirectory,
 } from '@mgit/ipc';
+import { settingsStorage } from '@mgit/storage';
 import { S } from '@mgit/ui';
+import { runtimeProfile } from '../runtime';
 import { createAppStore } from './app-store';
 
-/** `VITE_MGIT_MOCK=<행 수>` 가 설정돼 있으면 그 수, 아니면 0 */
+/** 명시된 목 행 수를 사용하고 TEST 환경의 기본값은 100, 그 외는 0이다. */
 export function mockRowCount(): number {
   const raw = import.meta.env.VITE_MGIT_MOCK;
-  const n = raw ? Number(raw) : 0;
+  const n = raw ? Number(raw) : runtimeProfile().kind === 'test' ? 100 : 0;
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
@@ -25,7 +27,7 @@ const MOCK_SCENE_KEY = 'mgit.mock.scene';
 function storedMockScene(): MockSceneName | null | undefined {
   let raw: string | null;
   try {
-    raw = globalThis.localStorage?.getItem(MOCK_SCENE_KEY) ?? null;
+    raw = settingsStorage.getItem(MOCK_SCENE_KEY) ?? null;
   } catch {
     return undefined;
   }

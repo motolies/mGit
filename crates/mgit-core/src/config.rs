@@ -30,6 +30,8 @@ pub struct CoreConfig {
     pub command_log_capacity: usize,
     /// discard 백업 사본을 둘 디렉터리 (CHG-04). `None` 이면 임시 디렉터리
     pub backup_dir: Option<PathBuf>,
+    /// 실행 환경별 임시 작업 루트. None은 기존 배포 임시 경로를 유지한다.
+    pub temp_dir: Option<PathBuf>,
     /// diff 를 한 번에 보내는 줄 수 상한 (DIFF-02). 넘으면 앞부분만 보내고 `truncated` 를 켠다
     pub diff_max_lines: u32,
     /// 자동 fetch 간격의 처음 값 (RM-02, 저장소 탭·폴더 공용). `None` 이면 끔. 실행 중에는
@@ -68,6 +70,7 @@ impl Default for CoreConfig {
             index_lock_retry_delay: Duration::from_millis(200),
             command_log_capacity: 500,
             backup_dir: None,
+            temp_dir: None,
             diff_max_lines: 10_000,
             auto_fetch_interval: None,
             backup_keep_days: 30,

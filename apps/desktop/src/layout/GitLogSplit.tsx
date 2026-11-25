@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { useElementWidth } from '@mgit/ui';
 import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useState } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
@@ -164,7 +165,10 @@ export function GitLogSplit({
     collapsed,
     collapse,
   );
-  const detailSplit = useDefaultLayout({ id: GIT_LOG_DETAIL_SPLIT.layoutId });
+  const detailSplit = useDefaultLayout({
+    storage: settingsStorage,
+    id: GIT_LOG_DETAIL_SPLIT.layoutId,
+  });
   return (
     <div className={styles.timeline} ref={side.measureRef}>
       {toolbar}

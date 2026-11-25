@@ -170,6 +170,8 @@ export type {
   ResolutionReviewDto as ResolutionReview,
   RuleActionDto as RuleAction,
   RuleResultDto as RuleResult,
+  RuntimeInfo as RuntimeProfile,
+  RuntimeKind,
   SearchResult,
   SecretHit,
   SecretIgnoreDto as SecretIgnore,

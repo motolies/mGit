@@ -1,3 +1,4 @@
+import { flushSettings, hasPendingSettings } from '@mgit/storage';
 import { guardFileEditorClose } from './store/file-editor-close';
 import { fileEditors } from './store/file-editor-store';
 
@@ -11,7 +12,7 @@ export async function installFileEditorLifecycle(native: boolean): Promise<void>
     if (document.visibilityState === 'visible') refresh();
   }, 2000);
   window.addEventListener('beforeunload', (event) => {
-    if (!fileEditors.hasDirty()) return;
+    if (!fileEditors.hasDirty() && !hasPendingSettings()) return;
     event.preventDefault();
     event.returnValue = '';
   });
@@ -27,7 +28,12 @@ export async function installFileEditorLifecycle(native: boolean): Promise<void>
     if (closing) return;
     closing = true;
     try {
-      if (await guardFileEditorClose()) await current.destroy();
+      if (await guardFileEditorClose()) {
+        await flushSettings();
+        await current.destroy();
+      }
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('mgit-settings-error', { detail: error }));
     } finally {
       closing = false;
     }

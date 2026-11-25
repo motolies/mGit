@@ -15,7 +15,8 @@
     "@lezer/highlight": "^1.2.5",
     "@mgit/ipc": "workspace:*",
     "@mgit/ui": "workspace:*",
-    "@tanstack/react-virtual": "^3.14.23"
+    "@tanstack/react-virtual": "^3.14.23",
+    "@mgit/storage": "workspace:*"
   },
   "peerDependencies": {
     "react": "catalog:",

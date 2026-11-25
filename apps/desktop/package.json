@@ -4,10 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev:web": "vite",
+    "dev:web": "node ../../scripts/dev.mjs --web",
     "build:web": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev": "node ../../scripts/dev.mjs",
+    "dev:test": "node ../../scripts/dev.mjs --test"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -21,6 +23,7 @@
     "@mgit/graph-view": "workspace:*",
     "@mgit/ipc": "workspace:*",
     "@mgit/merge-editor": "workspace:*",
+    "@mgit/storage": "workspace:*",
     "@mgit/terminal": "workspace:*",
     "@mgit/ui": "workspace:*",
     "@radix-ui/react-context-menu": "^2.4.1",

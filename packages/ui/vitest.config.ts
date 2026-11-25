@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
+import { testCacheDir } from '../../scripts/test-cache.ts';
 
 export default defineConfig({
+  cacheDir: testCacheDir('ui'),
   test: {
     name: 'ui',
     environment: 'jsdom',

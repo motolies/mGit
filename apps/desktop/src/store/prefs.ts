@@ -1,7 +1,8 @@
+import { settingsStorage } from '@mgit/storage';
 /** 사용자 설정 (localStorage). private 모드·차단 환경에서는 조용히 기본값을 쓴다 */
 export function readPref<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = settingsStorage.getItem(key);
     if (raw === null) {
       return fallback;
     }
@@ -22,7 +23,7 @@ export function readPref<T>(key: string, fallback: T): T {
 /** 설정 저장. 실패는 무시한다 */
 export function writePref(key: string, value: unknown): void {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    settingsStorage.setItem(key, JSON.stringify(value));
   } catch {
     // 무시
   }

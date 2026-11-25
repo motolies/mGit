@@ -1,5 +1,6 @@
 import { S } from '@mgit/ui';
 import { branchText, syncTexts } from '../features/project/project-rows';
+import { runtimeProfile } from '../runtime';
 import type { LoadState } from '../store';
 import {
   headBranchOf,
@@ -127,6 +128,9 @@ export function StatusBar() {
 
   return (
     <footer className={styles.statusBar}>
+      {runtimeProfile().kind !== 'production' ? (
+        <span className={styles.branch}>{runtimeProfile().title}</span>
+      ) : null}
       {folderTab ? (
         <FolderRepoStatus />
       ) : (

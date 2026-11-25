@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { useLayoutEffect, useRef } from 'react';
 import {
   type Layout,
@@ -46,6 +47,7 @@ export function sidePercentOf(split: SideSplit, layout: Layout | undefined): num
 export function useSideSplit(split: SideSplit, collapsed: boolean, onUserCollapse: () => void) {
   const groupRef = useGroupRef();
   const { defaultLayout: saved, onLayoutChanged: saveLayout } = useDefaultLayout({
+    storage: settingsStorage,
     id: split.layoutId,
   });
   // 펼친 상태의 크기. 접었다가 펼 때 이 크기로 돌아간다

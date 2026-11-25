@@ -83,6 +83,9 @@ importers:
       '@mgit/merge-editor':
         specifier: workspace:*
         version: link:../../packages/merge-editor
+      '@mgit/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@mgit/terminal':
         specifier: workspace:*
         version: link:../../packages/terminal
@@ -171,6 +174,9 @@ importers:
       '@mgit/ipc':
         specifier: workspace:*
         version: link:../ipc
+      '@mgit/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@mgit/ui':
         specifier: workspace:*
         version: link:../ui
@@ -218,6 +224,9 @@ importers:
 
   packages/ipc:
     dependencies:
+      '@mgit/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@tauri-apps/api':
         specifier: ^2.12.4
         version: 2.12.4
@@ -264,6 +273,8 @@ importers:
       react-dom:
         specifier: 'catalog:'
         version: 19.3.1(react@19.3.1)
+
+  packages/storage: {}
 
   packages/terminal:
     dependencies:

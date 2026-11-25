@@ -68,7 +68,15 @@ function fixture() {
   ];
   for (const name of fs.readdirSync(path.join(ROOT, 'crates')))
     files.push(`crates/${name}/Cargo.toml`);
-  for (const name of ['ipc', 'ui', 'graph-view', 'diff-view', 'merge-editor', 'terminal'])
+  for (const name of [
+    'ipc',
+    'ui',
+    'graph-view',
+    'diff-view',
+    'merge-editor',
+    'terminal',
+    'storage',
+  ])
     files.push(`packages/${name}/package.json`);
   for (const file of files) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -420,4 +428,52 @@ test('all resumes a failed build without changing its existing commit or tag', (
   assert.equal(git(root, 'rev-parse', 'HEAD'), before);
   assert.equal(git(root, 'rev-parse', 'v1.2.3'), tag);
   assert.throws(() => main(['all'], context(root)), /Release already exists/);
+});
+
+// 환경 오염을 발견하면 버전 파일·커밋·태그 생성 전에 실패해야 한다.
+test('all release entrypoints reject development environment before writes', () => {
+  const root = fixture();
+  const before = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+  const commit = git(root, 'rev-parse', 'HEAD');
+  for (const key of [
+    'MGIT_RUNTIME_MODE',
+    'MGIT_CHECKOUT_ROOT',
+    'MGIT_WORKTREE_ID',
+    'MGIT_RUNTIME_ROOT',
+    'MGIT_TEST_RUN_ID',
+    'VITE_MGIT_RUNTIME_MODE',
+    'TAURI_CONFIG',
+  ]) {
+    for (const args of [['prepare', '3.0.0'], ['tag'], ['all', '3.0.0'], ['check'], ['macos']]) {
+      const ctx = context(root);
+      ctx.env[key] = 'private-value';
+      assert.throws(
+        () => main(args, ctx),
+        (error) => error.message.includes(key) && !error.message.includes('private-value'),
+      );
+    }
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), before);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), commit);
+  assert.equal(git(root, 'tag', '--list'), '');
+});
+
+test('release rejects persisted development config and runtime env files', () => {
+  const root = fixture();
+  const configFile = path.join(root, 'apps/desktop/src-tauri/tauri.conf.json');
+  const base = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  for (const override of [
+    { identifier: 'io.github.motolies.mgit.dev.a' },
+    { productName: 'mGit Dev' },
+    { app: { windows: [{ dataStoreIdentifier: Array(16).fill(1) }] } },
+  ]) {
+    fs.writeFileSync(configFile, JSON.stringify({ ...base, ...override }));
+    assert.throws(() => main(['prepare', '3.0.0', '--dry-run'], context(root)), /Non-production/);
+  }
+  fs.writeFileSync(configFile, JSON.stringify(base));
+  fs.writeFileSync(path.join(root, 'apps/desktop/.env.local'), 'MGIT_RUNTIME_MODE=development\n');
+  assert.throws(
+    () => main(['prepare', '3.0.0', '--dry-run'], context(root)),
+    /Runtime setting in environment file/,
+  );
 });

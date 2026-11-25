@@ -1,3 +1,4 @@
+import { settingsStorage } from '@mgit/storage';
 import { type Locale, setStringsLocale } from '@mgit/ui';
 
 // 화면 언어 (다국어 L3): 시스템 언어 따름·한국어·영어. 결과는 문구 사전(`S`)·날짜·숫자 포맷과 <html lang> 에 적용하고,
@@ -54,7 +55,7 @@ export function applyLanguage(locale: Locale): void {
 /** 저장된 선호를 읽는다. 저장소 접근이 막혀 있거나 값이 이상하면 system */
 export function loadLanguagePreference(): LanguagePreference {
   try {
-    const raw = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    const raw = settingsStorage.getItem(LANGUAGE_STORAGE_KEY);
     if (raw === 'system' || raw === 'ko' || raw === 'en') {
       return raw;
     }
@@ -67,7 +68,7 @@ export function loadLanguagePreference(): LanguagePreference {
 /** 선호를 저장한다. 실패해도 이번 실행의 언어는 바뀌므로 무시한다 */
 export function saveLanguagePreference(pref: LanguagePreference): void {
   try {
-    localStorage.setItem(LANGUAGE_STORAGE_KEY, pref);
+    settingsStorage.setItem(LANGUAGE_STORAGE_KEY, pref);
   } catch {
     // 무시
   }

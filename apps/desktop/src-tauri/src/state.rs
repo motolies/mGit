@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use mgit_core::{
     AskpassService, Core, CoreConfig, CredentialPrompt, CredentialReply, CredentialRequest,
-    KeyringVault, PromptKind,
+    KeyringVault, MemoryVault, PromptKind, SecretVault,
 };
 use mgit_git::{RunnerConfig, TokioGitRunner, login_shell_path};
 use mgit_model::{MemoryStore, Store};
@@ -18,6 +18,7 @@ use tokio::sync::oneshot;
 
 use crate::app_events::{AppEvent, AppEvents};
 use crate::error::IpcError;
+use crate::runtime_profile::{RuntimeKind, RuntimeProfile};
 
 /// 조립된 코어 핸들. `git_path` 는 코어가 노출하지 않으므로 셸이 보관한다
 pub struct CoreHandle {
@@ -109,20 +110,35 @@ impl AppState {
     /// 시스템 git 을 찾아 버전을 검사하고 코어를 조립한다.
     /// `data_dir` 가 있으면 그 안에 SQLite DB(`mgit.db`)와 백업 디렉터리를 둔다.
     /// macOS 는 로그인 셸 PATH 를 합치고, askpass 서버를 띄워 네트워크 명령 환경에 붙인다
-    pub async fn build(data_dir: Option<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub async fn build(_data_dir: Option<PathBuf>) -> Self {
+        let profile = RuntimeProfile::isolated(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."),
+            RuntimeKind::Test,
+            &uuid::Uuid::new_v4().simple().to_string(),
+        )
+        .expect("테스트 환경 생성 실패");
+        let data_dir = profile.root.clone().expect("테스트 경로 없음");
+        std::fs::create_dir_all(&data_dir).expect("테스트 경로 생성 실패");
+        Self::build_profile(Some(data_dir), &profile).await
+    }
+
+    /// 결정된 환경의 저장소·vault만 사용해 네이티브 의존성을 조립한다.
+    pub async fn build_profile(data_dir: Option<PathBuf>, profile: &RuntimeProfile) -> Self {
         let app_events = Arc::new(AppEvents::default());
         let credentials = Arc::new(CredentialHub::default());
         let login_path = login_shell_path().await;
-        let core = build_core(data_dir, login_path.clone()).await;
+        let core = build_core(data_dir, login_path.clone(), profile).await;
+        let vault = runtime_vault(profile);
         let askpass = match &core {
             Ok(handle) => {
                 // 호스팅 토큰도 키체인에 둔다 (B1)
-                handle.core.set_secret_vault(Arc::new(KeyringVault));
+                handle.core.set_secret_vault(Arc::clone(&vault));
                 let prompt = Arc::new(TauriPrompt {
                     events: Arc::clone(&app_events),
                     hub: Arc::clone(&credentials),
                 });
-                match AskpassService::start(Arc::new(KeyringVault), prompt) {
+                match AskpassService::start(vault, prompt) {
                     Ok(service) => {
                         if let Ok(exe) = std::env::current_exe() {
                             handle.runner.set_network_env(service.env_vars(&exe));
@@ -183,16 +199,19 @@ impl AppState {
     }
 }
 
-/// 로컬 저장소를 연다. 파일 DB 를 못 열면 메모리 저장소로 대체한다 (앱은 떠야 한다)
-fn open_store(data_dir: Option<&PathBuf>) -> Arc<dyn Store> {
+/// 로컬 저장소를 연다. 배포만 기존 메모리 대체를 유지하고 격리 환경의 파일 오류는 전달한다.
+fn open_store(data_dir: Option<&PathBuf>, strict: bool) -> Result<Arc<dyn Store>, IpcError> {
     let Some(dir) = data_dir else {
-        return Arc::new(MemoryStore::new());
+        return Ok(Arc::new(MemoryStore::new()));
     };
     match SqliteStore::open(&dir.join("mgit.db")) {
-        Ok(store) => Arc::new(store),
+        Ok(store) => Ok(Arc::new(store)),
+        Err(e) if strict => Err(IpcError::Internal {
+            message: e.to_string(),
+        }),
         Err(e) => {
             tracing::warn!(error = %e, "SQLite 저장소를 열 수 없어 메모리 저장소를 쓴다");
-            Arc::new(MemoryStore::new())
+            Ok(Arc::new(MemoryStore::new()))
         }
     }
 }
@@ -201,6 +220,7 @@ fn open_store(data_dir: Option<&PathBuf>) -> Arc<dyn Store> {
 async fn build_core(
     data_dir: Option<PathBuf>,
     login_path: Option<String>,
+    profile: &RuntimeProfile,
 ) -> Result<CoreHandle, IpcError> {
     let runner_cfg = RunnerConfig {
         extra_env: login_path
@@ -211,11 +231,16 @@ async fn build_core(
     };
     let runner = Arc::new(TokioGitRunner::new(runner_cfg).await?);
     let git_path = runner.git_path().display().to_string();
-    let store = open_store(data_dir.as_ref());
-    // 자동 fetch 간격은 설정(⌘,)에 저장된 값이다 (없으면 5분). 실행 중 변경은 `auto_fetch_set` 이 코어에 바로 건다
-    let auto_fetch_minutes = crate::commands_app::saved_auto_fetch_minutes(store.as_ref());
+    let store = open_store(
+        data_dir.as_ref(),
+        profile.info.kind != RuntimeKind::Production,
+    )?;
+    // 자동 fetch 간격은 저장된 설정을 우선하고 첫 실행만 배포 5분·개발/테스트 끔을 적용한다.
+    let auto_fetch_minutes =
+        crate::commands_app::saved_auto_fetch_minutes(store.as_ref(), profile.auto_fetch_default());
     let cfg = CoreConfig {
         backup_dir: data_dir.map(|d| d.join("backups")),
+        temp_dir: profile.root.as_ref().map(|d| d.join("temp")),
         auto_fetch_interval: crate::commands_app::auto_fetch_interval(auto_fetch_minutes),
         command_path: login_path,
         ..CoreConfig::default()
@@ -231,4 +256,93 @@ async fn build_core(
         git_path,
         runner,
     })
+}
+
+/// 테스트는 항상 메모리 금고를 만들며 개발·배포만 해당 환경의 키체인 service를 사용한다.
+fn runtime_vault(profile: &RuntimeProfile) -> Arc<dyn SecretVault> {
+    if profile.info.kind == RuntimeKind::Test {
+        Arc::new(MemoryVault::default())
+    } else {
+        Arc::new(KeyringVault::new(&profile.keyring_service))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// 테스트 실행의 DB·최근 저장소·계정·자동 fetch·백업 경로가 다른 실행과 섞이지 않는다.
+    #[test]
+    fn test_app_state_uses_independent_stores_and_defaults() {
+        tauri::async_runtime::block_on(async {
+            let a = AppState::build(None).await;
+            let b = AppState::build(None).await;
+            let a = &a.core().unwrap().core;
+            let b = &b.core().unwrap().core;
+            assert_eq!(a.auto_fetch_interval(), None);
+            assert_eq!(b.auto_fetch_interval(), None);
+            assert_ne!(a.config().backup_dir, b.config().backup_dir);
+            assert_ne!(a.config().temp_dir, b.config().temp_dir);
+            let recent = a.config().temp_dir.as_ref().unwrap().join("test-repo");
+            a.store()
+                .recent_touch(&recent, mgit_model::RecentKind::Repo, "test-repo")
+                .unwrap();
+            assert_eq!(a.store().recent_list().unwrap().len(), 1);
+            assert!(b.store().recent_list().unwrap().is_empty());
+            a.store().open_tabs_set(&[recent]).unwrap();
+            assert!(b.store().open_tabs_get().unwrap().is_empty());
+            a.store().setting_set("hosting.accounts", r#"[{"id":"github:github.com:test","kind":"github","host":"github.com","user":"test"}]"#).unwrap();
+            assert_eq!(a.hosting_accounts().len(), 1);
+            assert!(b.hosting_accounts().is_empty());
+            a.store()
+                .setting_set("autoFetch", r#"{"minutes":15}"#)
+                .unwrap();
+            assert_eq!(
+                crate::commands_app::saved_auto_fetch_minutes(a.store().as_ref(), 0),
+                15
+            );
+            assert_eq!(
+                crate::commands_app::saved_auto_fetch_minutes(b.store().as_ref(), 0),
+                0
+            );
+        });
+    }
+
+    /// 테스트 금고는 키체인에 접근하지 않고 Askpass와 공유하며 다른 실행에는 비밀이 없다.
+    #[test]
+    fn test_vault_is_memory_only_and_shared_with_askpass() {
+        tauri::async_runtime::block_on(async {
+            let profile = RuntimeProfile::isolated(
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."),
+                RuntimeKind::Test,
+                "vault-test",
+            )
+            .unwrap();
+            let a = runtime_vault(&profile);
+            let b = runtime_vault(&profile);
+            let key = mgit_core::vault_key(PromptKind::Password, "https://example.invalid");
+            a.set(&key, "test-only-secret").unwrap();
+            a.set("hosting:github:github.com:test", "test-only-token")
+                .unwrap();
+            assert_eq!(b.get(&key), None);
+            assert_eq!(b.get("hosting:github:github.com:test"), None);
+            let prompt = Arc::new(TauriPrompt {
+                events: Arc::new(AppEvents::default()),
+                hub: Arc::new(CredentialHub::default()),
+            });
+            let service = AskpassService::start(Arc::clone(&a), prompt).unwrap();
+            let answer = mgit_helper::request_with(
+                service.socket(),
+                service.token(),
+                "Password for 'https://example.invalid': ",
+                None,
+                true,
+            )
+            .await;
+            assert_eq!(answer.as_deref(), Some("test-only-secret"));
+            service.forget("https://example.invalid");
+            assert_eq!(a.get(&key), None);
+        });
+    }
 }

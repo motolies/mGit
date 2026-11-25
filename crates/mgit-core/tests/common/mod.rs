@@ -17,6 +17,7 @@ pub async fn core() -> Core {
 
 /// 설정을 지정해 코어를 만든다 (감시 없음)
 pub async fn core_with(cfg: CoreConfig) -> Core {
+    let cfg = isolated_config(cfg);
     let runner = TokioGitRunner::new(RunnerConfig::default()).await.unwrap();
     Core::new(Arc::new(runner), cfg)
 }
@@ -31,8 +32,24 @@ pub async fn core_watching() -> Core {
             ..NotifyWatcher::default()
         }),
         Arc::new(MemoryStore::new()),
-        CoreConfig::default(),
+        isolated_config(CoreConfig::default()),
     )
+}
+
+/// 테스트의 rebase 자료와 폐기 백업이 배포·다른 테스트의 임시 자료에 접근하지 않게 한다.
+fn isolated_config(mut cfg: CoreConfig) -> CoreConfig {
+    let parent =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/core-test-runtime");
+    std::fs::create_dir_all(&parent).unwrap();
+    // 코어가 살아 있는 동안 유지하며 실패 시 분석할 수 있도록 checkout의 target 아래에 남긴다.
+    let root = tempfile::tempdir_in(parent).unwrap().keep();
+    if cfg.temp_dir.is_none() {
+        cfg.temp_dir = Some(root.join("temp"));
+    }
+    if cfg.backup_dir.is_none() {
+        cfg.backup_dir = Some(root.join("backups"));
+    }
+    cfg
 }
 
 /// 이벤트를 채널로 모으는 sink

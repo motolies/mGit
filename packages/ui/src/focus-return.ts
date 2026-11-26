@@ -1,12 +1,21 @@
 /** 출발 요소가 사라지면 같은 묶음의 다음 항목·이전 항목·영역 순서로 복귀한다 */
-export function captureFocusReturn(): () => void {
-  const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+export function captureFocusReturn(originOverride?: HTMLElement | null): () => void {
+  const origin =
+    originOverride === undefined
+      ? document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+      : originOverride;
   const area =
     origin?.closest<HTMLElement>(
       '[role="tree"], [role="tablist"], [data-panel], [role="toolbar"]',
     ) ?? null;
   const items = area
-    ? [...area.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex], input, textarea')]
+    ? [
+        ...area.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [tabindex], input, textarea, select',
+        ),
+      ]
     : [];
   const index = origin ? items.indexOf(origin) : -1;
   const fallback =

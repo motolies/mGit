@@ -4,7 +4,9 @@ import { useEffect, useRef } from 'react';
 export { captureFocusReturn } from '@mgit/ui';
 
 /** `<dialog>` 를 상태에 맞춰 열고 닫으며 취소·언마운트 뒤 출발 영역으로 포커스를 돌린다 */
-export function useModal(open: boolean) {
+export function useModal(open: boolean, options?: { restoreFocus?: () => boolean }) {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const ref = useRef<HTMLDialogElement>(null);
   const returnFocus = useRef<(() => void) | null>(null);
   useEffect(() => {
@@ -16,7 +18,8 @@ export function useModal(open: boolean) {
         const shouldRestore = active === document.body || active === null || el.contains(active);
         if (typeof el.close === 'function') el.close();
         else el.removeAttribute('open');
-        if (shouldRestore) returnFocus.current?.();
+        if (shouldRestore && optionsRef.current?.restoreFocus?.() !== false)
+          returnFocus.current?.();
       }
       return;
     }
@@ -29,7 +32,11 @@ export function useModal(open: boolean) {
     }
     return () => {
       const active = document.activeElement;
-      if (!el.isConnected && (active === document.body || active === null || el.contains(active))) {
+      if (
+        optionsRef.current?.restoreFocus?.() !== false &&
+        !el.isConnected &&
+        (active === document.body || active === null || el.contains(active))
+      ) {
         returnFocus.current?.();
       }
     };

@@ -9,7 +9,9 @@ import {
   useFolder,
   useWorkspace,
 } from '../../store';
+import { diffArrival } from '../../store/diff-origin';
 import type { CommitDiffTarget, RangeDiffTarget } from '../../store/workspace-store';
+import { commitDiffDoc, rangeDiffDoc } from '../../store/workspace-store';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
 import { useCurrentFile } from '../workspace/use-current-file';
 import { DiffPaneView } from './DiffPaneView';
@@ -34,6 +36,7 @@ export function HistoricalDiffDoc({ doc }: { doc: CommitDiffTarget | RangeDiffTa
     options: state.diffOptions,
     setMode: state.setDiffMode,
     setOptions: state.setDiffOptions,
+    navigate: state.navigateDiffDoc,
   }));
   const [loaded, setLoaded] = useState<LoadedDiff>(LOADING);
   const [fullTarget, setFullTarget] = useState<string | null>(null);
@@ -95,8 +98,31 @@ export function HistoricalDiffDoc({ doc }: { doc: CommitDiffTarget | RangeDiffTa
     doc.kind === 'rangeDiff'
       ? { kind: 'range', a: doc.base, b: doc.newer, threeDot: false, path }
       : { kind: 'commit', oid: doc.oid, path };
+  const origin = doc.origin;
+  const files = origin?.repoPath === repoPath ? origin.files : [];
+  const index = files.findIndex((file) => file.path === path);
+  const current = doc.kind === 'commitDiff' ? commitDiffDoc(doc) : rangeDiffDoc(doc);
+  const navigation =
+    origin && index >= 0
+      ? {
+          index,
+          total: files.length,
+          move: (direction: 1 | -1) => {
+            const next = files[index + direction];
+            if (!next) return;
+            const arrival = diffArrival(direction);
+            const request =
+              doc.kind === 'commitDiff'
+                ? commitDiffDoc({ ...doc, path: next.path, oldPath: next.oldPath ?? null, arrival })
+                : rangeDiffDoc({ ...doc, path: next.path, arrival });
+            ws.navigate(current.id, request);
+          },
+        }
+      : undefined;
   return (
     <DiffPaneView
+      fileNavigation={navigation}
+      arrival={doc.arrival}
       path={path}
       areaLabel={`${doc.kind === 'rangeDiff' ? doc.label : S.diff.commitLabel(shortHash(doc.oid))} · ${doc.repoName}`}
       note={doc.kind === 'commitDiff' && doc.merge ? S.diff.mergeFirstParent : undefined}

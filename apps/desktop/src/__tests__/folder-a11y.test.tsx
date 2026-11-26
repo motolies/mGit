@@ -337,7 +337,11 @@ describe('에디터 탭 막대 (tablist)', () => {
     renderTabs('b');
     const tabs = screen.getAllByRole('tab');
     expect(tabs.map((t) => t.getAttribute('tabindex'))).toEqual(['-1', '0', '-1']);
-    expect(tabStops().length).toBe(1);
+    expect(tabStops(screen.getByRole('tablist'))).toEqual([tabs[1]]);
+    expect(tabStops()).toEqual([
+      tabs[1],
+      screen.getByRole('button', { name: S.workspace.editorTabs }),
+    ]);
     const panel = document.getElementById(tabs[1]?.getAttribute('aria-controls') ?? '');
     expect(panel?.getAttribute('role')).toBe('tabpanel');
   });

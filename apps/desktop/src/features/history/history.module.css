@@ -84,6 +84,8 @@
 
 /* blame */
 .blame {
+  min-width: 0;
+  max-width: 100%;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -93,9 +95,21 @@
   min-height: 200px;
 }
 
+/* 모든 줄이 가장 긴 코드 줄의 폭을 공유해 가로 스크롤과 행 배경이 함께 이어진다. */
+.blameContent {
+  width: max-content;
+  min-width: 100%;
+}
+
+.blame:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+
 .blameRow {
   display: grid;
-  grid-template-columns: 300px 48px minmax(0, 1fr);
+  grid-template-columns: 300px 48px max-content;
+  min-width: 100%;
   column-gap: 8px;
   white-space: pre;
 }
@@ -131,8 +145,8 @@
 }
 
 .lineText {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding-right: 12px;
+  white-space: pre;
   tab-size: 4;
 }
 
@@ -227,4 +241,17 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+}
+
+.separator {
+  width: 6px;
+  min-width: 6px;
+  flex: 0 0 6px;
+  background: var(--border);
+  cursor: col-resize;
+}
+.separator:hover,
+.separator:focus-visible {
+  background: var(--accent);
+  outline: none;
 }

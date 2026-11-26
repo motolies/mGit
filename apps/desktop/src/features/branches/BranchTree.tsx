@@ -12,6 +12,7 @@ import {
 import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { openContextMenuAt, siblingPositions, treeKeyCommand } from '../../components/tree-keys';
+import { revealTreeRowVertically, useTreeContentWidth } from '../../components/tree-width';
 import styles from './BranchTree.module.css';
 import {
   type BranchBadge,
@@ -194,6 +195,33 @@ export const BranchTree = memo(function BranchTree({
     () => flattenBranchTree(filterBranchTree(nodes, search), expansion, searching),
     [nodes, search, expansion, searching],
   );
+  const widthRows = useMemo(
+    () =>
+      rows.map(({ node, depth, expandable }) => ({
+        depth,
+        icons: (expandable ? 1 : 0) + (iconOf(node) ? 1 : 0),
+        texts: [
+          { text: node.label, bold: node.current === true || (expandable && depth === 0) },
+          ...[
+            node.count === undefined ? null : String(node.count),
+            node.suffix,
+            node.track?.behind ? S.branches.incoming(node.track.behind) : null,
+            node.track?.ahead ? S.branches.outgoing(node.track.ahead) : null,
+            node.track?.gone ? S.sidebar.gone : null,
+            ...(node.badges ?? []).map((badge) => badge.text),
+          ]
+            .filter((value): value is string => !!value)
+            .map((text) => ({ text })),
+        ],
+        extra:
+          (node.badges?.length ?? 0) * 18 +
+          (rowActions?.(node).length ?? 0) * 24 +
+          26 +
+          (!expandable && depth === 0 ? 20 : 0),
+      })),
+    [rows, rowActions],
+  );
+  const contentWidth = useTreeContentWidth(treeRef, widthRows);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   // 키 규칙이 보는 행 모양
   const keyRows = useMemo(
@@ -237,9 +265,10 @@ export const BranchTree = memo(function BranchTree({
       return;
     }
     setCursorId(row.node.id);
-    treeRef.current
-      ?.querySelector<HTMLElement>(`[data-row-index="${at}"]`)
-      ?.scrollIntoView?.({ block: 'nearest' });
+    revealTreeRowVertically(
+      treeRef.current,
+      treeRef.current?.querySelector<HTMLElement>(`[data-row-index="${at}"]`),
+    );
   };
 
   /** 노드를 펼치거나 접는다. 검색 중에는 모두 펼쳐 보이므로 바꾸지 않는다 */
@@ -343,123 +372,127 @@ export const BranchTree = memo(function BranchTree({
           tabIndex={0}
           onKeyDown={onKeyDown}
         >
-          {rows.map((row, index) => {
-            const { node } = row;
-            const icon = iconOf(node);
-            const favorite = node.favorite === true;
-            // 덧붙인 설명은 툴팁이 필요할 때 만든다: 키보드 커서 행(보조 기술이 설명을 읽는다)만 렌더에서, 나머지는 마우스가
-            // 올라갈 때
-            const lazyTitle = node.detail !== undefined && index !== cursorIndex;
-            return (
-              // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
-              // biome-ignore lint/a11y/useFocusableInteractive: 트리가 포커스를 받고 행은 activedescendant 로 알린다
-              // biome-ignore lint/a11y/useKeyWithClickEvents: 키보드 조작은 트리의 onKeyDown 이 맡는다
-              <div
-                key={node.id}
-                id={rowDomId(index)}
-                className={styles.row}
-                role="treeitem"
-                aria-level={row.depth + 1}
-                aria-setsize={positions[index]?.setSize}
-                aria-posinset={positions[index]?.posInSet}
-                aria-selected={selected.has(node.id)}
-                aria-expanded={row.expandable ? row.expanded : undefined}
-                aria-current={node.current === true ? 'true' : undefined}
-                data-row-index={index}
-                data-node-id={node.id}
-                data-leaf={row.expandable ? 'false' : 'true'}
-                data-cursor={index === cursorIndex ? 'true' : 'false'}
-                style={{ '--depth': row.depth } as CSSProperties}
-                title={lazyTitle ? undefined : rowTitle(node)}
-                onMouseEnter={node.detail ? (e) => fillLazyTitle(e.currentTarget, node) : undefined}
-                onClick={(e) => {
-                  setCursorId(node.id);
-                  if (row.expandable) {
-                    setExpanded(row, !row.expanded);
-                  } else {
-                    onActivate(node, { additive: e.metaKey || e.ctrlKey });
+          <div className={styles.inner} role="presentation" style={{ minWidth: contentWidth }}>
+            {rows.map((row, index) => {
+              const { node } = row;
+              const icon = iconOf(node);
+              const favorite = node.favorite === true;
+              // 덧붙인 설명은 툴팁이 필요할 때 만든다: 키보드 커서 행(보조 기술이 설명을 읽는다)만 렌더에서, 나머지는 마우스가
+              // 올라갈 때
+              const lazyTitle = node.detail !== undefined && index !== cursorIndex;
+              return (
+                // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
+                // biome-ignore lint/a11y/useFocusableInteractive: 트리가 포커스를 받고 행은 activedescendant 로 알린다
+                // biome-ignore lint/a11y/useKeyWithClickEvents: 키보드 조작은 트리의 onKeyDown 이 맡는다
+                <div
+                  key={node.id}
+                  id={rowDomId(index)}
+                  className={styles.row}
+                  role="treeitem"
+                  aria-level={row.depth + 1}
+                  aria-setsize={positions[index]?.setSize}
+                  aria-posinset={positions[index]?.posInSet}
+                  aria-selected={selected.has(node.id)}
+                  aria-expanded={row.expandable ? row.expanded : undefined}
+                  aria-current={node.current === true ? 'true' : undefined}
+                  data-row-index={index}
+                  data-node-id={node.id}
+                  data-leaf={row.expandable ? 'false' : 'true'}
+                  data-cursor={index === cursorIndex ? 'true' : 'false'}
+                  style={{ '--depth': row.depth } as CSSProperties}
+                  title={lazyTitle ? undefined : rowTitle(node)}
+                  onMouseEnter={
+                    node.detail ? (e) => fillLazyTitle(e.currentTarget, node) : undefined
                   }
-                }}
-                onDoubleClick={() => {
-                  if (!row.expandable) {
-                    onOpen(node);
-                  }
-                }}
-                onContextMenu={() => setCursorId(node.id)}
-              >
-                {row.expandable ? (
-                  <span className={styles.twisty}>
-                    <Icon name={row.expanded ? 'chevronDown' : 'chevronRight'} />
-                  </span>
-                ) : null}
-                {icon ? (
-                  <span className={styles.icon} data-tone={icon.tone} title={icon.title}>
-                    <Icon name={icon.name} />
-                  </span>
-                ) : null}
-                <span className={styles.label}>{node.label}</span>
-                {node.count !== undefined ? (
-                  <span className={styles.count}>{node.count}</span>
-                ) : null}
-                {node.track ? <TrackMarks track={node.track} title={node.trackTitle} /> : null}
-                {node.suffix ? <span className={styles.suffix}>{node.suffix}</span> : null}
-                {(node.badges ?? []).map((badge) => (
-                  <span
-                    key={`${badge.icon}:${badge.title}`}
-                    className={styles.badge}
-                    data-icon={badge.icon}
-                    title={badge.title}
-                  >
-                    <Icon name={BADGE_ICON[badge.icon]} />
-                    {badge.text}
-                  </span>
-                ))}
-                {(rowActions?.(node) ?? NO_ROW_ACTIONS).map((action) => (
-                  <button
-                    key={action.key}
-                    type="button"
-                    className={styles.rowAction}
-                    // 행마다 탭 정지를 만들지 않는다. 키보드로는 그 행의 우클릭 메뉴가 같은 일을 한다
-                    tabIndex={-1}
-                    aria-label={action.label}
-                    title={action.title ?? action.label}
-                    disabled={action.disabled}
-                    data-action={action.key}
-                    // 누르는 동안 트리의 포커스(선택 색)를 뺏지 않는다
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      // 행 클릭(그룹 접고 펴기)으로 번지지 않게 한다
-                      e.stopPropagation();
-                      action.onSelect();
-                    }}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  >
-                    <Icon name={action.icon} />
-                  </button>
-                ))}
-                {node.favoritable ? (
-                  <button
-                    type="button"
-                    className={styles.star}
-                    // 행마다 탭 정지를 만들지 않는다. 키보드로는 메뉴와 세로 툴바가 같은 일을 한다
-                    tabIndex={-1}
-                    aria-label={favorite ? S.branches.removeFavorite : S.branches.addFavorite}
-                    aria-pressed={favorite}
-                    title={favorite ? S.branches.removeFavorite : S.branches.addFavorite}
-                    // 누르는 동안 트리의 포커스(선택 색)를 뺏지 않는다
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleFavorite(node);
-                    }}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  >
-                    <Icon name={favorite ? 'star' : 'starEmpty'} />
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
+                  onClick={(e) => {
+                    setCursorId(node.id);
+                    if (row.expandable) {
+                      setExpanded(row, !row.expanded);
+                    } else {
+                      onActivate(node, { additive: e.metaKey || e.ctrlKey });
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    if (!row.expandable) {
+                      onOpen(node);
+                    }
+                  }}
+                  onContextMenu={() => setCursorId(node.id)}
+                >
+                  {row.expandable ? (
+                    <span className={styles.twisty}>
+                      <Icon name={row.expanded ? 'chevronDown' : 'chevronRight'} />
+                    </span>
+                  ) : null}
+                  {icon ? (
+                    <span className={styles.icon} data-tone={icon.tone} title={icon.title}>
+                      <Icon name={icon.name} />
+                    </span>
+                  ) : null}
+                  <span className={styles.label}>{node.label}</span>
+                  {node.count !== undefined ? (
+                    <span className={styles.count}>{node.count}</span>
+                  ) : null}
+                  {node.track ? <TrackMarks track={node.track} title={node.trackTitle} /> : null}
+                  {node.suffix ? <span className={styles.suffix}>{node.suffix}</span> : null}
+                  {(node.badges ?? []).map((badge) => (
+                    <span
+                      key={`${badge.icon}:${badge.title}`}
+                      className={styles.badge}
+                      data-icon={badge.icon}
+                      title={badge.title}
+                    >
+                      <Icon name={BADGE_ICON[badge.icon]} />
+                      {badge.text}
+                    </span>
+                  ))}
+                  {(rowActions?.(node) ?? NO_ROW_ACTIONS).map((action) => (
+                    <button
+                      key={action.key}
+                      type="button"
+                      className={styles.rowAction}
+                      // 행마다 탭 정지를 만들지 않는다. 키보드로는 그 행의 우클릭 메뉴가 같은 일을 한다
+                      tabIndex={-1}
+                      aria-label={action.label}
+                      title={action.title ?? action.label}
+                      disabled={action.disabled}
+                      data-action={action.key}
+                      // 누르는 동안 트리의 포커스(선택 색)를 뺏지 않는다
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        // 행 클릭(그룹 접고 펴기)으로 번지지 않게 한다
+                        e.stopPropagation();
+                        action.onSelect();
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <Icon name={action.icon} />
+                    </button>
+                  ))}
+                  {node.favoritable ? (
+                    <button
+                      type="button"
+                      className={styles.star}
+                      // 행마다 탭 정지를 만들지 않는다. 키보드로는 메뉴와 세로 툴바가 같은 일을 한다
+                      tabIndex={-1}
+                      aria-label={favorite ? S.branches.removeFavorite : S.branches.addFavorite}
+                      aria-pressed={favorite}
+                      title={favorite ? S.branches.removeFavorite : S.branches.addFavorite}
+                      // 누르는 동안 트리의 포커스(선택 색)를 뺏지 않는다
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleFavorite(node);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <Icon name={favorite ? 'star' : 'starEmpty'} />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </ContextMenuArea>
     </div>

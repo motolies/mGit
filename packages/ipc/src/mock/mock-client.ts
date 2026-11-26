@@ -2344,6 +2344,14 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         staged ? 'Index' : 'Working tree',
       );
     },
+    async stashFileDiffDocument(session, oid, path, full, options) {
+      const file = (await this.stashFiles(session, oid)).find((entry) => entry.path === path);
+      return mockDiffDocument(
+        await this.commitFileDiff(session, oid, path, file?.oldPath ?? null, full, options),
+        `${oid}^`,
+        oid,
+      );
+    },
     async commitFileDiffDocument(session, oid, path, oldPath, full, options) {
       return mockDiffDocument(
         await this.commitFileDiff(session, oid, path, oldPath, full, options),

@@ -1,9 +1,17 @@
 import type { PullMode, SessionId } from '@mgit/ipc';
-import { Button, Icon, S } from '@mgit/ui';
-import { type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Button, Icon, isImeKey, S } from '@mgit/ui';
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { ContextMenuArea } from '../components/ContextMenu';
 import { type DropdownItem, DropdownMenu } from '../components/DropdownMenu';
-import { hasModifier, rovingIndex } from '../components/roving';
+import { hasModifier, useRovingToolbar } from '../components/roving';
+import { TabListMenu, tabNavigationIndex, useRevealActiveTab } from '../components/tab-navigation';
 import { useCommandTitle } from '../components/use-command-shortcut';
 import { useBatchReport } from '../features/folder/batch-report';
 import { useFolderBatchFlows } from '../features/folder/FolderBatchBar';
@@ -12,6 +20,23 @@ import { useActiveTab, useAppStore, useFolder, useIsRepoTab, useSession } from '
 import { type SessionCloseMode, sessionCloseTargets } from '../store/session-close';
 import type { ThemePreference } from '../store/theme';
 import styles from './Toolbar.module.css';
+
+/** 작업 버튼끼리 방향키로 이동하며 입력·선택창의 기본 키 동작은 유지한다. */
+function ActionGroup({ label, children }: { label: string; children: ReactNode }) {
+  const roving = useRovingToolbar<HTMLDivElement>('horizontal');
+  return (
+    <div
+      className={styles.sync}
+      role="toolbar"
+      aria-label={label}
+      ref={roving.ref}
+      onKeyDown={roving.onKeyDown}
+      onFocus={roving.onFocus}
+    >
+      {children}
+    </div>
+  );
+}
 
 /** 테마 선택지. 문구는 지금 언어의 사전에서 그릴 때마다 읽는다 */
 function themeOptions(): { value: ThemePreference; label: string }[] {
@@ -72,7 +97,7 @@ function UndoButtons() {
   }));
   const top = s.entries[0];
   return (
-    <span className={styles.sync}>
+    <ActionGroup label={S.safety.undo}>
       <Button
         disabled={s.busy || !top}
         onClick={() => void s.undo()}
@@ -87,7 +112,7 @@ function UndoButtons() {
       >
         ↷
       </Button>
-    </span>
+    </ActionGroup>
   );
 }
 
@@ -165,7 +190,7 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
     ),
   ];
   return (
-    <span className={styles.sync}>
+    <ActionGroup label={S.dock.git}>
       <Button
         title={fetchTitle}
         disabled={disabled || !s.hasRemotes}
@@ -221,7 +246,7 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
       <Button onClick={onRemotes} disabled={s.busy}>
         {S.remote.remotes}
       </Button>
-    </span>
+    </ActionGroup>
   );
 }
 
@@ -243,7 +268,7 @@ function FolderSyncButtons() {
   const t = S.folder.batch;
   const label = (op: string) => t.withScope(op, flows.scope);
   return (
-    <span className={styles.sync}>
+    <ActionGroup label={S.dock.git}>
       <Button
         disabled={flows.running}
         onClick={() => void flows.fetch()}
@@ -277,7 +302,7 @@ function FolderSyncButtons() {
         </span>
       ) : null}
       {flows.dialogs.element}
-    </span>
+    </ActionGroup>
   );
 }
 
@@ -311,6 +336,7 @@ export function Toolbar() {
   const logTitle = useCommandTitle('view.log', S.toolbar.log, 'mod+j');
   const tabsRef = useRef<HTMLDivElement>(null);
   const tabPrefix = useId();
+  useRevealActiveTab(tabsRef, activeSessionId);
   const homeVisible = useAppStore((s) => s.homeVisible);
   const previousHome = useRef(homeVisible);
   const previousActive = useRef(activeSessionId);
@@ -351,6 +377,7 @@ export function Toolbar() {
 
   /** 저장소·폴더 탭도 Tab 진입점 하나와 방향키·Home/End 선택을 제공한다 */
   const onTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, id: SessionId) => {
+    if (isImeKey(e)) return;
     if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
       e.preventDefault();
       const rect = e.currentTarget.getBoundingClientRect();
@@ -370,7 +397,7 @@ export function Toolbar() {
       void closeTab(id);
       return;
     }
-    const index = rovingIndex(e.key, sessionOrder.indexOf(id), sessionOrder.length, 'horizontal');
+    const index = tabNavigationIndex(e, sessionOrder.indexOf(id), sessionOrder.length);
     const next = index === null ? undefined : sessionOrder[index];
     if (!next) return;
     e.preventDefault();
@@ -381,91 +408,113 @@ export function Toolbar() {
   return (
     <header className={styles.toolbar}>
       <span className={styles.brand}>{S.app.title}</span>
-      <Button variant="primary" onClick={() => void openRepository()} disabled={isOpening}>
-        {isOpening ? S.toolbar.opening : S.toolbar.openRepo}
-      </Button>
-      <Button
-        onClick={() => void refreshActive()}
-        disabled={!repoTab && !folderTab}
-        title={refreshTitle}
-      >
-        {S.toolbar.refresh}
-      </Button>
+      <ActionGroup label={S.app.title}>
+        <Button variant="primary" onClick={() => void openRepository()} disabled={isOpening}>
+          {isOpening ? S.toolbar.opening : S.toolbar.openRepo}
+        </Button>
+        <Button
+          onClick={() => void refreshActive()}
+          disabled={!repoTab && !folderTab}
+          title={refreshTitle}
+        >
+          {S.toolbar.refresh}
+        </Button>
+      </ActionGroup>
       {repoTab ? <SyncButtons onRemotes={() => setShowRemotes(true)} /> : null}
       {folderTab ? <FolderSyncButtons /> : null}
       {repoTab ? <UndoButtons /> : null}
 
-      <ContextMenuArea
-        className={styles.tabContext}
-        resolveTarget={(event) => {
-          const element = (event.target as HTMLElement).closest<HTMLElement>('[data-session-tab]');
-          const id = Number(element?.dataset.sessionTab);
-          return element && sessions[id] ? id : null;
-        }}
-        items={(id) =>
-          (
-            [
-              ['this', S.toolbar.closeThisTab],
-              ['others', S.toolbar.closeOtherTabs],
-              ['all', S.toolbar.closeAllTabs],
-            ] as const
-          ).map(([mode, label]) => ({
-            label,
-            disabled: closing || sessionCloseTargets(sessionOrder, sessions, id, mode).length === 0,
-            onSelect: () => void closeTabs(id, mode as SessionCloseMode),
-          }))
-        }
-      >
-        <div
-          ref={tabsRef}
-          className={styles.tabs}
-          role="tablist"
-          tabIndex={sessionOrder.length === 0 ? 0 : -1}
-          aria-label={S.toolbar.tabsLabel}
-        >
-          {sessionOrder.map((id) => {
-            const meta = sessions[id];
-            if (!meta) {
-              return null;
-            }
-            const active = id === activeSessionId;
-            return (
-              <div
-                key={id}
-                data-session-tab={id}
-                className={active ? styles.tabActive : styles.tab}
-              >
-                <button
-                  type="button"
-                  className={styles.tabLabel}
-                  id={`${tabPrefix}-${id}`}
-                  role="tab"
-                  aria-selected={active}
-                  tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
-                  onKeyDown={(e) => onTabKeyDown(e, id)}
-                  onClick={() => setActiveSession(id)}
-                  title={`${meta.kind === 'folder' ? S.home.folder : S.home.repo}: ${meta.path}`}
-                  aria-description={meta.kind === 'folder' ? S.home.folder : S.home.repo}
-                >
-                  {meta.kind === 'folder' ? <Icon name="folder" /> : null}
-                  <span>{meta.parent !== null ? `└ ${meta.name}` : meta.name}</span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.tabClose}
-                  disabled={closing}
-                  tabIndex={-1}
-                  onClick={() => void closeTab(id)}
-                  aria-label={S.toolbar.closeRepo}
-                  title={S.toolbar.closeRepo}
-                >
-                  ×
-                </button>
-              </div>
+      <div className={styles.tabRow}>
+        <ContextMenuArea
+          className={styles.tabContext}
+          resolveTarget={(event) => {
+            const element = (event.target as HTMLElement).closest<HTMLElement>(
+              '[data-session-tab]',
             );
-          })}
-        </div>
-      </ContextMenuArea>
+            const id = Number(element?.dataset.sessionTab);
+            return element && sessions[id] ? id : null;
+          }}
+          items={(id) =>
+            (
+              [
+                ['this', S.toolbar.closeThisTab],
+                ['others', S.toolbar.closeOtherTabs],
+                ['all', S.toolbar.closeAllTabs],
+              ] as const
+            ).map(([mode, label]) => ({
+              label,
+              disabled:
+                closing || sessionCloseTargets(sessionOrder, sessions, id, mode).length === 0,
+              onSelect: () => void closeTabs(id, mode as SessionCloseMode),
+            }))
+          }
+        >
+          <div
+            ref={tabsRef}
+            className={styles.tabs}
+            role="tablist"
+            tabIndex={sessionOrder.length === 0 ? 0 : -1}
+            aria-label={S.toolbar.tabsLabel}
+          >
+            {sessionOrder.map((id) => {
+              const meta = sessions[id];
+              if (!meta) {
+                return null;
+              }
+              const active = id === activeSessionId;
+              return (
+                <div
+                  key={id}
+                  data-session-tab={id}
+                  className={active ? styles.tabActive : styles.tab}
+                >
+                  <button
+                    type="button"
+                    className={styles.tabLabel}
+                    id={`${tabPrefix}-${id}`}
+                    role="tab"
+                    aria-selected={active}
+                    tabIndex={
+                      active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1
+                    }
+                    onKeyDown={(e) => onTabKeyDown(e, id)}
+                    onClick={() => setActiveSession(id)}
+                    title={`${meta.kind === 'folder' ? S.home.folder : S.home.repo}: ${meta.path}`}
+                    aria-description={meta.kind === 'folder' ? S.home.folder : S.home.repo}
+                  >
+                    {meta.kind === 'folder' ? <Icon name="folder" /> : null}
+                    <span>{meta.parent !== null ? `└ ${meta.name}` : meta.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.tabClose}
+                    disabled={closing}
+                    tabIndex={-1}
+                    onClick={() => void closeTab(id)}
+                    aria-label={S.toolbar.closeRepo}
+                    title={S.toolbar.closeRepo}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </ContextMenuArea>
+        <TabListMenu
+          label={S.toolbar.tabsLabel}
+          active={activeSessionId === null ? null : String(activeSessionId)}
+          items={sessionOrder.flatMap((id) =>
+            sessions[id]
+              ? [{ id: String(id), title: `${sessions[id].name} — ${sessions[id].path}` }]
+              : [],
+          )}
+          select={(id) => {
+            setActiveSession(Number(id));
+            requestAnimationFrame(() => document.getElementById(`${tabPrefix}-${id}`)?.focus());
+          }}
+        />
+      </div>
 
       <CloneIndicator />
       {repoTab ? <OperationIndicator /> : null}
@@ -479,17 +528,19 @@ export function Toolbar() {
         </span>
       ) : null}
 
-      <Button
-        onClick={() => toggleDock('git', 'console')}
-        aria-pressed={consoleOpen}
-        title={logTitle}
-      >
-        {S.toolbar.log}
-      </Button>
+      <ActionGroup label={S.actions.settings}>
+        <Button
+          onClick={() => toggleDock('git', 'console')}
+          aria-pressed={consoleOpen}
+          title={logTitle}
+        >
+          {S.toolbar.log}
+        </Button>
 
-      <Button onClick={() => setSettingsOpen(true)} title={settingsTitle}>
-        {S.actions.settings}
-      </Button>
+        <Button onClick={() => setSettingsOpen(true)} title={settingsTitle}>
+          {S.actions.settings}
+        </Button>
+      </ActionGroup>
       <label className={styles.theme}>
         <span className={styles.themeLabel}>{S.toolbar.theme.label}</span>
         <select

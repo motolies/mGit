@@ -1,5 +1,6 @@
 export {
   type DiffActions,
+  type DiffArrival,
   type DiffMode,
   type DiffNavigation,
   DiffView,

@@ -52,6 +52,7 @@ export const enWorkspace: Pick<
     skipped: (n: number) => ` · ${n} skipped`,
   },
   comparison: {
+    resizeFiles: 'Resize file list',
     onlyA: 'Commits only in A',
     onlyB: 'Commits only in B',
     commitsLimit: 'Showing the latest 200 commits.',
@@ -714,6 +715,9 @@ export const enWorkspace: Pick<
     highlightWord: 'Word',
     highlightLine: 'Line',
     previousChange: 'Previous change',
+    filePosition: (index: number, total: number) => `File ${index} / ${total}`,
+    previousFile: 'Previous file',
+    nextFile: 'Next file',
     nextChange: 'Next change',
     viewOptions: 'View options',
     loadFullFile: 'Load full file',

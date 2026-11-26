@@ -39,6 +39,7 @@ const koProjectEdit = {
 
 export const ko = {
   comparison: {
+    resizeFiles: '파일 목록 너비 조절',
     onlyA: 'A에만 있는 커밋',
     onlyB: 'B에만 있는 커밋',
     commitsLimit: '최근 200개만 표시합니다.',
@@ -787,6 +788,9 @@ export const ko = {
     highlightWord: '단어',
     highlightLine: '줄',
     previousChange: '이전 변경',
+    filePosition: (index: number, total: number) => `파일 ${index} / ${total}`,
+    previousFile: '이전 파일',
+    nextFile: '다음 파일',
     nextChange: '다음 변경',
     viewOptions: '보기 옵션',
     loadFullFile: '전체 파일 불러오기',

@@ -347,6 +347,13 @@ export interface IpcClient {
   stashApply(session: SessionId, index: number): Promise<void>;
   stashPop(session: SessionId, index: number): Promise<void>;
   stashDrop(session: SessionId, index: number): Promise<void>;
+  stashFileDiffDocument(
+    session: SessionId,
+    oid: string,
+    path: string,
+    full: boolean,
+    options?: DiffOptions | null,
+  ): Promise<DiffDocument>;
   stashFiles(session: SessionId, oid: string): Promise<ChangedFile[]>;
   suggestWorktreePath(session: SessionId, branch: string): Promise<string>;
   worktreeAdd(session: SessionId, path: string, source: WorktreeSource): Promise<string>;
@@ -997,6 +1004,8 @@ export function createTauriClient(): IpcClient {
     stashApply: (session, index) => voidCall(() => commands.stashApply(session, index)),
     stashPop: (session, index) => voidCall(() => commands.stashPop(session, index)),
     stashDrop: (session, index) => voidCall(() => commands.stashDrop(session, index)),
+    stashFileDiffDocument: (session, oid, path, full, options) =>
+      call(() => commands.stashFileDiffDocument(session, oid, path, full, options ?? null)),
     stashFiles: (session, oid) => call(() => commands.stashFiles(session, oid)),
     suggestWorktreePath: (session, branch) =>
       call(() => commands.suggestWorktreePath(session, branch)),

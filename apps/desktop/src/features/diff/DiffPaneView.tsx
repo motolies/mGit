@@ -1,28 +1,18 @@
-import { type DiffActions, type DiffMode, type DiffNavigation, DiffView } from '@mgit/diff-view';
+import {
+  type DiffActions,
+  type DiffArrival,
+  type DiffMode,
+  type DiffNavigation,
+  DiffView,
+} from '@mgit/diff-view';
 import type { DiffDocument, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
 import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
+import { useRovingToolbar } from '../../components/roving';
+import { useCommandTitle } from '../../components/use-command-shortcut';
 import type { DiffViewOptions } from '../../store/session-store';
 import styles from './DiffPane.module.css';
-
-/** Diff 본문의 구간 이동을 앱 공통 명령에 연결한다 */
-function registerNavigation(element: HTMLElement, navigation: DiffNavigation) {
-  const cleanups = (
-    [
-      ['diff.nextHunk', 1],
-      ['diff.previousHunk', -1],
-    ] as const
-  ).map(([id, direction]) =>
-    registerCommand(id, element.closest<HTMLElement>('[data-diff-pane]') ?? element, {
-      enabled: () => navigation.available,
-      run: () => navigation.moveHunk(direction),
-    }),
-  );
-  return () => {
-    for (const cleanup of cleanups) cleanup();
-  };
-}
 
 /** 문자열 → 범위 안의 정수 */
 function clampInt(text: string, min: number, max: number, fallback: number): number {
@@ -36,7 +26,15 @@ function clampInt(text: string, min: number, max: number, fallback: number): num
 /** diff 보기 옵션 (DIFF-03). 공백 무시·문맥은 코어가, 줄바꿈·탭 폭은 뷰가 쓴다 */
 export type DiffPaneOptions = DiffViewOptions;
 
+export interface DiffFileNavigation {
+  index: number;
+  total: number;
+  move(direction: 1 | -1): void;
+}
+
 export interface DiffPaneViewProps {
+  fileNavigation?: DiffFileNavigation;
+  arrival?: DiffArrival;
   /** 머리에 보일 경로 (구문 강조 언어도 이 경로로 고른다) */
   path: string;
   /** 머리 오른쪽의 영역 표시 (`commit a1b2c3d4`, `staged`, 범위 등) */
@@ -91,24 +89,118 @@ export function DiffPaneView({
   onEditCurrent,
   actions,
   submoduleLog,
+  fileNavigation,
+  arrival,
 }: DiffPaneViewProps) {
+  const tools = useRovingToolbar<HTMLDivElement>('horizontal');
+  const paneRef = useRef<HTMLDivElement>(null);
+  const ownedFocus = useRef(false);
+  /** 파일 로딩으로 본문이 사라져도 탐색 영역의 포커스 소유권을 유지한다. 사용자 이동은 즉시 존중한다. */
+  useEffect(() => {
+    const track = (event: Event) => {
+      ownedFocus.current =
+        event.target instanceof Node && !!paneRef.current?.contains(event.target);
+    };
+    ownedFocus.current = !!paneRef.current?.contains(window.document.activeElement);
+    window.document.addEventListener('focusin', track);
+    window.document.addEventListener('pointerdown', track, true);
+    return () => {
+      window.document.removeEventListener('focusin', track);
+      window.document.removeEventListener('pointerdown', track, true);
+    };
+  }, []);
+  // 자동 새로고침도 본문 DOM을 교체하므로 소유했던 포커스만 컨테이너와 새 본문에 이어 준다.
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    if (!pane || !ownedFocus.current) return;
+    if (window.document.activeElement === window.document.body) pane.focus({ preventScroll: true });
+    if (
+      !loading &&
+      !error &&
+      diff &&
+      (diff.newPath ?? diff.oldPath) === path &&
+      window.document.activeElement === pane
+    ) {
+      pane
+        .querySelector<HTMLElement>('[data-primary-focus="content"]')
+        ?.focus({ preventScroll: true });
+    }
+  });
+  const previousTitle = useCommandTitle('diff.previousHunk', S.diff.previousChange);
+  const nextTitle = useCommandTitle('diff.nextHunk', S.diff.nextChange);
+  const previousFileTitle = useCommandTitle('diff.previousFile', S.diff.previousFile);
+  const nextFileTitle = useCommandTitle('diff.nextFile', S.diff.nextFile);
   const [navigation, setNavigation] = useState<DiffNavigation | null>(null);
   /** 현재 변경 위치를 도구 모음에 반영하고 키보드 명령과 같은 이동 동작을 사용한다. */
   const onNavigationReady = useCallback((element: HTMLElement, next: DiffNavigation) => {
     setNavigation(next);
-    return registerNavigation(element, next);
+    void element;
+    return () => setNavigation((current) => (current === next ? null : current));
   }, []);
+  const hasFile = (direction: 1 | -1) =>
+    !!fileNavigation &&
+    (direction === 1 ? fileNavigation.index < fileNavigation.total - 1 : fileNavigation.index > 0);
+  const canMove = (direction: 1 | -1) =>
+    !loading &&
+    !error &&
+    !!diff &&
+    (!!navigation?.canMove(direction) ||
+      (hasFile(direction) && !(direction === 1 && diff.truncated)));
+  /** 본문이 로딩 UI로 교체되는 동안에도 F7의 명령 영역 안에 포커스를 남긴다. */
+  const moveFile = (direction: 1 | -1) => {
+    if (loading || !hasFile(direction)) return;
+    paneRef.current?.focus({ preventScroll: true });
+    fileNavigation?.move(direction);
+  };
+  /** 잘린 마지막 변경은 전체 조회 안내에 머물며 파일 건너뛰기는 별도 파일 버튼으로만 한다. */
+  const move = (direction: 1 | -1) => {
+    if (!canMove(direction)) return;
+    if (navigation?.moveHunk(direction)) return;
+    if (hasFile(direction)) moveFile(direction);
+  };
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const cleanups = (
+      [
+        ['diff.nextHunk', 1],
+        ['diff.previousHunk', -1],
+      ] as const
+    ).map(([id, direction]) =>
+      registerCommand(id, el, { enabled: () => canMove(direction), run: () => move(direction) }),
+    );
+    for (const [id, direction] of [
+      ['diff.nextFile', 1],
+      ['diff.previousFile', -1],
+    ] as const)
+      cleanups.push(
+        registerCommand(id, el, {
+          enabled: () => !loading && hasFile(direction),
+          run: () => {
+            if (!loading && hasFile(direction)) moveFile(direction);
+          },
+        }),
+      );
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+    };
+  });
   return (
-    <div className={styles.pane} data-diff-pane>
+    <div ref={paneRef} className={styles.pane} data-diff-pane tabIndex={-1}>
       <header className={styles.header}>
         {onBack ? <Button onClick={onBack}>← {S.diff.back}</Button> : null}
         <span className={styles.path} title={path}>
           {path}
         </span>
         <span className={styles.area}>{areaLabel}</span>
+        {fileNavigation && (
+          <span className={styles.area}>
+            {S.diff.filePosition(fileNavigation.index + 1, fileNavigation.total)}
+          </span>
+        )}
         {onDifftool ? <Button onClick={onDifftool}>{S.history.difftool}</Button> : null}
       </header>
-      <div className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
+      <div {...tools} className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
         {onEditCurrent ? <Button onClick={onEditCurrent}>{S.fileView.editCurrent}</Button> : null}
         <span className={styles.segment}>
           <Button aria-pressed={mode === 'split'} onClick={() => onModeChange('split')}>
@@ -140,42 +232,26 @@ export function DiffPaneView({
           />
           {S.diff.ignoreWhitespace}
         </label>
-        <label className={styles.opt}>
-          <input
-            type="checkbox"
-            checked={options.wrap}
-            onChange={(e) => onOptionsChange({ wrap: e.target.checked })}
-          />
-          {S.diff.wrap}
-        </label>
-        <label className={styles.opt}>
-          <input
-            type="checkbox"
-            checked={options.horizontalSync}
-            onChange={(e) => onOptionsChange({ horizontalSync: e.target.checked })}
-          />
-          {S.diff.horizontalSync}
-        </label>
-        <label className={styles.opt}>
-          {S.diff.highlight}
-          <select
-            className={styles.select}
-            value={options.highlightMode}
-            onChange={(e) =>
-              onOptionsChange({ highlightMode: e.target.value as DiffPaneOptions['highlightMode'] })
-            }
-          >
-            <option value="character">{S.diff.highlightCharacter}</option>
-            <option value="word">{S.diff.highlightWord}</option>
-            <option value="line">{S.diff.highlightLine}</option>
-          </select>
-        </label>
+        {fileNavigation && (
+          <span className={styles.segment}>
+            <Button
+              title={previousFileTitle}
+              disabled={loading || !hasFile(-1)}
+              onClick={() => moveFile(-1)}
+            >
+              ← {S.diff.previousFile}
+            </Button>
+            <Button
+              title={nextFileTitle}
+              disabled={loading || !hasFile(1)}
+              onClick={() => moveFile(1)}
+            >
+              {S.diff.nextFile} →
+            </Button>
+          </span>
+        )}
         <span className={styles.segment}>
-          <Button
-            title={`${S.diff.previousChange} (Shift+F7)`}
-            disabled={loading || !diff || !navigation?.available}
-            onClick={() => navigation?.moveHunk(-1)}
-          >
+          <Button title={previousTitle} disabled={!canMove(-1)} onClick={() => move(-1)}>
             ↑ {S.diff.previousChange}
           </Button>
           <span aria-live="polite">
@@ -183,9 +259,9 @@ export function DiffPaneView({
             {loading || !diff ? 0 : (navigation?.total ?? 0)}
           </span>
           <Button
-            title={`${S.diff.nextChange} (F7)`}
-            disabled={loading || !diff || !navigation?.available}
-            onClick={() => navigation?.moveHunk(1)}
+            title={diff?.truncated && !navigation?.canMove(1) ? S.diff.loadFullFile : nextTitle}
+            disabled={!canMove(1)}
+            onClick={() => move(1)}
           >
             ↓ {S.diff.nextChange}
           </Button>
@@ -193,6 +269,39 @@ export function DiffPaneView({
         <details className={styles.viewOptions}>
           <summary>{S.diff.viewOptions}</summary>
           <div className={styles.optionPopup}>
+            <label className={styles.opt}>
+              <input
+                type="checkbox"
+                checked={options.wrap}
+                onChange={(e) => onOptionsChange({ wrap: e.target.checked })}
+              />
+              {S.diff.wrap}
+            </label>
+            <label className={styles.opt}>
+              <input
+                type="checkbox"
+                checked={options.horizontalSync}
+                onChange={(e) => onOptionsChange({ horizontalSync: e.target.checked })}
+              />
+              {S.diff.horizontalSync}
+            </label>
+            <label className={styles.opt}>
+              {S.diff.highlight}
+              <select
+                className={styles.select}
+                value={options.highlightMode}
+                onChange={(e) =>
+                  onOptionsChange({
+                    highlightMode: e.target.value as DiffPaneOptions['highlightMode'],
+                  })
+                }
+              >
+                <option value="character">{S.diff.highlightCharacter}</option>
+                <option value="word">{S.diff.highlightWord}</option>
+                <option value="line">{S.diff.highlightLine}</option>
+              </select>
+            </label>
+
             <label className={styles.opt}>
               {S.diff.context}
               <input
@@ -278,6 +387,7 @@ export function DiffPaneView({
       <div className={styles.body}>
         <DiffView
           onNavigationReady={onNavigationReady}
+          arrival={arrival}
           diff={diff}
           document={document}
           fullFile={options.fullFile}

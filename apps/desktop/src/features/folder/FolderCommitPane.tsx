@@ -3,6 +3,7 @@ import { Button, S } from '@mgit/ui';
 import { useEffect } from 'react';
 import type { MenuItem } from '../../components/ContextMenu';
 import { repoNameOf, useFolder, useWorkspace } from '../../store';
+import { diffArrival, orderedDiffFiles } from '../../store/diff-origin';
 import { sameSelection, type TimelineSelection } from '../../store/folder-store';
 import { commitDiffDoc, type OpenMode } from '../../store/workspace-store';
 import { ChangedFilesTree } from '../detail/ChangedFilesTree';
@@ -80,6 +81,13 @@ export function FolderCommitPane({ onNavigate }: FolderCommitPaneProps) {
     }
     openDoc(
       commitDiffDoc({
+        origin: {
+          kind: 'commit',
+          repoPath: selected.repoPath,
+          oid: d.oid,
+          files: orderedDiffFiles(d.files),
+        },
+        arrival: mode === 'pinned' ? diffArrival(1) : undefined,
         repoPath: selected.repoPath,
         repoName,
         oid: d.oid,

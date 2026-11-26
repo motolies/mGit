@@ -8,9 +8,10 @@
 
 /* 스크롤 영역이자 포커스를 받는 트리. 행은 안쪽 상자에 절대 위치로 놓인다 (가상 스크롤, 위아래 여백은 가상 목록이 둔다) */
 .tree {
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   outline: none;
   font-size: 12px;
@@ -82,18 +83,18 @@
 }
 
 .rootName {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   font-weight: 600;
 }
 
 .name {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 상태 문자 (LF-05: 색만으로 전하지 않는다) */
@@ -123,10 +124,10 @@
 }
 
 .muted {
-  flex: 1 1 0;
+  flex: 1 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--fg-muted);
 }
 
@@ -137,4 +138,17 @@
 .row[aria-selected="true"] .twisty,
 .row[aria-selected="true"] .icon {
   color: var(--fg);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.toolbar > span {
+  margin-right: auto;
+  color: var(--fg-muted);
 }

@@ -37,7 +37,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 /** BOM과 CRLF를 가진 실제 공유 문서를 사용한다. */
-async function fixture() {
+async function fixture(mount = true) {
   const client = {
     ...createNullClient(),
     fsSaveFile: vi.fn(async () => ({ kind: 'saved' as const, revision: '2' })),
@@ -52,10 +52,57 @@ async function fixture() {
     }),
   };
   const doc = (await fileEditors.open(client, session, 'a.ts')) as EditorFile;
-  render(<FileEditor doc={doc} source={{ client, session, path: 'a.ts' }} />);
+  if (mount) render(<FileEditor doc={doc} source={{ client, session, path: 'a.ts' }} />);
   return doc;
 }
 describe('editor tools', () => {
+  it('an explicit reveal focuses only its target editor after a delayed mount', async () => {
+    const doc = await fixture(false);
+    const source = [...doc.sources.values()][0];
+    if (!source) throw new Error('Missing fixture source');
+    render(<button type="button">origin</button>);
+    const origin = screen.getByText('origin');
+    origin.focus();
+    act(() => fileEditors.reveal(doc, 6, { session, path: 'a.ts' }));
+    expect(document.activeElement).toBe(origin);
+    const unrelated = render(<FileEditor doc={doc} source={{ ...source, session: session + 1 }} />);
+    expect(document.activeElement).toBe(origin);
+    expect(doc.revealFocus).toEqual({ session, path: 'a.ts' });
+    expect(doc.revealPosition).toBe(6);
+    unrelated.unmount();
+    render(<FileEditor doc={doc} source={source} />);
+    expect(document.activeElement).toBe(
+      screen.getByRole('textbox', { name: S.fileEditor.content }),
+    );
+    expect(doc.state.selection.main.anchor).toBe(6);
+    expect(doc.revealFocus).toBeUndefined();
+    expect(doc.revealPosition).toBeUndefined();
+  });
+
+  it('workspace search modifiers propagate while ordinary editor search stays local', async () => {
+    await fixture();
+    const content = screen.getByRole('textbox', { name: S.fileEditor.content });
+    const seen = vi.fn();
+    document.addEventListener('keydown', seen);
+    try {
+      fireEvent.keyDown(content, { key: 'f', metaKey: true, altKey: true });
+      expect(seen).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(content, { key: 'f', metaKey: true });
+      expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('keydown', seen);
+    }
+  });
+  it('toolbar arrows move focus without formatting or changing the draft', async () => {
+    const doc = await fixture();
+    const format = screen.getByRole('button', { name: S.fileEditor.format });
+    const find = screen.getByRole('button', { name: S.fileEditor.findReplace });
+    act(() => format.focus());
+    fireEvent.keyDown(format, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(find);
+    expect(formatText).not.toHaveBeenCalled();
+    expect(doc.dirty).toBe(false);
+  });
   it('formats once, preserves serialization and reverses in one Undo', async () => {
     const doc = await fixture();
     vi.mocked(formatText).mockResolvedValue('const x = 1;\n');

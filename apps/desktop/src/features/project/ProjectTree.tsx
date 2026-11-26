@@ -11,7 +11,9 @@ import {
   useRef,
 } from 'react';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
+import { useRovingToolbar } from '../../components/roving';
 import { openContextMenuAt, treeKeyCommand } from '../../components/tree-keys';
+import { type TreeWidthRow, useTreeContentWidth } from '../../components/tree-width';
 import { useVirtualTree } from '../../components/use-virtual-tree';
 import { ToolButton } from '../../layout/ToolButton';
 import styles from './ProjectTree.module.css';
@@ -221,12 +223,66 @@ export function ProjectTree({
   revealSeq,
 }: ProjectTreeProps) {
   const baseId = useId();
+  const toolsRoving = useRovingToolbar<HTMLElement>('horizontal');
   const treeRef = useRef<HTMLDivElement>(null);
   const { virtualizer, rowHeight, scrollToRow } = useVirtualTree({
     scrollRef: treeRef,
     count: rows.length,
     keyOf: (index) => rows[index]?.id ?? index,
   });
+  const widthRows = useMemo<TreeWidthRow[]>(
+    () =>
+      rows.map((row) => {
+        if (row.kind !== 'root' && row.kind !== 'entry') {
+          const text =
+            row.kind === 'status'
+              ? statusText(row)
+              : row.kind === 'nonUtf8'
+                ? S.project.nonUtf8Names(row.count)
+                : row.loading
+                  ? S.project.moreLoading
+                  : row.next > 0
+                    ? S.project.more(row.next)
+                    : S.project.moreCapped(row.shown, row.total);
+          return {
+            depth: row.depth,
+            icons: 2,
+            texts: [{ text }],
+            extra: row.kind === 'status' && row.status === 'error' ? 60 : 0,
+          };
+        }
+        const deco = decorate(row.path);
+        const stamp =
+          now !== undefined && row.kind === 'entry' && row.entryKind === 'file'
+            ? fileStamp(row.size, row.mtimeMs, now)
+            : null;
+        const parts = [
+          row.kind === 'root' ? root.detail : deco?.detail,
+          stamp,
+          deco?.branch,
+          ...(deco?.sync ?? []),
+          ...(deco?.badges ?? []).map((badge) => badge.text),
+          deco?.changed ? S.project.changed(deco.changed) : null,
+        ].filter((value): value is string => !!value);
+        return {
+          depth: row.depth,
+          icons: 2 + (deco?.status?.letter ? 1 : 0) + (deco?.error ? 1 : 0),
+          texts: [
+            {
+              text: row.kind === 'root' ? root.name : row.name,
+              bold: row.kind === 'root' || deco?.bold,
+            },
+            ...parts.map((text) => ({
+              text,
+              bold: text === deco?.branch || deco?.sync?.includes(text) === true,
+            })),
+          ],
+          extra: (deco?.badges?.length ?? 0) * 10 + (inline?.id === row.id ? 240 : 0),
+        };
+      }),
+    [rows, root.name, root.detail, decorate, now, inline?.id],
+  );
+  const contentWidth = useTreeContentWidth(treeRef, widthRows);
   const selectedIndex = selected === null ? -1 : rows.findIndex((r) => r.id === selected);
   // 키 규칙이 보는 행 모양 (안내 줄은 펼칠 수 없는 잎이다)
   const keyRows = useMemo(
@@ -493,7 +549,12 @@ export function ProjectTree({
 
   return (
     <div className={styles.window}>
-      <header className={styles.header}>
+      <header
+        {...toolsRoving}
+        className={styles.header}
+        role="toolbar"
+        aria-label={S.project.title}
+      >
         <span className={styles.title}>{S.project.title}</span>
         <span className={styles.spacer} />
         {createTools}
@@ -533,6 +594,7 @@ export function ProjectTree({
           ref={treeRef}
           className={styles.tree}
           data-project-tree=""
+          data-primary-focus
           role="tree"
           aria-label={S.project.tree}
           aria-multiselectable={onToggleSelect || onSelectRange ? true : undefined}
@@ -544,7 +606,7 @@ export function ProjectTree({
           <div
             className={styles.inner}
             role="presentation"
-            style={{ height: virtualizer.getTotalSize() }}
+            style={{ height: virtualizer.getTotalSize(), minWidth: contentWidth }}
           >
             {items.map((item) => {
               const row = rows[item.index];

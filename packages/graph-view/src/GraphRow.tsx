@@ -16,6 +16,8 @@ export interface GraphColumns {
   avatar?: boolean;
   /** 저장소 띠 열 (통합 타임라인 MR-12). 그래프 앞에 놓인다 */
   repo?: boolean;
+  /** 저장소 이름 열의 사용자 지정 폭. */
+  repoWidth?: number;
 }
 
 export const DEFAULT_GRAPH_COLUMNS: GraphColumns = {
@@ -52,6 +54,13 @@ const DATE_WIDTH = 142;
 /** 해시 8자 (12px 고정폭 글꼴로 58px) */
 const HASH_WIDTH = 60;
 
+/** 저장소 열의 폭은 잘못된 저장 설정을 제외하고 같은 범위로 제한한다. */
+export function repoColumnWidth(columns: GraphColumns): number {
+  return typeof columns.repoWidth === 'number' && Number.isFinite(columns.repoWidth)
+    ? Math.max(80, Math.min(600, columns.repoWidth))
+    : REPO_STRIP_WIDTH;
+}
+
 /**
  * 열 설정에 맞는 grid 템플릿 (LG-01): 저장소 띠 → 그래프 → 제목 → 아바타 → 작성자 → 날짜 → 해시.
  * 제목은 남는 폭을 다 쓰되 최소 폭을 지키고, 작성자는 최대 폭까지만 늘어난다
@@ -59,7 +68,7 @@ const HASH_WIDTH = 60;
 export function gridTemplate(columns: GraphColumns): string {
   const parts: string[] = [];
   if (columns.repo) {
-    parts.push(`${REPO_STRIP_WIDTH}px`);
+    parts.push(`${repoColumnWidth(columns)}px`);
   }
   parts.push('var(--graph-col, 60px)');
   parts.push(`minmax(${SUBJECT_MIN_WIDTH}px, 1fr)`);
@@ -83,13 +92,13 @@ export function gridTemplate(columns: GraphColumns): string {
  * 캔버스 오버레이가 이 값만큼 옮겨 앉으므로 레인 좌표 계산은 띠를 모른다
  */
 export function graphColumnLeft(columns: GraphColumns): number {
-  return columns.repo ? REPO_STRIP_WIDTH + COLUMN_GAP : 0;
+  return columns.repo ? repoColumnWidth(columns) + COLUMN_GAP : 0;
 }
 
 /** 제목·작성자 칸을 뺀 나머지(폭이 고정된 칸, 칸 사이 간격, 오른쪽 여백)가 차지하는 폭 (px) */
 function reservedWidth(columns: GraphColumns, graphColumnWidth: number): number {
   const fixed = [
-    columns.repo ? REPO_STRIP_WIDTH : null,
+    columns.repo ? repoColumnWidth(columns) : null,
     graphColumnWidth,
     columns.avatar ? AVATAR_WIDTH : null,
     columns.date ? DATE_WIDTH : null,

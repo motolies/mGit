@@ -1,12 +1,15 @@
 import { createNullClient } from '@mgit/ipc';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { S } from '@mgit/ui';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComparisonDoc } from '../features/history/ComparisonDoc';
+import { handleGlobalKey } from '../global-keys';
 import type { ComparisonTarget } from '../store/workspace-store';
 import { documentOf } from './diff-document-fixture';
 
 const state = vi.hoisted(() => ({
   client: null as unknown,
+  shortcutOverrides: {},
   tab: null as { id: number; kind: string } | null,
   openSession: vi.fn(),
   repo: { refs: { labels: [] }, status: {}, fetch: async () => {}, busy: false, lastFetchAt: null },
@@ -44,11 +47,6 @@ vi.mock('../store', () => ({
 }));
 vi.mock('../features/workspace/use-current-file', () => ({ useCurrentFile: () => vi.fn() }));
 vi.mock('../features/history/ComparisonCommits', () => ({ ComparisonCommits: () => null }));
-vi.mock('../features/diff/DiffPaneView', () => ({
-  DiffPaneView: ({ document }: { document: ReturnType<typeof documentOf> | null }) => (
-    <div data-testid="comparison-content">{document?.new.content}</div>
-  ),
-}));
 vi.mock('../features/history/comparison', () => ({
   LOCAL: '@LOCAL',
   comparisonDrafts: () => [['a.txt', 'draft']],
@@ -135,3 +133,116 @@ it('폴더 비교는 열 때마다 숨은 세션을 다시 확보한다', async 
     expect(client.compareRefs).toHaveBeenCalledWith(10, 'main', 'feature', false),
   );
 });
+
+/** 실제 diff와 명령 레지스트리를 함께 사용해 느린 파일 전환 뒤 F7의 대상을 확인한다. */
+it.each(['keyboard', 'button'])(
+  '%s 시작 후 F7 반복은 비동기 파일 전환을 이어간다',
+  async (start) => {
+    const client = createNullClient();
+    client.compareRefs = async () =>
+      ['a.txt', 'b.txt', 'c.txt'].map((path) => ({
+        path,
+        oldPath: null,
+        change: { kind: 'modified' as const },
+      }));
+    client.compareFileDiffDocument = async (_session, _a, _b, _three, path) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return documentOf({
+        oldPath: path,
+        newPath: path,
+        change: { kind: 'modified' },
+        binary: null,
+        nonUtf8: false,
+        truncated: false,
+        totalLines: 2,
+        hunks: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            section: '',
+            lines: [
+              { kind: 'del', oldNo: 1, newNo: null, text: 'old', noNewline: false },
+              { kind: 'add', oldNo: null, newNo: 1, text: 'new', noNewline: false },
+            ],
+          },
+        ],
+      });
+    };
+    state.client = client;
+    const handler = (event: KeyboardEvent) =>
+      handleGlobalKey(event, {
+        actions: [
+          {
+            id: 'diff.nextHunk',
+            title: 'next',
+            group: 'view',
+            scope: 'diff',
+            shortcut: 'f7',
+            enabled: true,
+            run: () => {},
+          },
+          {
+            id: 'diff.previousHunk',
+            title: 'previous',
+            group: 'view',
+            scope: 'diff',
+            shortcut: 'shift+f7',
+            enabled: true,
+            run: () => {},
+          },
+        ],
+        openPalette: () => {},
+        searchOpen: false,
+        closeSearch: () => {},
+        activeDoc: 'pinned',
+        closeActiveDoc: () => {},
+      });
+    document.addEventListener('keydown', handler);
+    try {
+      const target = doc();
+      const mounted = render(<ComparisonDoc doc={target} />);
+      const first = await screen.findByRole('grid', { name: 'a.txt' });
+      act(() => first.focus());
+      if (start === 'keyboard') fireEvent.keyDown(document.activeElement ?? first, { key: 'F7' });
+      else fireEvent.click(screen.getByRole('button', { name: `↓ ${S.diff.nextChange}` }));
+      expect(document.activeElement?.hasAttribute('data-diff-pane')).toBe(true);
+      const repeated = new KeyboardEvent('keydown', {
+        key: 'F7',
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      fireEvent(document.activeElement ?? document.body, repeated);
+      expect(repeated.defaultPrevented).toBe(true);
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
+      );
+      // Git 감시 갱신으로 같은 파일을 다시 읽어도 F7의 포커스 대상이 사라지지 않는다.
+      state.repo.status = {};
+      mounted.rerender(<ComparisonDoc doc={target} />);
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
+      );
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'F7', repeat: true });
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'c.txt' })),
+      );
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'F7', shiftKey: true });
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
+      );
+      const outside = document.createElement('input');
+      document.body.append(outside);
+      act(() => outside.focus());
+      state.repo.status = {};
+      mounted.rerender(<ComparisonDoc doc={target} />);
+      await screen.findByRole('grid', { name: 'b.txt' });
+      expect(document.activeElement).toBe(outside);
+      outside.remove();
+    } finally {
+      document.removeEventListener('keydown', handler);
+    }
+  },
+);

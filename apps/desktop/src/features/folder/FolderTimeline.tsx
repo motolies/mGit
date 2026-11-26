@@ -22,6 +22,7 @@ import {
   timelineRepoPath,
   timelineScopePending,
 } from '../../store/folder-store';
+import { readPref, writePref } from '../../store/prefs';
 import { requestRepoReword } from '../../store/reword-request';
 import { BranchToolbar } from '../branches/BranchToolbar';
 import { BranchTree } from '../branches/BranchTree';
@@ -211,7 +212,16 @@ export function FolderTimeline() {
 
   const info = f?.timeline.info ?? null;
   const folderId = f?.id ?? null;
-  const columns = useMemo(() => ({ ...DEFAULT_GRAPH_COLUMNS, repo: true }), []);
+  const repoWidthKey = `mgit.timeline.repoWidth:${f?.path ?? ''}`;
+  const [repoWidth, setRepoWidth] = useState(() => readPref(repoWidthKey, 180));
+  useEffect(() => {
+    setRepoWidth(readPref(repoWidthKey, 180));
+  }, [repoWidthKey]);
+  const resizeRepoColumn = (width: number) => {
+    setRepoWidth(width);
+    writePref(repoWidthKey, width);
+  };
+  const columns = useMemo(() => ({ ...DEFAULT_GRAPH_COLUMNS, repo: true, repoWidth }), [repoWidth]);
   const repoOf = useCallback(
     (row: GraphRow) => {
       const idx = row.repo ?? null;
@@ -830,6 +840,7 @@ export function FolderTimeline() {
                 totalRows={tl.totalRows}
                 columns={columns}
                 repoOf={repoOf}
+                onRepoWidthChange={resizeRepoColumn}
                 dimRow={dimRow}
                 resolveRow={f.resolveTimelineRow}
                 initialAnchor={f.timelineAnchor()}

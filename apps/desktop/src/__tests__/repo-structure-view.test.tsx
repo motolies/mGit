@@ -207,8 +207,15 @@ describe('머리 메뉴 (⋮) — 펼치지 않아도 닿게', () => {
     const { store } = await mountRepo();
     const button = menuButton() as HTMLElement;
     expect(button.title).toBe(`${S.project.structure.menu}\n모듈 5 · 서브모듈 5 · 하위 저장소 2`);
-    // 키보드로 닿는다 (Tab 정지)
-    expect(button.tabIndex).toBe(0);
+    // 도구 모음은 Tab 정지 하나이며 End로 마지막 메뉴 단추에 닿는다.
+    const toolbar = button.closest('[role="toolbar"]');
+    const first = toolbar?.querySelector<HTMLElement>('[tabindex="0"]');
+    if (!first) throw new Error('Missing toolbar entry');
+    act(() => {
+      first.focus();
+      fireEvent.keyDown(first, { key: 'End' });
+    });
+    expect(document.activeElement).toBe(button);
     act(() => store.setState({ modules: [], submodules: [], nestedRepos: [] }));
     await tick();
     expect(menuButton()).toBeNull();

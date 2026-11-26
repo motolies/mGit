@@ -1,3 +1,4 @@
+import { useRovingToolbar } from '../../components/roving';
 // 저장소 탭 에디터 공간의 태그 문서 (C3a·C3b·C4, TG-10~14). 원격 하나와 견준 tag 목록을 찾고·거르고·정렬하고, 여러 줄을
 // 골라 한 번에 push·가져오기·삭제하고, 결과 칸에 실패만 남긴다. 데이터는 세션의 ref 라벨·로컬 tag 목록과 원격 tag
 // 보고서(B5)이고, 화면 상태(원격·필터·검색·정렬·선택·여는 쪽의 요청)는 탭의 워크스페이스(`tagsView`)에 둔다. 목록은 가상
@@ -106,6 +107,8 @@ function pickTags(st: SessionState) {
  * 상태 정렬), 가상 listbox(다중 선택 — ↑↓ Space ⇧↑↓ ⌘A Esc, Enter 로그에서 보기, ⇧F10 행 메뉴), 빈 상태
  */
 export function TagsDoc() {
+  const filterTools = useRovingToolbar<HTMLSpanElement>('horizontal');
+  const batchTools = useRovingToolbar<HTMLDivElement>('horizontal');
   const s = useSession(pickTags);
   const view = useWorkspace((w) => w.tagsView) ?? INITIAL_TAGS_VIEW;
   const setTagsView = useWorkspace((w) => w.setTagsView);
@@ -500,8 +503,13 @@ export function TagsDoc() {
           value={view.search}
           onChange={(e) => setView({ search: e.target.value })}
         />
-        {/* biome-ignore lint/a11y/useSemanticElements: 단추 묶음이다 (fieldset 은 폼 칸 묶음) */}
-        <span className={styles.filters} role="group" aria-label={S.tag.doc.filters}>
+        {/* biome-ignore lint/a11y/useSemanticElements: 키보드로 이동하는 필터 단추 묶음이다. */}
+        <span
+          {...filterTools}
+          className={styles.filters}
+          role="group"
+          aria-label={S.tag.doc.filters}
+        >
           {TAG_FILTERS.map((key) => (
             <button
               key={key}
@@ -520,7 +528,7 @@ export function TagsDoc() {
         </span>
       </div>
       {/* 일괄 단추 (TG-12 ①): 고른 것 가운데 해당하는 개수. 0 이면 꺼진다 */}
-      <div className={styles.tools} role="toolbar" aria-label={S.tag.batch.label}>
+      <div {...batchTools} className={styles.tools} role="toolbar" aria-label={S.tag.batch.label}>
         {remote !== null ? (
           <button
             ref={pushRef}
@@ -630,6 +638,7 @@ export function TagsDoc() {
         >
           <div
             ref={listRef}
+            data-primary-focus
             className={styles.list}
             role="listbox"
             aria-label={S.tag.doc.list}

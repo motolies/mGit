@@ -11,7 +11,7 @@ import {
   useGroupRef,
 } from 'react-resizable-panels';
 import { DOCK_ATTR } from '../actions';
-import { hasModifier, rovingIndex } from '../components/roving';
+import { tabNavigationIndex } from '../components/tab-navigation';
 import { useCommandTitle } from '../components/use-command-shortcut';
 import { FolderTimeline } from '../features/folder/FolderTimeline';
 import { TaskHistoryPanel } from '../features/folder/TaskHistoryPanel';
@@ -113,10 +113,7 @@ function GitTabs() {
   const tabs = gitDockTabsFor(kind);
   /** ←→·Home·End: 옆 탭을 고르고 그 탭에 포커스를 준다 */
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (hasModifier(e)) {
-      return;
-    }
-    const next = rovingIndex(e.key, tabs.indexOf(active), tabs.length, 'horizontal');
+    const next = tabNavigationIndex(e, tabs.indexOf(active), tabs.length);
     const tab = next === null ? undefined : tabs[next];
     if (!tab) {
       return;

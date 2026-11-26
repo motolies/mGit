@@ -117,7 +117,7 @@
   gap: 12px;
   align-items: center;
 }
-.field input,
+.field input:not([type="checkbox"]),
 .field select,
 .search {
   color: var(--fg);
@@ -165,4 +165,12 @@
   background: var(--bg-selected);
   border-color: var(--accent-text);
   color: var(--fg);
+}
+
+.field input[type="checkbox"] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent-text);
 }

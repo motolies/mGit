@@ -35,6 +35,7 @@ export interface EditorFile {
   controls: Compartment;
   annotations: Compartment;
   revealPosition?: number;
+  revealFocus?: { session: SessionId; path: string };
   explicitSave?: () => Promise<boolean>;
   sources: Map<string, EditorSource>;
   timer?: ReturnType<typeof setTimeout>;
@@ -104,10 +105,11 @@ export class FileEditorStore {
   }
 
   /** 검색 결과의 위치를 공유 문서와 실제 화면에 전달한다. */
-  reveal(doc: EditorFile, position: number): void {
+  reveal(doc: EditorFile, position: number, focus?: { session: SessionId; path: string }): void {
     const anchor = Math.max(0, Math.min(position, doc.state.doc.length));
     doc.state = doc.state.update({ selection: { anchor } }).state;
     doc.revealPosition = anchor;
+    if (focus) doc.revealFocus = focus;
     this.emit();
   }
 

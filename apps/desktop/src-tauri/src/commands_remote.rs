@@ -427,3 +427,29 @@ pub async fn worktree_prune(state: State<'_, AppState>, session: u32) -> Result<
         .await?;
     Ok(())
 }
+
+/// 스태시의 추적·미추적 파일을 올바른 부모와 비교한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn stash_file_diff_document(
+    state: State<'_, AppState>,
+    session: u32,
+    oid: String,
+    path: String,
+    full: bool,
+    options: Option<crate::commands_history::DiffOptionsDto>,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    let oid = parse_oid(&oid)?;
+    Ok(state
+        .core()?
+        .core
+        .stash_file_diff_document(
+            SessionId(session),
+            &oid,
+            &path,
+            full,
+            options.map(Into::into).unwrap_or_default(),
+        )
+        .await?
+        .into())
+}

@@ -471,16 +471,25 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
     ]);
     expect(dds[2]?.title).toBe('/mock/storefront-web-hotfix');
     expect(detail.getByText(S.stash.files(4))).toBeTruthy();
-    const files = (stashDetail() as HTMLElement).querySelectorAll('li');
+    const files = (stashDetail() as HTMLElement).querySelectorAll(
+      '[role="treeitem"][data-kind="file"]',
+    );
     expect(files).toHaveLength(4);
     // 파일을 누르면 그 스태시 파일의 diff 가 에디터 탭으로 열리고, 그 파일이 열린 것으로 보인다
-    fireEvent.click(within(files[0] as HTMLElement).getByRole('button'));
+    fireEvent.click(files[0] as HTMLElement);
     await tick();
-    expect(st().selectedFile).toMatchObject({ commit: oid, path: files[0]?.title });
+    expect(st().selectedFile).toMatchObject({
+      commit: oid,
+      stash: oid,
+      origin: { kind: 'stash', oid },
+      path: files[0]?.getAttribute('title'),
+    });
     expect(within(area('editor') as HTMLElement).getAllByRole('tab')).toHaveLength(1);
     expect(
-      (stashDetail() as HTMLElement).querySelector('li[data-open="true"]')?.getAttribute('title'),
-    ).toBe(files[0]?.title);
+      (stashDetail() as HTMLElement)
+        .querySelector('[role="treeitem"][aria-selected="true"]')
+        ?.getAttribute('title'),
+    ).toBe(files[0]?.getAttribute('title'));
   });
 
   it('우클릭 메뉴 4개(옛 라벨·순서·구분선)와 "내용 보기"', async () => {

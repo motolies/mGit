@@ -4,6 +4,8 @@ import { S, shortHash } from '@mgit/ui';
 import { useEffect } from 'react';
 import { useDialogs } from '../../components/use-dialogs';
 import { type SessionState, useSession, useSessionOf } from '../../store';
+import { diffArrival, orderedDiffFiles } from '../../store/diff-origin';
+import { entryInArea } from '../../store/session-store';
 import { useCurrentFile } from '../workspace/use-current-file';
 import { DiffPaneView } from './DiffPaneView';
 import { subprojectPointers } from './subproject';
@@ -14,6 +16,8 @@ function pickDiff(st: SessionState) {
     repoPath: st.path,
     repoName: st.name,
     target: st.selectedFile,
+    statusEntries: st.status.entries,
+    openDiffTarget: st.openDiffTarget,
     diff: st.diff,
     document: st.diffDocument,
     busy: st.busy,
@@ -60,6 +64,32 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
     return null;
   }
   const { path, staged, commit, range } = s.target;
+  const origin = s.target.origin;
+  const files =
+    origin?.kind === 'worktree'
+      ? orderedDiffFiles(
+          s.statusEntries.filter((entry) => !entry.conflict && entryInArea(entry, staged)),
+        )
+      : (origin?.files ?? []);
+  const index = files.findIndex((file) => file.path === path);
+  const fileNavigation =
+    origin && origin.repoPath === s.repoPath && index >= 0
+      ? {
+          index,
+          total: files.length,
+          move: (direction: 1 | -1) => {
+            const file = files[index + direction];
+            if (!file || !s.target) return;
+            void s.openDiffTarget({
+              ...s.target,
+              path: file.path,
+              oldPath: 'oldPath' in file ? file.oldPath : null,
+              origin: { ...origin, files },
+              arrival: diffArrival(direction),
+            });
+          },
+        }
+      : undefined;
   // commit·범위 diff 는 읽기 전용 (stage/되돌리기 없음)
   const readOnly = commit !== null || range !== undefined;
   const areaLabel = range
@@ -133,6 +163,8 @@ function DiffPaneBody({ s, repoName }: { s: DiffSlice; repoName?: string }) {
   return (
     <>
       <DiffPaneView
+        fileNavigation={fileNavigation}
+        arrival={s.target.arrival}
         path={path}
         areaLabel={areaLabel}
         diff={s.diff}

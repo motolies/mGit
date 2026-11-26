@@ -470,12 +470,14 @@ describe('세션 슬롯 전이 → 저장소 탭 에디터의 활성 문서 (ED-
     expect(shownIn(id)).toBeNull();
   });
 
-  it('보이던 작업 트리 diff 의 파일이 상태에서 사라지면(stage·되돌리기) → 그래프', async () => {
+  it('보이던 작업 트리 파일이 사라지면 같은 staged 영역의 다음 파일을 유지한다', async () => {
     const { st, id } = await openConflictRepo();
     await st().openFile(STAGED, true);
+    const remaining = st().selectedFile?.origin?.files.filter((file) => file.path !== STAGED) ?? [];
     st().applyEvent(statusWithout(st(), id, STAGED));
-    expect(st().selectedFile).toBeNull();
-    expect(shownIn(id)).toBeNull();
+    expect(remaining.some((file) => file.path === st().selectedFile?.path)).toBe(true);
+    expect(st().selectedFile?.staged).toBe(true);
+    expect(shownIn(id)).toBe('diff');
   });
 
   it('충돌을 열어 둔 채 diff 를 보던 중 숨은 충돌이 해결되면 → diff 그대로', async () => {

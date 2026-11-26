@@ -2,6 +2,7 @@ import type { ChangedFile } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { useEffect } from 'react';
 import { useSession, useWorkspace } from '../../store';
+import { diffArrival, orderedDiffFiles } from '../../store/diff-origin';
 import { commitDiffDoc, type OpenMode } from '../../store/workspace-store';
 import { useCurrentFile } from '../workspace/use-current-file';
 import { ChangedFilesTree } from './ChangedFilesTree';
@@ -47,6 +48,13 @@ export function CommitDetail() {
     if (!d) return;
     openDoc?.(
       commitDiffDoc({
+        origin: {
+          kind: 'commit',
+          repoPath: s.repoPath,
+          oid: d.oid,
+          files: orderedDiffFiles(d.files),
+        },
+        arrival: mode === 'pinned' ? diffArrival(1) : undefined,
         repoPath: s.repoPath,
         repoName: s.repoName,
         oid: d.oid,

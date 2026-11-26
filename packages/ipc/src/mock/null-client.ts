@@ -118,6 +118,7 @@ export function createNullClient(): IpcClient {
     stashApply: async () => {},
     stashPop: async () => {},
     stashDrop: async () => {},
+    stashFileDiffDocument: async () => mockDiffDocument(null),
     stashFiles: async () => [],
     suggestWorktreePath: async () => '',
     worktreeAdd: async () => '',

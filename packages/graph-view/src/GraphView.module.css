@@ -34,3 +34,23 @@
   position: relative;
   width: 100%;
 }
+
+/* 저장소 이름 열 경계: 본문의 가상 행과 독립적으로 크기를 조절한다. */
+.repoResize {
+  margin: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+.repoResize:hover,
+.repoResize:focus-visible {
+  background: var(--accent-text);
+  outline: none;
+  opacity: 0.8;
+}

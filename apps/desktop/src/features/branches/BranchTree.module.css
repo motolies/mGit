@@ -48,16 +48,22 @@
 }
 
 .menuArea {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
 }
 
+.inner {
+  width: 100%;
+}
+
 .tree {
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   padding: var(--space-2) 0;
   outline: none;
@@ -142,10 +148,10 @@
 
 /* 이름은 자리가 모자랄 때만 줄어든다: 뒤의 회색 글자(기준 폭 0)가 남는 자리만 쓴다 */
 .label {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* 현재 브랜치는 색 말고 굵기로도 알린다 */
@@ -179,10 +185,10 @@
 }
 
 .suffix {
-  flex: 1 1 0;
+  flex: 1 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--fg-muted);
 }
 

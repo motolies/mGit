@@ -346,6 +346,9 @@
 }
 
 .horizontal {
+  height: 18px;
+  min-height: 18px;
+  box-sizing: border-box;
   overflow-x: scroll;
   overflow-y: hidden;
   min-width: 0;
@@ -402,4 +405,21 @@
   border-radius: 4px;
   font: inherit;
   padding: 3px 6px;
+}
+
+/* macOS의 오버레이 스크롤바에서도 잡을 수 있는 가로 트랙을 본문 아래에 확보한다. */
+.horizontal::-webkit-scrollbar {
+  height: 12px;
+}
+.horizontal::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}
+.horizontal::-webkit-scrollbar-thumb {
+  background: var(--fg-muted);
+  border: 2px solid var(--bg-panel);
+  border-radius: 6px;
+}
+.horizontal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

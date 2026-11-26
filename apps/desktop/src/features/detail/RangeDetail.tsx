@@ -1,6 +1,7 @@
 import type { ChangedFile } from '@mgit/ipc';
 import { S, shortHash } from '@mgit/ui';
 import { useSession, useWorkspace } from '../../store';
+import { diffArrival, orderedDiffFiles } from '../../store/diff-origin';
 import { EMPTY_TREE } from '../../store/squash-range';
 import { type OpenMode, rangeDiffDoc } from '../../store/workspace-store';
 import { useCurrentFile } from '../workspace/use-current-file';
@@ -28,6 +29,15 @@ export function RangeDetail() {
   const open = (file: ChangedFile, mode: OpenMode) =>
     openDoc?.(
       rangeDiffDoc({
+        origin: {
+          kind: 'range',
+          repoPath: s.repoPath,
+          base: r.base,
+          newer: r.newer,
+          label: S.diff.rangeLabel(shortHash(r.older), shortHash(r.newer)),
+          files: orderedDiffFiles(r.files),
+        },
+        arrival: mode === 'pinned' ? diffArrival(1) : undefined,
         repoPath: s.repoPath,
         repoName: s.repoName,
         path: file.path,

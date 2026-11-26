@@ -222,3 +222,21 @@
   opacity: 0.5;
   cursor: default;
 }
+
+.tabRow {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 80px;
+  align-items: stretch;
+}
+.tabLabel {
+  max-width: 240px;
+  min-width: 0;
+}
+.tabLabel > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync {
+  flex-shrink: 0;
+}

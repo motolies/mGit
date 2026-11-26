@@ -278,7 +278,7 @@ describe('ChangedFilesTree (CD-01·04)', () => {
     expect(screen.getByText('one.ts')).toBeTruthy();
   });
 
-  it('키보드: ↑↓·Home·End 는 선택만 옮기고, ←→ 로 접고 펴며 부모로, Enter = 고정, Space = 미리보기', () => {
+  it('키보드: ↑↓·Home·End 는 파일을 미리보고, ←→ 로 접고 펴며 부모로, Enter = 고정, Space = 미리보기', () => {
     const { tree, onPreview, onOpen } = setup();
     fireEvent.keyDown(tree, { key: 'ArrowDown' });
     expect(selectedName()).toContain('api');
@@ -301,7 +301,7 @@ describe('ChangedFilesTree (CD-01·04)', () => {
     expect(item('a').getAttribute('aria-expanded')).toBe('true');
     fireEvent.keyDown(tree, { key: 'ArrowRight' });
     expect(selectedName()).toContain('one.ts');
-    expect(onPreview).not.toHaveBeenCalled();
+    expect(onPreview).toHaveBeenLastCalledWith(FILES[0]);
     fireEvent.keyDown(tree, { key: ' ' });
     expect(onPreview).toHaveBeenCalledWith(FILES[0]);
     fireEvent.keyDown(tree, { key: 'Enter' });

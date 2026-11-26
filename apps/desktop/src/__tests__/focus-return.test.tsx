@@ -1,6 +1,6 @@
 import { PromptDialog } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { StrictMode, useState } from 'react';
+import { StrictMode, useRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { captureFocusReturn, useModal } from '../components/use-modal';
 import { EditorArea } from '../features/workspace/EditorArea';
@@ -77,6 +77,33 @@ function StrictMountFixture() {
   );
 }
 
+/** 이동할 화면이 그려지기 전에는 원래 영역으로 포커스를 돌리지 않는다. */
+function NavigationDialogFixture() {
+  const [open, setOpen] = useState(false);
+  const restore = useRef(true);
+  const ref = useModal(open, { restoreFocus: () => restore.current });
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        origin
+      </button>
+      {open && (
+        <dialog ref={ref}>
+          <button
+            type="button"
+            onClick={() => {
+              restore.current = false;
+              setOpen(false);
+            }}
+          >
+            navigate
+          </button>
+        </dialog>
+      )}
+    </>
+  );
+}
+
 beforeEach(installDialogStub);
 afterEach(() => {
   cleanup();
@@ -84,6 +111,17 @@ afterEach(() => {
 });
 
 describe('출발 요소 포커스 복귀', () => {
+  it('성공한 화면 이동은 모달의 출발 요소 복귀를 억제할 수 있다', () => {
+    render(<NavigationDialogFixture />);
+    const origin = screen.getByText('origin');
+    origin.focus();
+    fireEvent.click(origin);
+    const navigate = screen.getByText('navigate');
+    navigate.focus();
+    fireEvent.click(navigate);
+    expect(document.activeElement).not.toBe(origin);
+  });
+
   it('공유 입력 대화상자 취소도 사라진 출발 요소의 다음 항목으로 복귀한다', () => {
     const view = (open: boolean) => (
       <>

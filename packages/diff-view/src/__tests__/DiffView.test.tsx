@@ -191,6 +191,66 @@ describe('DiffView 키보드 본문', () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it('변경 내부에서도 이전은 논리적 이전 변경이며 첫 변경에서는 경계를 반환한다', async () => {
+    let navigation: import('../DiffView').DiffNavigation | undefined;
+    const ready = (_element: HTMLElement, value: import('../DiffView').DiffNavigation) => {
+      navigation = value;
+      return () => {};
+    };
+    renderLines(
+      <DiffView
+        diff={{ ...diff('a'), hunks: [hunk('a'), hunk('b')] }}
+        path="a.txt"
+        mode="unified"
+        onNavigationReady={ready}
+      />,
+    );
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    grid.focus();
+    fireEvent.keyDown(grid, { key: 'ArrowDown' });
+    expect(navigation?.current).toBe(1);
+    expect(navigation?.canMove(-1)).toBe(false);
+    let moved: boolean | undefined;
+    act(() => {
+      moved = navigation?.moveHunk(-1);
+    });
+    expect(moved).toBe(false);
+    act(() => navigation?.moveHunk(1));
+    expect(navigation?.current).toBe(2);
+  });
+
+  it('마지막 변경 도착은 한 번만 포커스하고 이후 내용 갱신은 입력 포커스를 빼앗지 않는다', async () => {
+    const arrival = { token: 999, edge: 'last' as const, focus: true };
+    let navigation: import('../DiffView').DiffNavigation | undefined;
+    const ready = (_element: HTMLElement, value: import('../DiffView').DiffNavigation) => {
+      navigation = value;
+      return () => {};
+    };
+    const view = (tag: string, mode: 'split' | 'unified') => (
+      <>
+        <input aria-label="keep-focus" />
+        <DiffView
+          diff={{ ...diff('a'), hunks: [hunk(tag), hunk('b'), hunk('c')] }}
+          path="a.txt"
+          mode={mode}
+          arrival={arrival}
+          onNavigationReady={ready}
+        />
+      </>
+    );
+    const { rerender } = renderLines(view('a', 'unified'));
+    await flush();
+    expect(navigation?.current).toBe(3);
+    expect(document.activeElement).toBe(screen.getByTestId('diff-scroller'));
+    const input = screen.getByRole('textbox', { name: 'keep-focus' });
+    input.focus();
+    rerender(view('changed', 'split'));
+    await flush();
+    expect(document.activeElement).toBe(input);
+    expect(navigation?.current).toBe(3);
+  });
+
   it('split 좌우 선택과 IME 보호를 제공한다', async () => {
     renderLines(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
     await flush();
@@ -666,4 +726,83 @@ describe('기본 변경 블록 선택', () => {
     expect(screen.queryByRole('combobox', { name: S.diff.selectionUnit })).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
+});
+
+/** 비동기로 원문이 도착한 뒤에도 본문 휠이 가로 스크롤바에 연결되어야 한다. */
+it('늦게 로드된 삭제 파일의 긴 줄을 휠로 이동하고 sync off에서는 반대쪽을 유지한다', async () => {
+  const value = {
+    ...diff('long'),
+    newPath: null,
+    change: { kind: 'deleted' },
+    hunks: [
+      {
+        ...hunk('long'),
+        newLines: 0,
+        lines: [{ kind: 'del', oldNo: 1, newNo: null, text: 'x'.repeat(400), noNewline: false }],
+      },
+    ],
+  } as FileDiff;
+  const { rerender } = render(
+    <DiffView diff={null} loading path="long.txt" mode="split" horizontalSync={false} />,
+  );
+  rerender(<DiffView diff={value} path="long.txt" mode="split" horizontalSync={false} />);
+  await flush();
+  const left = screen.getByRole('region', { name: S.diff.oldHorizontalScroll });
+  const right = screen.getByRole('region', { name: S.diff.newHorizontalScroll });
+  const code = document.querySelector('[data-side="left"]');
+  if (!code) throw new Error('Missing left side');
+  fireEvent.wheel(code, { deltaX: 120 });
+  expect(left.scrollLeft).toBe(120);
+  expect(right.scrollLeft).toBe(0);
+  const gutter = document.querySelector('[data-scroll-side="left"]');
+  if (!gutter) throw new Error('Missing gutter');
+  fireEvent.wheel(gutter, { deltaY: 2, deltaMode: 1, shiftKey: true });
+  expect(left.scrollLeft).toBe(160);
+  fireEvent.scroll(left);
+  expect(
+    screen
+      .getByTestId('diff-scroller')
+      .closest('[style*="--diff-left-scroll"]')
+      ?.getAttribute('style'),
+  ).toContain('160px');
+});
+
+it('동기화할 반대 패널의 실제 스크롤 한계를 넘겨 코드를 밀지 않는다', async () => {
+  render(<DiffView diff={diff('a')} path="a.txt" mode="split" />);
+  await flush();
+  const left = screen.getByRole('region', { name: S.diff.oldHorizontalScroll });
+  const right = screen.getByRole('region', { name: S.diff.newHorizontalScroll });
+  let clamped = 0;
+  Object.defineProperty(right, 'scrollLeft', {
+    configurable: true,
+    get: () => clamped,
+    set: (value: number) => {
+      clamped = Math.min(30, value);
+    },
+  });
+  left.scrollLeft = 120;
+  fireEvent.scroll(left);
+  expect(right.scrollLeft).toBe(30);
+  expect(right.closest('[style*="--diff-split"]')?.getAttribute('style')).toContain(
+    '--diff-right-scroll: 30px',
+  );
+});
+
+it('좌우·통합 전환 뒤 스크롤바와 코드 오프셋을 같은 시작점으로 맞춘다', async () => {
+  const value = diff('a');
+  const { rerender } = render(<DiffView diff={value} path="a.txt" mode="split" />);
+  await flush();
+  const left = screen.getByRole('region', { name: S.diff.oldHorizontalScroll });
+  left.scrollLeft = 120;
+  fireEvent.scroll(left);
+  rerender(<DiffView diff={value} path="a.txt" mode="unified" />);
+  await flush();
+  const unified = screen.getByRole('region', { name: S.diff.newHorizontalScroll });
+  expect(unified.scrollLeft).toBe(0);
+  expect(unified.closest('[style*="--diff-split"]')?.getAttribute('style')).toContain(
+    '--diff-left-scroll: 0px',
+  );
+  rerender(<DiffView diff={value} path="a.txt" mode="split" />);
+  await flush();
+  expect(screen.getByRole('region', { name: S.diff.oldHorizontalScroll }).scrollLeft).toBe(0);
 });

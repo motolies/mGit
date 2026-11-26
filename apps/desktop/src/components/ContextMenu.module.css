@@ -51,6 +51,8 @@
 /* 드롭다운 메뉴의 내용 (W25): 창 높이를 넘으면 메뉴 안에서 스크롤한다. 넘치지 않으면 아무것도 바뀌지 않는다.
    컨텍스트 메뉴에는 걸지 않는다 (높이 변수가 드롭다운 것이다) */
 .dropdown {
+  max-width: min(460px, calc(100vw - 16px));
+  overflow-wrap: anywhere;
   max-height: var(--radix-dropdown-menu-content-available-height);
   overflow-y: auto;
 }

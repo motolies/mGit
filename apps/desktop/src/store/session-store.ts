@@ -1,3 +1,4 @@
+import type { DiffArrival } from '@mgit/diff-view';
 import { DEFAULT_GRAPH_COLUMNS, type GraphColumns } from '@mgit/graph-view';
 import type {
   AdvancedSearch,
@@ -84,6 +85,7 @@ import { S, shortHash } from '@mgit/ui';
 import { createStore, type StoreApi } from 'zustand';
 import { prependCapped } from './command-log';
 import { type ContainingEntry, createContainingLoader } from './containing-loader';
+import { type DiffOrigin, nearestDiffFile, orderedDiffFiles } from './diff-origin';
 import { describeError } from './errors';
 import { createFileTree, type FileTreeStore } from './file-tree';
 import type { TimelineAuthors } from './folder-store';
@@ -290,6 +292,9 @@ export interface OperationState {
 
 /** 우측·중앙 패널이 보고 있는 파일. `commit` 이 있으면 그 커밋의 파일 diff */
 export interface FileTarget {
+  origin?: DiffOrigin;
+  arrival?: DiffArrival;
+  stash?: string;
   path: string;
   staged: boolean;
   commit: string | null;
@@ -608,7 +613,9 @@ export interface SessionState {
   /** 보이는 커밋의 포함 branch 를 바로 다시 읽는다 (시간 초과·오류 뒤 "다시 시도") */
   retryContaining(): void;
   selectCommit(oid: string): void;
-  openFile(path: string, staged: boolean): Promise<void>;
+  openFile(path: string, staged: boolean, origin?: DiffOrigin): Promise<void>;
+  openDiffTarget(target: FileTarget): Promise<void>;
+  openStashFile(oid: string, path: string, oldPath?: string | null): Promise<void>;
   /**
    * 커밋(또는 스태시) 파일의 diff 를 연다. `oldPath` 는 이름이 바뀐 파일의 옛 경로(상세의
    * `ChangedFile.oldPath`)로, 주면 rename 으로 짝지은 diff 가 나온다. 모르면 생략 (새 경로만으로 묻는다)
@@ -1371,7 +1378,9 @@ export function createSessionStore(
         const { ignoreWhitespace, context } = get().diffOptions;
         const opts = { ignoreWhitespace, context };
         let document: DiffDocument;
-        if (target.range) {
+        if (target.stash) {
+          document = await client.stashFileDiffDocument(id, target.stash, target.path, full, opts);
+        } else if (target.range) {
           document = await client.compareFileDiffDocument(
             id,
             target.range.base,
@@ -1945,9 +1954,35 @@ export function createSessionStore(
                 (e) => e.path === target.path && entryInArea(e, target.staged),
               );
               if (stillThere) {
-                void loadDiff(target, diffFull, s.busy);
+                const files = orderedDiffFiles(
+                  event.status.entries.filter(
+                    (entry) => !entry.conflict && entryInArea(entry, target.staged),
+                  ),
+                );
+                const nextTarget =
+                  target.origin?.kind === 'worktree'
+                    ? { ...target, origin: { ...target.origin, files } }
+                    : target;
+                if (nextTarget !== target) set({ selectedFile: nextTarget });
+                void loadDiff(nextTarget, diffFull, s.busy);
               } else {
-                set({ selectedFile: null, diff: null, diffDocument: null, diffLoading: false });
+                const files = orderedDiffFiles(
+                  event.status.entries.filter(
+                    (entry) => !entry.conflict && entryInArea(entry, target.staged),
+                  ),
+                );
+                const next =
+                  target.origin?.kind === 'worktree'
+                    ? nearestDiffFile(target.path, target.origin.files, files)
+                    : undefined;
+                if (next && target.origin?.kind === 'worktree') {
+                  void get().openDiffTarget({
+                    ...target,
+                    path: next.path,
+                    origin: { ...target.origin, files },
+                  });
+                } else
+                  set({ selectedFile: null, diff: null, diffDocument: null, diffLoading: false });
               }
             }
             return;
@@ -2130,8 +2165,38 @@ export function createSessionStore(
         void loadDetail(oid);
       },
 
-      async openFile(path, staged) {
-        const target = { path, staged, commit: null };
+      async openDiffTarget(target) {
+        set({ selectedFile: target, diff: null });
+        options.onRevealDoc?.('diff');
+        await loadDiff(target, false);
+      },
+
+      async openStashFile(oid, path, oldPath = null) {
+        const view = get().stashView;
+        const origin: DiffOrigin | undefined =
+          view?.entry.info.oid === oid
+            ? { kind: 'stash', repoPath: get().path, oid, files: orderedDiffFiles(view.files) }
+            : undefined;
+        await get().openDiffTarget({
+          path,
+          staged: false,
+          commit: oid,
+          stash: oid,
+          oldPath,
+          origin,
+        });
+      },
+
+      async openFile(path, staged, origin) {
+        const files = orderedDiffFiles(
+          get().status.entries.filter((entry) => !entry.conflict && entryInArea(entry, staged)),
+        );
+        const target: FileTarget = {
+          path,
+          staged,
+          commit: null,
+          origin: origin ?? { kind: 'worktree', repoPath: get().path, staged, files },
+        };
         set({ selectedFile: target, diff: null });
         options.onRevealDoc?.('diff');
         await loadDiff(target, false);
@@ -2145,7 +2210,12 @@ export function createSessionStore(
       },
 
       async openCommitFile(oid, path, oldPath = null) {
-        const target = { path, staged: false, commit: oid, oldPath };
+        const detail = get().detail;
+        const origin: DiffOrigin | undefined =
+          detail?.oid === oid
+            ? { kind: 'commit', repoPath: get().path, oid, files: orderedDiffFiles(detail.files) }
+            : undefined;
+        const target: FileTarget = { path, staged: false, commit: oid, oldPath, origin };
         set({ selectedFile: target, diff: null });
         options.onRevealDoc?.('diff');
         await loadDiff(target, false);
@@ -2707,6 +2777,14 @@ export function createSessionStore(
           path,
           staged: false,
           commit: null,
+          origin: {
+            kind: 'range',
+            repoPath: get().path,
+            base: r.base,
+            newer: r.newer,
+            label: S.diff.rangeLabel(shortHash(r.older), shortHash(r.newer)),
+            files: orderedDiffFiles(r.files),
+          },
           range: {
             base: r.base,
             newer: r.newer,

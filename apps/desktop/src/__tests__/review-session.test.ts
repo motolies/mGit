@@ -733,3 +733,61 @@ describe('재로드 뒤 검색 재실행', () => {
     expect(store.getState().search.open).toBe(false);
   });
 });
+
+it('스태시 파일 탐색은 목록 선택과 번호가 바뀌어도 원래 OID와 파일 목록을 유지한다', async () => {
+  const files = ['a.txt', 'b.txt'].map((path) => ({
+    path,
+    oldPath: null,
+    change: { kind: 'added' as const },
+  }));
+  const read = vi.fn(async () => documentOf());
+  const { store } = setup({
+    listStashes: async () => [stash(0, '1', 'original')],
+    stashFiles: async () => files,
+    stashFileDiffDocument: read,
+  });
+  const original = stash(0, '1', 'original');
+  await store.getState().selectStash(original);
+  await store.getState().openStashFile(original.info.oid, 'a.txt');
+  const target = store.getState().selectedFile;
+  expect(target?.origin?.kind).toBe('stash');
+  if (!target) throw new Error('Expected stash target');
+  await store.getState().selectStash(stash(0, '2', 'another'));
+  await store.getState().openDiffTarget({ ...target, path: 'b.txt' });
+  expect(read).toHaveBeenLastCalledWith(1, original.info.oid, 'b.txt', false, expect.anything());
+  expect(store.getState().selectedFile?.origin?.files.map((file) => file.path)).toEqual([
+    'a.txt',
+    'b.txt',
+  ]);
+});
+
+it('작업 트리 탐색 출처는 동일 저장소의 staged 또는 unstaged 영역만 포함한다', async () => {
+  const { store } = setup({ workTreeDiffDocument: async () => documentOf() });
+  const previous = store.getState().status;
+  store.setState({
+    status: {
+      ...previous,
+      entries: [
+        { path: 'both.txt', index: 'modified', worktree: 'modified' },
+        { path: 'stage-only.txt', index: 'modified', worktree: 'unmodified' },
+        { path: 'work-only.txt', index: 'unmodified', worktree: 'modified' },
+        { path: 'conflict.txt', index: 'unmerged', worktree: 'unmerged', conflict: 'bothModified' },
+      ],
+    },
+  });
+  await store.getState().openFile('both.txt', true);
+  expect(store.getState().selectedFile?.origin?.files.map((file) => file.path)).toEqual([
+    'both.txt',
+    'stage-only.txt',
+  ]);
+  expect(store.getState().selectedFile?.origin).toMatchObject({
+    repoPath: '/r',
+    kind: 'worktree',
+    staged: true,
+  });
+  await store.getState().openFile('both.txt', false);
+  expect(store.getState().selectedFile?.origin?.files.map((file) => file.path)).toEqual([
+    'both.txt',
+    'work-only.txt',
+  ]);
+});

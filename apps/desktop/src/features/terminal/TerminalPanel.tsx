@@ -1,8 +1,13 @@
 import { type TerminalIo, TerminalView } from '@mgit/terminal';
-import { Button, Icon, S } from '@mgit/ui';
-import { useContext, useMemo } from 'react';
+import { Button, Icon, isImeKey, S } from '@mgit/ui';
+import { useContext, useMemo, useRef } from 'react';
 import { CommandContext } from '../../components/command-context';
-import { hasModifier, rovingIndex } from '../../components/roving';
+import { hasModifier } from '../../components/roving';
+import {
+  TabListMenu,
+  tabNavigationIndex,
+  useRevealActiveTab,
+} from '../../components/tab-navigation';
 import { terminalPassKey } from '../../global-keys';
 import { useAppStore } from '../../store';
 import styles from './TerminalPanel.module.css';
@@ -21,76 +26,96 @@ export function TerminalTabs() {
   const close = useAppStore((st) => st.closeTerminal);
   const activate = useAppStore((st) => st.setActiveTerminal);
   const t = S.terminal;
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useRevealActiveTab(tabsRef, active);
   return (
-    <div
-      className={styles.tabs}
-      data-terminal=""
-      role="tablist"
-      aria-label={t.title}
-      onKeyDown={(e) => {
-        if (hasModifier(e)) return;
-        if ((e.key === 'Delete' || e.key === 'Backspace') && active !== null) {
-          e.preventDefault();
-          const index = terminals.findIndex((t) => t.id === active);
-          const next = terminals[index + 1] ?? terminals[index - 1];
-          close(active);
-          setTimeout(() => {
-            if (next) document.getElementById(`terminal-tab-${next.id}`)?.focus();
-            else document.querySelector<HTMLElement>('[data-terminal-new]')?.focus();
-          }, 0);
-          return;
-        }
-        const next = rovingIndex(
-          e.key,
-          terminals.findIndex((t) => t.id === active),
-          terminals.length,
-          'horizontal',
-        );
-        const term = next === null ? undefined : terminals[next];
-        if (!term) return;
-        e.preventDefault();
-        activate(term.id);
-        document.getElementById(`terminal-tab-${term.id}`)?.focus();
-      }}
-    >
-      {terminals.map((term) => (
-        <span
-          key={term.id}
-          className={styles.tab}
-          data-active={term.id === active ? 'true' : 'false'}
-          data-exited={term.exitCode !== undefined ? 'true' : 'false'}
-        >
-          <button
-            type="button"
-            className={styles.tabName}
-            id={`terminal-tab-${term.id}`}
-            role="tab"
-            aria-selected={term.id === active}
-            tabIndex={term.id === active ? 0 : -1}
-            title={term.cwd}
-            onClick={() => activate(term.id)}
-          >
-            {term.title || baseName(term.cwd)}
-            {term.exitCode !== undefined ? ` · ${t.exited(term.exitCode)}` : ''}
-          </button>
-          <button
-            type="button"
-            className={styles.tabButton}
-            title={t.close}
-            aria-label={t.close}
-            tabIndex={-1}
-            onClick={() => {
-              const index = terminals.findIndex((t) => t.id === term.id);
-              const next = terminals[index + 1] ?? terminals[index - 1];
-              close(term.id);
+    <div className={styles.tabsHeader} data-terminal="">
+      <div
+        ref={tabsRef}
+        className={styles.tabs}
+        data-terminal=""
+        role="tablist"
+        aria-label={t.title}
+        onKeyDown={(e) => {
+          if (isImeKey(e) || hasModifier(e) || !(e.target as HTMLElement).matches('[role="tab"]'))
+            return;
+          if ((e.key === 'Delete' || e.key === 'Backspace') && active !== null) {
+            e.preventDefault();
+            const index = terminals.findIndex((t) => t.id === active);
+            const next = terminals[index + 1] ?? terminals[index - 1];
+            close(active);
+            setTimeout(() => {
               if (next) document.getElementById(`terminal-tab-${next.id}`)?.focus();
               else document.querySelector<HTMLElement>('[data-terminal-new]')?.focus();
-            }}
+            }, 0);
+            return;
+          }
+          const next = tabNavigationIndex(
+            e,
+            terminals.findIndex((t) => t.id === active),
+            terminals.length,
+          );
+          const term = next === null ? undefined : terminals[next];
+          if (!term) return;
+          e.preventDefault();
+          activate(term.id);
+          document.getElementById(`terminal-tab-${term.id}`)?.focus();
+        }}
+      >
+        {terminals.map((term) => (
+          <span
+            key={term.id}
+            className={styles.tab}
+            data-active={term.id === active ? 'true' : 'false'}
+            data-exited={term.exitCode !== undefined ? 'true' : 'false'}
           >
-            <Icon name="close" />
-          </button>
-        </span>
-      ))}
+            <button
+              type="button"
+              className={styles.tabName}
+              id={`terminal-tab-${term.id}`}
+              role="tab"
+              aria-selected={term.id === active}
+              aria-controls={`terminal-panel-${term.id}`}
+              tabIndex={
+                term.id === active || (active === null && terminals[0]?.id === term.id) ? 0 : -1
+              }
+              title={term.cwd}
+              onClick={() => activate(term.id)}
+            >
+              {term.title || baseName(term.cwd)}
+              {term.exitCode !== undefined ? ` · ${t.exited(term.exitCode)}` : ''}
+            </button>
+            <button
+              type="button"
+              className={styles.tabButton}
+              title={t.close}
+              aria-label={t.close}
+              tabIndex={-1}
+              onClick={() => {
+                const index = terminals.findIndex((t) => t.id === term.id);
+                const next = terminals[index + 1] ?? terminals[index - 1];
+                close(term.id);
+                if (next) document.getElementById(`terminal-tab-${next.id}`)?.focus();
+                else document.querySelector<HTMLElement>('[data-terminal-new]')?.focus();
+              }}
+            >
+              <Icon name="close" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <TabListMenu
+        label={t.title}
+        active={active === null ? null : String(active)}
+        items={terminals.map((term) => ({
+          id: String(term.id),
+          title: `${term.title || baseName(term.cwd)} — ${term.cwd}`,
+        }))}
+        select={(id) => {
+          activate(Number(id));
+          requestAnimationFrame(() => document.getElementById(`terminal-tab-${id}`)?.focus());
+        }}
+      />
       <button
         type="button"
         className={styles.tabButton}
@@ -148,6 +173,9 @@ export function TerminalPanel() {
         <div
           key={term.id}
           className={styles.slot}
+          id={`terminal-panel-${term.id}`}
+          role="tabpanel"
+          aria-labelledby={`terminal-tab-${term.id}`}
           style={{ display: term.id === active ? 'block' : 'none' }}
         >
           <TerminalView

@@ -135,14 +135,19 @@ export const LEFT_TOOL_PANEL = {
  */
 export function focusTargetIn(panel: HTMLElement): HTMLElement {
   const notSeparator = ':not([role="separator"])';
+  // 툴바보다 본문을 우선하며 모든 폴백에서도 숨은 항목과 비활성 항목을 제외한다.
+  const visible = (selector: string) =>
+    [...panel.querySelectorAll<HTMLElement>(selector)].find(
+      (element) =>
+        !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
+        !element.matches(':disabled, [aria-disabled="true"]'),
+    );
   return (
-    panel.querySelector<HTMLElement>(
-      `[role="tabpanel"] [tabindex="0"]${notSeparator}, [role="tabpanel"] .cm-content`,
-    ) ??
-    panel.querySelector<HTMLElement>(`[tabindex="0"]${notSeparator}`) ??
-    panel.querySelector<HTMLElement>(
-      'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select, textarea',
-    ) ??
+    visible('[data-primary-focus="content"], [role="tabpanel"] .cm-content') ??
+    visible('[data-primary-focus]') ??
+    visible(`[role="tabpanel"] [tabindex="0"]${notSeparator}`) ??
+    visible(`[tabindex="0"]${notSeparator}`) ??
+    visible('button:not([tabindex="-1"]), input, select, textarea') ??
     panel
   );
 }
@@ -867,6 +872,8 @@ function contextActions(): Action[] {
     ['editor.format', S.fileEditor.format, 'view'],
     ['branch.rename', S.actions.renameBranch, 'branch'],
     ['branch.checkout', S.actions.checkoutBranch, 'branch'],
+    ['diff.previousFile', S.diff.previousFile, 'view'],
+    ['diff.nextFile', S.diff.nextFile, 'view'],
   ];
   return definitions.map(([id, title, group]) => ({
     id,

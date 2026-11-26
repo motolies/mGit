@@ -351,6 +351,67 @@ impl Core {
         ))
     }
 
+    /// 스태시는 OID로 고정하고 미추적 파일의 세 번째 부모를 별도로 읽는다.
+    pub async fn stash_file_diff_document(
+        &self,
+        session: SessionId,
+        oid: &Oid,
+        path: &str,
+        full: bool,
+        opts: DiffOptions,
+    ) -> Result<DiffDocument, CoreError> {
+        mgit_model::RelPath::parse(path).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let s = self.inner().get(session)?;
+        let runner = self.inner().runner();
+        let meta = mgit_git::cmd::commit_meta(runner, &s.info.work_tree, oid).await?;
+        if meta.parents.len() < 2 {
+            return Err(CoreError::Invalid(
+                mgit_l10n::pick("스태시 커밋이 아닙니다", "Not a stash commit").into(),
+            ));
+        }
+        if let Some(untracked) = meta.parents.get(2) {
+            let target = untracked.to_hex();
+            if source(runner, &s.info.work_tree, Some(&target), path)
+                .await?
+                .path
+                .is_some()
+            {
+                let mut result = self
+                    .compare_file_diff_document(
+                        session,
+                        crate::history::EMPTY_TREE,
+                        &target,
+                        false,
+                        path,
+                        opts,
+                        full,
+                    )
+                    .await?;
+                result.revision = format!("stash:{}:{}", oid.to_hex(), result.revision);
+                return Ok(result);
+            }
+        }
+        let files = self.stash_files(session, oid).await?;
+        let file = files.iter().find(|file| file.path == path).ok_or_else(|| {
+            CoreError::Invalid(
+                mgit_l10n::pick(
+                    "스태시에 해당 변경 파일이 없습니다",
+                    "Changed file is not in this stash",
+                )
+                .into(),
+            )
+        })?;
+        self.commit_file_diff_document_at(
+            &s.info.work_tree,
+            oid,
+            path,
+            file.old_path.as_deref(),
+            full,
+            opts,
+        )
+        .await
+    }
+
     /// 커밋 비교는 기존 첫 부모·루트 규칙을 사용한다.
     pub async fn commit_file_diff_document(
         &self,

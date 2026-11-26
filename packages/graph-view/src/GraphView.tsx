@@ -1,5 +1,5 @@
 import type { GraphRangeCache, GraphRow } from '@mgit/ipc';
-import { S } from '@mgit/ui';
+import { isImeKey, S } from '@mgit/ui';
 import { type Rect, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -21,6 +21,7 @@ import {
   GraphRowView,
   graphColumnLeft,
   type RepoLookup,
+  repoColumnWidth,
   type SelectModifiers,
   subjectColumnWidth,
 } from './GraphRow';
@@ -100,6 +101,8 @@ export interface GraphViewProps {
   avatarOf?: AvatarLookup;
   /** 행의 저장소 (통합 타임라인). `columns.repo` 와 함께 쓴다 */
   repoOf?: RepoLookup;
+  /** 저장소 열 경계를 드래그하거나 방향키로 바꾼다. */
+  onRepoWidthChange?: (width: number) => void;
   /** 범위 선택에 든 행 (GRAPH-10) */
   rangeRows?: ReadonlySet<number>;
   /** ⇧+클릭 (GRAPH-10). 없으면 보통 선택으로 처리 */
@@ -155,6 +158,7 @@ export function GraphView({
   columns = DEFAULT_GRAPH_COLUMNS,
   avatarOf,
   repoOf,
+  onRepoWidthChange,
   rangeRows,
   onSelectRange,
   dimRow,
@@ -162,6 +166,7 @@ export function GraphView({
   const baseId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const repoResize = useRef<{ x: number; width: number } | null>(null);
   const [viewportHeight, setViewportHeight] = useState(initialRect?.height ?? 0);
   const [maxLaneSeen, setMaxLaneSeen] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(initialRect?.width ?? 0);
@@ -309,9 +314,15 @@ export function GraphView({
     }
   }, [seen, maxLaneSeen]);
   const graphCol = graphColumnWidth(maxLaneSeen + 1, laneWidth, laneCap);
-  const graphLeft = graphColumnLeft(columns);
+  // 창이 좁아져도 저장소 열 경계가 화면 밖으로 사라지지 않도록 표시 폭만 제한한다.
+  const repoWidthMax =
+    viewportWidth > 0 ? Math.max(80, Math.min(600, viewportWidth - graphCol - 240)) : 600;
+  const layoutColumns = columns.repo
+    ? { ...columns, repoWidth: Math.min(repoColumnWidth(columns), repoWidthMax) }
+    : columns;
+  const graphLeft = graphColumnLeft(layoutColumns);
   // 좁은 뷰에서는 다 들어가지 않는 칸을 뺀다 (제목 칸을 지킨다). 띠·그래프는 그대로라 캔버스 위치는 같다
-  const shownColumns = fitColumns(columns, graphCol, viewportWidth);
+  const shownColumns = fitColumns(layoutColumns, graphCol, viewportWidth);
   const labelBudget = refLabelBudget(
     viewportWidth > 0 ? subjectColumnWidth(shownColumns, graphCol, viewportWidth) : 0,
   );
@@ -582,6 +593,63 @@ export function GraphView({
       aria-activedescendant={selectedItem ? rowDomId(selectedItem.index) : undefined}
       onKeyDown={onKeyDown}
     >
+      {columns.repo && onRepoWidthChange ? (
+        <hr
+          aria-orientation="vertical"
+          aria-label={S.folder.columns.name}
+          aria-valuemin={80}
+          aria-valuemax={repoWidthMax}
+          aria-valuenow={repoColumnWidth(layoutColumns)}
+          tabIndex={0}
+          className={styles.repoResize}
+          style={{ left: repoColumnWidth(layoutColumns) - 3 }}
+          title={S.folder.columns.name}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            repoResize.current = { x: event.clientX, width: repoColumnWidth(layoutColumns) };
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            event.currentTarget.focus({ preventScroll: true });
+          }}
+          onPointerMove={(event) => {
+            if (repoResize.current)
+              onRepoWidthChange(
+                Math.max(
+                  80,
+                  Math.min(
+                    repoWidthMax,
+                    repoResize.current.width + event.clientX - repoResize.current.x,
+                  ),
+                ),
+              );
+          }}
+          onPointerUp={(event) => {
+            repoResize.current = null;
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+          }}
+          onPointerCancel={() => {
+            repoResize.current = null;
+          }}
+          onKeyDown={(event) => {
+            if (isImeKey(event) || event.metaKey || event.ctrlKey || event.altKey) return;
+            if (event.key !== 'Tab') event.stopPropagation();
+            const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+            if (direction) {
+              event.preventDefault();
+              event.stopPropagation();
+              onRepoWidthChange(
+                Math.max(
+                  80,
+                  Math.min(
+                    repoWidthMax,
+                    repoColumnWidth(layoutColumns) + direction * (event.shiftKey ? 40 : 10),
+                  ),
+                ),
+              );
+            }
+          }}
+        />
+      ) : null}
       <GraphCanvas
         canvasRef={canvasRef}
         width={graphCol}

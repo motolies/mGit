@@ -37,6 +37,7 @@
 }
 
 .menuArea {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -45,9 +46,10 @@
 
 /* 스크롤 영역이자 포커스를 받는 트리. 행은 안쪽 상자에 절대 위치로 놓인다 (가상 스크롤) */
 .tree {
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   outline: none;
 }
@@ -108,10 +110,10 @@
 
 .name,
 .nameBold {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .nameBold {
@@ -122,11 +124,11 @@
 
 /* 이름 뒤 회색 글자 (루트의 경로). 자리가 모자라면 줄어든다 */
 .detail {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .changed {
@@ -136,12 +138,12 @@
 
 /* 브랜치명. 긴 이름은 줄여 뒤의 ahead·behind·배지가 보이게 하되, 알아볼 만큼은 남긴다 */
 .branch {
-  flex: 0 1 auto;
-  min-width: 5ch;
+  flex: 0 0 auto;
+  min-width: 0;
   color: var(--vcs-branch);
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .sync {
@@ -187,10 +189,10 @@
 
 /* 파일 행 뒤의 `날짜, 크기` (PT-10). 남는 폭만 쓰고(이름이 먼저) 모자라면 잘린다 */
 .stamp {
-  flex: 1 1 0;
+  flex: 1 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--fg-muted);
 }
 
@@ -242,10 +244,10 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--fg-muted);
   font-style: italic;
 }
@@ -257,10 +259,10 @@
 
 /* "… N개 더 보기" */
 .more {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--accent-text);
 }
 

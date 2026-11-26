@@ -195,6 +195,8 @@ export const commands = {
 	stashDrop: (session: number, index: number) => __TAURI_INVOKE<null>("stash_drop", { session, index }),
 	/**  스태시가 바꾼 파일 (ST-04) */
 	stashFiles: (session: number, oid: string) => __TAURI_INVOKE<ChangedFile_Serialize[]>("stash_files", { session, oid }),
+	/**  스태시의 추적·미추적 파일을 올바른 부모와 비교한다. */
+	stashFileDiffDocument: (session: number, oid: string, path: string, full: boolean, options: DiffOptionsDto | null) => __TAURI_INVOKE<DiffDocument_Serialize>("stash_file_diff_document", { session, oid, path, full, options }),
 	/**  워크트리 기본 경로 제안 (WT-02) */
 	suggestWorktreePath: (session: number, branch: string) => __TAURI_INVOKE<string>("suggest_worktree_path", { session, branch }),
 	/**  워크트리 생성. 만든 경로를 돌려준다 */

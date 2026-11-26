@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsDialog } from '../features/app/AppDialogs';
 import { Root } from '../Root';
 import { useAppStore } from '../store';
+import { getEditorPreferences, setEditorPreferences } from '../store/editor-preferences';
 import type { LanguagePreference } from '../store/language';
 import { installDialogStub, removeDialogStub, tick } from './dialog-stub';
 
@@ -92,6 +93,71 @@ afterEach(() => {
 });
 
 describe('설정 대화상자 (⌘,)', () => {
+  it('편집기 토글은 체크박스로 저장·재열기하고 취소한 초안은 적용하지 않는다', async () => {
+    const original = getEditorPreferences();
+    setEditorPreferences({
+      printWidth: 200,
+      formatOnSave: false,
+      currentBlame: true,
+      allBlame: false,
+      changeMarkers: true,
+    });
+    try {
+      openSettings('ko');
+      render(<SettingsDialog />);
+      await tick();
+      const format = screen.getByRole('checkbox', {
+        name: S.fileEditor.formatOnSave,
+      }) as HTMLInputElement;
+      const current = screen.getByRole('checkbox', {
+        name: S.fileEditor.currentBlame,
+      }) as HTMLInputElement;
+      const all = screen.getByRole('checkbox', { name: S.fileEditor.allBlame }) as HTMLInputElement;
+      const markers = screen.getByRole('checkbox', {
+        name: S.fileEditor.changeMarkers,
+      }) as HTMLInputElement;
+      expect([format.checked, current.checked, all.checked, markers.checked]).toEqual([
+        false,
+        true,
+        false,
+        true,
+      ]);
+      for (const control of [format, current, all, markers]) fireEvent.click(control);
+      fireEvent.change(screen.getByRole('spinbutton', { name: S.fileEditor.printWidth }), {
+        target: { value: '180' },
+      });
+      submit();
+      await tick();
+      expect(getEditorPreferences()).toEqual({
+        printWidth: 180,
+        formatOnSave: true,
+        currentBlame: false,
+        allBlame: true,
+        changeMarkers: false,
+      });
+      openSettings('ko');
+      await tick();
+      expect(
+        (screen.getByRole('checkbox', { name: S.fileEditor.formatOnSave }) as HTMLInputElement)
+          .checked,
+      ).toBe(true);
+      expect(
+        (screen.getByRole('checkbox', { name: S.fileEditor.currentBlame }) as HTMLInputElement)
+          .checked,
+      ).toBe(false);
+      expect(
+        (screen.getByRole('spinbutton', { name: S.fileEditor.printWidth }) as HTMLInputElement)
+          .value,
+      ).toBe('180');
+      fireEvent.click(screen.getByRole('checkbox', { name: S.fileEditor.formatOnSave }));
+      fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel }));
+      await tick();
+      expect(getEditorPreferences().formatOnSave).toBe(true);
+    } finally {
+      setEditorPreferences(original);
+    }
+  });
+
   it('맨 위에 언어 select 가 있고 지금 선호가 처음 값이며, 그 아래 외부 앱 필드가 그대로 있다', async () => {
     openSettings('en');
     render(<SettingsDialog />);

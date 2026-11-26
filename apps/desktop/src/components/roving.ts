@@ -1,6 +1,7 @@
 // 묶음 하나를 Tab 정지 하나로 만드는 "움직이는 tabindex" 의 키 규칙 (W19 ③). 탭 막대·도구 막대·콘솔 목록·개요 표가 쓴다.
 // 묶음 안의 항목 중 하나만 tabIndex 0 이고 나머지는 -1 이며, 화살표·Home·End 로 포커스를 옮긴다.
 
+import { isImeKey } from '@mgit/ui';
 import { type FocusEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react';
 
 /** 화살표 방향: 가로(←→) / 세로(↑↓) */
@@ -88,29 +89,64 @@ export function useRovingToolbar<T extends HTMLElement>(
 ) {
   const ref = useRef<T>(null);
   const current = useRef(0);
-  const selector = options.items ?? TOOLBAR_ITEMS;
+  const last = useRef<HTMLElement | null>(null);
+  const inside = useRef(false);
+  const selector = options.items ?? 'button';
   const wrap = options.wrap ?? true;
   /** 묶음 안의 항목들 (기본: 켜진 단추) */
-  const items = () => [...(ref.current?.querySelectorAll<HTMLElement>(selector) ?? [])];
+  const items = () =>
+    [...(ref.current?.querySelectorAll<HTMLElement>(selector) ?? [])].filter((el) => {
+      const modal = el.closest('dialog, [role="dialog"]');
+      return (
+        !el.matches(':disabled, [aria-disabled="true"]') &&
+        !el.closest('[hidden], [inert], [aria-hidden="true"]') &&
+        (!modal || modal === ref.current?.closest('dialog, [role="dialog"]'))
+      );
+    });
   /** Tab 정지를 지금 단추 하나로 맞춘다 */
   const sync = () => {
+    if (ref.current && !ref.current.hasAttribute('tabindex')) ref.current.tabIndex = -1;
     const list = items();
-    const at = Math.min(current.current, list.length - 1);
+    const at = Math.max(0, Math.min(current.current, list.length - 1));
+    const active = document.activeElement;
+    const previous = last.current;
+    if (
+      previous &&
+      inside.current &&
+      (active === previous || active === document.body) &&
+      !list.includes(previous)
+    ) {
+      // 실행 중 비활성화되거나 사라진 버튼에서 다른 동작으로 포커스를 넘기지 않는다.
+      ref.current?.focus({ preventScroll: true });
+    } else if (active === ref.current && previous && list.includes(previous)) {
+      previous.focus({ preventScroll: true });
+    }
+    for (const el of ref.current?.querySelectorAll<HTMLElement>(selector) ?? []) el.tabIndex = -1;
     list.forEach((el, i) => {
       el.tabIndex = i === at ? 0 : -1;
     });
   };
   // 그릴 때마다(단추가 켜지고 꺼질 때) 맞춘다
   useLayoutEffect(sync);
+  useLayoutEffect(() => {
+    // 사용자가 다른 영역으로 옮긴 포커스는 항목 제거 뒤에도 다시 가져오지 않는다.
+    const track = (event: globalThis.FocusEvent) => {
+      inside.current = ref.current?.contains(event.target as Node) ?? false;
+    };
+    document.addEventListener('focusin', track);
+    return () => document.removeEventListener('focusin', track);
+  }, []);
   const onFocus = (e: FocusEvent<T>) => {
+    inside.current = true;
     const at = items().indexOf(e.target as HTMLElement);
+    if (at >= 0) last.current = e.target as HTMLElement;
     if (at >= 0 && at !== current.current) {
       current.current = at;
       sync();
     }
   };
   const onKeyDown = (e: KeyboardEvent<T>) => {
-    if (hasModifier(e) || (wrap && (e.key === 'PageUp' || e.key === 'PageDown'))) {
+    if (isImeKey(e) || hasModifier(e) || (wrap && (e.key === 'PageUp' || e.key === 'PageDown'))) {
       return;
     }
     const list = items();
@@ -301,7 +337,7 @@ export function useRovingGrid<T extends HTMLElement>(options: RovingGridOptions)
     }
   };
   const onKeyDown = (e: KeyboardEvent<T>) => {
-    if (hasModifier(e)) {
+    if (isImeKey(e) || hasModifier(e)) {
       return;
     }
     const grid = rows();

@@ -1,7 +1,7 @@
 import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
 import { useSession } from '../../store';
+import { ChangedFilesTree } from '../detail/ChangedFilesTree';
 import styles from '../detail/CommitDetail.module.css';
-import { changeLetter } from '../detail/change-letter';
 import own from './StashDetail.module.css';
 import { dropStash, popStash, type StashDeps } from './stash-actions';
 
@@ -15,7 +15,7 @@ export function StashDetail({ deps }: { deps: StashDeps }) {
   const s = useSession((st) => ({
     view: st.stashView,
     busy: st.busy,
-    openCommitFile: st.openCommitFile,
+    openCommitFile: st.openStashFile,
     openPath:
       st.selectedFile?.commit === st.stashView?.entry.info.oid ? st.selectedFile?.path : null,
   }));
@@ -71,27 +71,17 @@ export function StashDetail({ deps }: { deps: StashDeps }) {
           {S.stash.files(v.files.length)}
           {info.includesUntracked ? ` · ${S.stash.untracked}` : ''}
         </div>
-        <ul className={styles.files}>
-          {v.files.map((f) => (
-            <li
-              key={f.path}
-              className={styles.file}
-              data-open={s.openPath === f.path ? 'true' : 'false'}
-              title={f.path}
-            >
-              <button
-                type="button"
-                className={styles.fileButton}
-                onClick={() => void s.openCommitFile(info.oid, f.path, f.oldPath ?? null)}
-              >
-                <span className={styles.letter} data-letter={changeLetter(f.change.kind)}>
-                  {changeLetter(f.change.kind)}
-                </span>
-                <span className={styles.path}>{f.path}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div style={{ display: 'flex', minHeight: 160, height: 280 }}>
+          <ChangedFilesTree
+            key={info.oid}
+            files={v.files}
+            root={{ name }}
+            selectedPath={s.openPath}
+            onPreview={(file) => void s.openCommitFile(info.oid, file.path, file.oldPath ?? null)}
+            onOpen={(file) => void s.openCommitFile(info.oid, file.path, file.oldPath ?? null)}
+            menu={() => []}
+          />
+        </div>
       </div>
     </section>
   );

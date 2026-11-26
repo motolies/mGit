@@ -1,0 +1,16 @@
+.menuTrigger {
+  flex-shrink: 0;
+  align-self: stretch;
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 0;
+  padding: 0 var(--space-2);
+  cursor: pointer;
+}
+.menuTrigger:hover {
+  background: var(--bg-hover);
+}
+.menuTrigger:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}

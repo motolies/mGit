@@ -8,6 +8,12 @@
 }
 
 .tabsMenu {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tabsRow {
+  display: flex;
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -53,6 +59,9 @@
   align-items: center;
   align-self: stretch;
   white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 

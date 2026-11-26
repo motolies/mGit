@@ -64,50 +64,57 @@ export function BlameDialog() {
         ) : b.lines.length === 0 ? (
           <div className={styles.empty}>{S.history.empty}</div>
         ) : (
-          <div className={styles.blame}>
-            {b.lines.map((l, i) => {
-              const first = i === 0 || b.lines[i - 1]?.oid !== l.oid;
-              const prevOid = l.previousOid ?? null;
-              const prevPath = l.previousPath ?? null;
-              return (
-                <div key={l.line} className={styles.blameRow} data-first={first ? 'true' : 'false'}>
-                  <span className={styles.blameMeta}>
-                    {first ? (
-                      <>
-                        <button
-                          type="button"
-                          className={styles.link}
-                          title={`${l.oid}\n${l.summary}`}
-                          onClick={() => goto(l.oid)}
-                        >
-                          {shortHash(l.oid)}
-                        </button>
-                        <span className={styles.blameAuthor} title={l.authorMail}>
-                          {l.author}
-                        </span>
-                        <span className={styles.muted}>{formatDateTime(l.authorTime ?? 0)}</span>
-                        {prevOid && prevPath ? (
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: 긴 코드 줄의 가로 스크롤에 키보드로 접근한다.
+          <section className={styles.blame} aria-label={S.history.blameTitle(b.path)} tabIndex={0}>
+            <div className={styles.blameContent}>
+              {b.lines.map((l, i) => {
+                const first = i === 0 || b.lines[i - 1]?.oid !== l.oid;
+                const prevOid = l.previousOid ?? null;
+                const prevPath = l.previousPath ?? null;
+                return (
+                  <div
+                    key={l.line}
+                    className={styles.blameRow}
+                    data-first={first ? 'true' : 'false'}
+                  >
+                    <span className={styles.blameMeta}>
+                      {first ? (
+                        <>
                           <button
                             type="button"
                             className={styles.link}
-                            title={S.history.previousOf(shortHash(prevOid))}
-                            onClick={() => void s.open(prevPath, prevOid)}
+                            title={`${l.oid}\n${l.summary}`}
+                            onClick={() => goto(l.oid)}
                           >
-                            ←
+                            {shortHash(l.oid)}
                           </button>
-                        ) : null}
-                        {l.boundary ? (
-                          <span className={styles.muted}>{S.history.boundary}</span>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </span>
-                  <span className={styles.lineNo}>{l.line}</span>
-                  <span className={styles.lineText}>{l.text}</span>
-                </div>
-              );
-            })}
-          </div>
+                          <span className={styles.blameAuthor} title={l.authorMail}>
+                            {l.author}
+                          </span>
+                          <span className={styles.muted}>{formatDateTime(l.authorTime ?? 0)}</span>
+                          {prevOid && prevPath ? (
+                            <button
+                              type="button"
+                              className={styles.link}
+                              title={S.history.previousOf(shortHash(prevOid))}
+                              onClick={() => void s.open(prevPath, prevOid)}
+                            >
+                              ←
+                            </button>
+                          ) : null}
+                          {l.boundary ? (
+                            <span className={styles.muted}>{S.history.boundary}</span>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </span>
+                    <span className={styles.lineNo}>{l.line}</span>
+                    <span className={styles.lineText}>{l.text}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
       </div>
     </dialog>

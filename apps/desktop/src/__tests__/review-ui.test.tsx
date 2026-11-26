@@ -1079,6 +1079,7 @@ describe('hunk·줄 되돌리기 확인', () => {
   function diffSession() {
     const discardHunk = vi.fn(async () => true);
     h.session = {
+      status: { entries: [] },
       selectedFile: { path: 'a.txt', staged: false, commit: null },
       diff: {
         oldPath: 'a.txt',

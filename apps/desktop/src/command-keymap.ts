@@ -64,6 +64,8 @@ export const COMMAND_SCOPES: Record<string, CommandScope> = {
   'file.discard': 'files',
   'diff.nextHunk': 'diff',
   'diff.previousHunk': 'diff',
+  'diff.previousFile': 'diff',
+  'diff.nextFile': 'diff',
   'commit.execute': 'commit',
   'branch.rename': 'branch',
   'branch.checkout': 'branch',

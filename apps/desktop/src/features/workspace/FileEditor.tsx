@@ -19,6 +19,7 @@ import type { BlameLine, SessionId } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { registerCommand } from '../../command-registry';
+import { useRovingToolbar } from '../../components/roving';
 import { useAppStore } from '../../store';
 import { useEditorPreferences } from '../../store/editor-preferences';
 import { type EditorFile, fileEditors } from '../../store/file-editor-store';
@@ -103,6 +104,7 @@ function extensions(doc: EditorFile): Extension {
         // 앱의 Git 실행 취소나 전역 찾기가 텍스트 편집 명령을 가로채지 않게 한다.
         if (
           (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
           ['z', 'y', 's', 'f', 'h'].includes(event.key.toLowerCase())
         )
           event.stopPropagation();
@@ -134,6 +136,9 @@ export function FileEditor({
   refreshEpoch?: number;
   repoTools?: FileViewRepoTools | null;
 }) {
+  const editTools = useRovingToolbar<HTMLDivElement>('horizontal');
+  const viewTools = useRovingToolbar<HTMLDivElement>('horizontal');
+  const historyTools = useRovingToolbar<HTMLDivElement>('horizontal');
   useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const host = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLElement>(null);
@@ -450,9 +455,21 @@ export function FileEditor({
       view.setState(doc.state);
       view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
     }
-    if (view && doc.revealPosition !== undefined) {
-      view.dispatch({ effects: EditorView.scrollIntoView(doc.revealPosition, { y: 'center' }) });
-      delete doc.revealPosition;
+    const focus = doc.revealFocus;
+    const ownsReveal = !focus || (source?.session === focus.session && source.path === focus.path);
+    if (view && focus && ownsReveal && markdown && mode === 'preview') {
+      switchMode('edit');
+      return;
+    }
+    if (view && ownsReveal && !host.current?.closest('[hidden], [inert]')) {
+      if (doc.revealPosition !== undefined) {
+        view.dispatch({ effects: EditorView.scrollIntoView(doc.revealPosition, { y: 'center' }) });
+        delete doc.revealPosition;
+      }
+      if (focus) {
+        view.focus();
+        if (view.contentDOM.contains(document.activeElement)) delete doc.revealFocus;
+      }
     }
   });
 
@@ -491,6 +508,7 @@ export function FileEditor({
       onKeyDownCapture={(event) => {
         if (
           !previewVisible ||
+          event.altKey ||
           host.current?.contains(event.target as Node) ||
           !(event.metaKey || event.ctrlKey)
         )
@@ -516,38 +534,47 @@ export function FileEditor({
         <span role="status" data-status={doc.status}>
           {S.fileEditor[doc.status]}
         </span>
-        <Button
-          onClick={() => {
-            void (doc.explicitSave?.() ?? fileEditors.save(doc));
-          }}
-          disabled={!doc.dirty || doc.status === 'conflict' || doc.status === 'saving'}
-        >
-          {S.fileEditor.save}
-        </Button>
-        <Button
-          onClick={() => void format()}
-          disabled={!canFormat || formatting || doc.composing || doc.mutationLocked}
-        >
-          {formatting ? S.fileEditor.formatting : S.fileEditor.format}
-        </Button>
-        <Button onClick={find}>{S.fileEditor.findReplace}</Button>
-        <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
-          {S.fileEditor.wrap}
-        </Button>
-        {markdown && source ? (
-          <fieldset className={styles.modes} aria-label={S.markdown.viewMode}>
-            {(['edit', 'preview', 'split'] as const).map((value) => (
-              <Button key={value} aria-pressed={mode === value} onClick={() => switchMode(value)}>
-                {S.markdown[value]}
-              </Button>
-            ))}
-          </fieldset>
-        ) : null}
+        <div {...editTools} className={styles.tools} role="toolbar" aria-label={S.fileEditor.title}>
+          <Button
+            onClick={() => {
+              void (doc.explicitSave?.() ?? fileEditors.save(doc));
+            }}
+            disabled={!doc.dirty || doc.status === 'conflict' || doc.status === 'saving'}
+          >
+            {S.fileEditor.save}
+          </Button>
+          <Button
+            onClick={() => void format()}
+            disabled={!canFormat || formatting || doc.composing || doc.mutationLocked}
+          >
+            {formatting ? S.fileEditor.formatting : S.fileEditor.format}
+          </Button>
+          <Button onClick={find}>{S.fileEditor.findReplace}</Button>
+        </div>
+        <div {...viewTools} className={styles.tools} role="toolbar" aria-label={S.diff.viewToolbar}>
+          <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
+            {S.fileEditor.wrap}
+          </Button>
+          {markdown && source ? (
+            <fieldset className={styles.modes} aria-label={S.markdown.viewMode}>
+              {(['edit', 'preview', 'split'] as const).map((value) => (
+                <Button key={value} aria-pressed={mode === value} onClick={() => switchMode(value)}>
+                  {S.markdown[value]}
+                </Button>
+              ))}
+            </fieldset>
+          ) : null}
+        </div>
         {repoTools ? (
-          <>
+          <div
+            {...historyTools}
+            className={styles.tools}
+            role="toolbar"
+            aria-label={S.fileEditor.history}
+          >
             <Button onClick={repoTools.onHistory}>{S.fileEditor.history}</Button>
             <Button onClick={repoTools.onBlame}>Blame</Button>
-          </>
+          </div>
         ) : null}
       </header>
       {formatError ? (

@@ -1,5 +1,5 @@
 import type { ChangedFile } from '@mgit/ipc';
-import { Icon, S } from '@mgit/ui';
+import { Button, Icon, S } from '@mgit/ui';
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -11,7 +11,9 @@ import {
 } from 'react';
 import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
+import { useRovingToolbar } from '../../components/roving';
 import { openContextMenuAt, treeKeyCommand } from '../../components/tree-keys';
+import { useTreeContentWidth } from '../../components/tree-width';
 import { useVirtualTree } from '../../components/use-virtual-tree';
 import styles from './ChangedFilesTree.module.css';
 import { changeLetter } from './change-letter';
@@ -32,6 +34,11 @@ export interface ChangedFilesRoot {
 
 export interface ChangedFilesTreeProps {
   files: readonly ChangedFile[];
+  selectedPath?: string | null;
+  collapsedIds?: ReadonlySet<string>;
+  onCollapsedChange?: (ids: ReadonlySet<string>) => void;
+  previewOnSelection?: boolean;
+  toolbar?: boolean;
   root: ChangedFilesRoot;
   /** 파일을 눌렀을 때 (클릭, Space): 미리보기로 연다 */
   onPreview: (file: ChangedFile) => void;
@@ -53,10 +60,28 @@ function fileTitle(file: ChangedFile): string {
  * (Space = 미리보기, Enter = 고정). 펼침과 선택은 이 화면의 상태라 커밋이 바뀌면(컨테이너가 key 로) 새로 시작한다.
  * 파일이 수천 개인 커밋이 있으므로 가상 스크롤로 그린다 — 화면 밖 행은 DOM 에 없고 단계·형제 수·순번은 ARIA 로 알린다 (W18)
  */
-export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: ChangedFilesTreeProps) {
+export function ChangedFilesTree({
+  files,
+  root,
+  onPreview,
+  onOpen,
+  menu,
+  selectedPath,
+  collapsedIds,
+  onCollapsedChange,
+  previewOnSelection = true,
+  toolbar = true,
+}: ChangedFilesTreeProps) {
+  const tools = useRovingToolbar<HTMLDivElement>('horizontal');
   const baseId = useId();
   const treeRef = useRef<HTMLDivElement>(null);
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [localCollapsed, setLocalCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const collapsed = collapsedIds ?? localCollapsed;
+  const setCollapsed = (update: (previous: ReadonlySet<string>) => ReadonlySet<string>) => {
+    const next = update(collapsed);
+    if (onCollapsedChange) onCollapsedChange(next);
+    else setLocalCollapsed(next);
+  };
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const nodes = useMemo(() => buildChangedFilesTree(files), [files]);
   const rows = useMemo(
@@ -68,10 +93,52 @@ export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: Chang
     count: rows.length,
     keyOf: (index) => rows[index]?.id ?? index,
   });
+  const widthRows = useMemo(
+    () =>
+      rows.map((row) => ({
+        depth: row.depth,
+        icons: 2,
+        texts: [
+          { text: row.name, bold: row.kind === 'root' },
+          {
+            text: row.file?.oldPath
+              ? S.changes.renamedFrom(row.file.oldPath)
+              : row.kind === 'file'
+                ? ''
+                : S.detail.fileCount(row.files),
+          },
+        ],
+      })),
+    [rows],
+  );
+  const contentWidth = useTreeContentWidth(treeRef, widthRows);
   const selectedIndex = selectedId === null ? -1 : rows.findIndex((r) => r.id === selectedId);
   const items = virtualizer.getVirtualItems();
   const selectedRendered = items.some((item) => item.index === selectedIndex);
   const rowDomId = (index: number) => `${baseId}-row-${index}`;
+  // 외부 탐색이 고른 파일은 접힌 부모를 열고 화면 안으로 드러낸다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 사용자의 접힘 변경은 선택 경로를 다시 펼치지 않는다.
+  useEffect(() => {
+    if (!selectedPath) return;
+    const all = changedTreeRows(root.name, nodes, new Set());
+    const row = all.find((row) => row.file?.path === selectedPath);
+    if (!row) return;
+    setSelectedId(row.id);
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      let parent = row.parentId;
+      while (parent !== null) {
+        next.delete(parent);
+        parent = all.find((item) => item.id === parent)?.parentId ?? null;
+      }
+      return next;
+    });
+  }, [selectedPath]);
+  // 선택한 행이 가상 뷰포트 밖에 있어도 스크롤한 뒤 접근성 대상이 연결된다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 목록의 순번이 바뀔 때만 위치를 맞춘다.
+  useEffect(() => {
+    if (selectedIndex >= 0) scrollToRow(selectedIndex);
+  }, [selectedIndex, rows.length]);
 
   // 선택 파일의 Diff 열기는 Enter 와 같은 고정 문서 경로를 쓴다.
   useEffect(() => {
@@ -94,6 +161,7 @@ export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: Chang
     }
     setSelectedId(row.id);
     scrollToRow(at);
+    if (previewOnSelection && row.file) onPreview(row.file);
   };
 
   /** 디렉터리·루트를 펼치거나 접는다 */
@@ -145,115 +213,150 @@ export function ChangedFilesTree({ files, root, onPreview, onOpen, menu }: Chang
   };
 
   return (
-    <ContextMenuArea<ChangedFile>
-      className={styles.menuArea}
-      resolveTarget={(e) => {
-        const el = (e.target as HTMLElement | null)?.closest('[data-row-index]');
-        const row = el ? rows[Number(el.getAttribute('data-row-index'))] : undefined;
-        return row?.file && menu(row.file).length > 0 ? row.file : null;
-      }}
-      items={menu}
-    >
-      <div
-        ref={treeRef}
-        className={styles.tree}
-        data-command-scope="files"
-        role="tree"
-        aria-label={S.detail.changedFiles}
-        aria-activedescendant={selectedRendered ? rowDomId(selectedIndex) : undefined}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
+    <div className={styles.menuArea}>
+      {toolbar && (
+        <div
+          {...tools}
+          className={styles.toolbar}
+          role="toolbar"
+          aria-label={S.detail.changedFiles}
+        >
+          <span>{S.detail.fileCount(files.length)}</span>
+          <Button size="compact" onClick={() => setCollapsed(() => new Set())}>
+            {S.commitTool.expandAll}
+          </Button>
+          <Button
+            size="compact"
+            onClick={() => {
+              setSelectedId('root');
+              setCollapsed(
+                () =>
+                  new Set(
+                    changedTreeRows(root.name, nodes, new Set())
+                      .filter((row) => row.expandable)
+                      .map((row) => row.id),
+                  ),
+              );
+            }}
+          >
+            {S.commitTool.collapseAll}
+          </Button>
+        </div>
+      )}
+      <ContextMenuArea<ChangedFile>
+        className={styles.menuArea}
+        resolveTarget={(e) => {
+          const el = (e.target as HTMLElement | null)?.closest('[data-row-index]');
+          const row = el ? rows[Number(el.getAttribute('data-row-index'))] : undefined;
+          return row?.file && menu(row.file).length > 0 ? row.file : null;
+        }}
+        items={menu}
       >
         <div
-          className={styles.inner}
-          role="presentation"
-          style={{ height: virtualizer.getTotalSize() }}
+          ref={treeRef}
+          className={styles.tree}
+          data-command-scope="files"
+          role="tree"
+          data-primary-focus="list"
+          aria-label={S.detail.changedFiles}
+          aria-activedescendant={selectedRendered ? rowDomId(selectedIndex) : undefined}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
         >
-          {items.map((item) => {
-            const row = rows[item.index];
-            if (!row) {
-              return null;
-            }
-            const index = item.index;
-            const file = row.file;
-            const letter = file ? changeLetter(file.change.kind) : null;
-            return (
-              // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
-              // biome-ignore lint/a11y/useFocusableInteractive: 트리가 포커스를 받고 행은 activedescendant 로 알린다
-              // biome-ignore lint/a11y/useKeyWithClickEvents: 키보드 조작은 트리의 onKeyDown 이 맡는다
-              <div
-                key={item.key}
-                id={rowDomId(index)}
-                className={styles.row}
-                role="treeitem"
-                aria-level={row.depth + 1}
-                aria-setsize={row.setSize}
-                aria-posinset={row.posInSet}
-                aria-selected={index === selectedIndex}
-                aria-expanded={row.expandable ? row.expanded : undefined}
-                data-row-index={index}
-                data-kind={row.kind}
-                data-tone={file ? changedFileTone(file) : undefined}
-                style={
-                  {
-                    '--depth': row.depth,
-                    height: rowHeight,
-                    transform: `translateY(${item.start}px)`,
-                  } as CSSProperties
-                }
-                title={file ? fileTitle(file) : undefined}
-                onClick={() => {
-                  setSelectedId(row.id);
-                  if (file) {
-                    onPreview(file);
-                  } else if (row.expandable) {
-                    setExpanded(row, !row.expanded);
+          <div
+            className={styles.inner}
+            role="presentation"
+            style={{ height: virtualizer.getTotalSize(), minWidth: contentWidth }}
+          >
+            {items.map((item) => {
+              const row = rows[item.index];
+              if (!row) {
+                return null;
+              }
+              const index = item.index;
+              const file = row.file;
+              const letter = file ? changeLetter(file.change.kind) : null;
+              return (
+                // 포커스는 트리가 받으므로 행은 포커스 대상이 아니다 (aria-activedescendant)
+                // biome-ignore lint/a11y/useFocusableInteractive: 트리가 포커스를 받고 행은 activedescendant 로 알린다
+                // biome-ignore lint/a11y/useKeyWithClickEvents: 키보드 조작은 트리의 onKeyDown 이 맡는다
+                <div
+                  key={item.key}
+                  id={rowDomId(index)}
+                  className={styles.row}
+                  role="treeitem"
+                  aria-level={row.depth + 1}
+                  aria-setsize={row.setSize}
+                  aria-posinset={row.posInSet}
+                  aria-selected={index === selectedIndex}
+                  aria-expanded={row.expandable ? row.expanded : undefined}
+                  data-row-index={index}
+                  data-kind={row.kind}
+                  data-tone={file ? changedFileTone(file) : undefined}
+                  style={
+                    {
+                      '--depth': row.depth,
+                      height: rowHeight,
+                      transform: `translateY(${item.start}px)`,
+                    } as CSSProperties
                   }
-                }}
-                onDoubleClick={() => {
-                  if (file) {
-                    onOpen(file);
-                  }
-                }}
-                onContextMenu={() => setSelectedId(row.id)}
-              >
-                <span className={styles.twisty}>
-                  {row.expandable ? (
-                    <Icon name={row.expanded ? 'chevronDown' : 'chevronRight'} />
-                  ) : null}
-                </span>
-                {row.kind === 'root' ? (
-                  root.color === undefined || root.color === null ? null : (
-                    <span
-                      className={styles.swatch}
-                      data-testid="repo-swatch"
-                      style={{ '--repo-color': `var(--graph-lane-${root.color})` } as CSSProperties}
-                    />
-                  )
-                ) : row.kind === 'dir' ? (
-                  <span className={styles.icon}>
-                    <Icon name="folder" />
+                  title={file ? fileTitle(file) : undefined}
+                  onClick={() => {
+                    treeRef.current?.focus();
+                    setSelectedId(row.id);
+                    if (file) {
+                      onPreview(file);
+                    } else if (row.expandable) {
+                      setExpanded(row, !row.expanded);
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    if (file) {
+                      onOpen(file);
+                    }
+                  }}
+                  onContextMenu={() => setSelectedId(row.id)}
+                >
+                  <span className={styles.twisty}>
+                    {row.expandable ? (
+                      <Icon name={row.expanded ? 'chevronDown' : 'chevronRight'} />
+                    ) : null}
                   </span>
-                ) : (
-                  <span className={styles.letter} data-letter={letter}>
-                    {letter}
+                  {row.kind === 'root' ? (
+                    root.color === undefined || root.color === null ? null : (
+                      <span
+                        className={styles.swatch}
+                        data-testid="repo-swatch"
+                        style={
+                          { '--repo-color': `var(--graph-lane-${root.color})` } as CSSProperties
+                        }
+                      />
+                    )
+                  ) : row.kind === 'dir' ? (
+                    <span className={styles.icon}>
+                      <Icon name="folder" />
+                    </span>
+                  ) : (
+                    <span className={styles.letter} data-letter={letter}>
+                      {letter}
+                    </span>
+                  )}
+                  <span className={row.kind === 'root' ? styles.rootName : styles.name}>
+                    {row.name}
                   </span>
-                )}
-                <span className={row.kind === 'root' ? styles.rootName : styles.name}>
-                  {row.name}
-                </span>
-                {row.kind === 'file' ? (
-                  file?.oldPath ? (
-                    <span className={styles.muted}>{S.changes.renamedFrom(file.oldPath)}</span>
-                  ) : null
-                ) : (
-                  <span className={styles.muted}>{S.detail.fileCount(row.files)}</span>
-                )}
-              </div>
-            );
-          })}
+                  {row.kind === 'file' ? (
+                    file?.oldPath ? (
+                      <span className={styles.muted}>{S.changes.renamedFrom(file.oldPath)}</span>
+                    ) : null
+                  ) : (
+                    <span className={styles.muted}>{S.detail.fileCount(row.files)}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
-    </ContextMenuArea>
+      </ContextMenuArea>
+    </div>
   );
 }

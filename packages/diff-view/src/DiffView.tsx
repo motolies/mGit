@@ -64,15 +64,26 @@ interface LineSelectionState {
 }
 
 const NO_LINES: ReadonlySet<string> = new Set();
+const consumedArrivals = new WeakSet<DiffArrival>();
 
 export interface DiffNavigation {
-  moveHunk(direction: 1 | -1): void;
+  moveHunk(direction: 1 | -1): boolean;
+  canMove(direction: 1 | -1): boolean;
+  focus(): void;
+  moveToHunk(index: number): void;
   available: boolean;
   current: number;
   total: number;
 }
 
+export interface DiffArrival {
+  token: number;
+  edge: 'first' | 'last';
+  focus?: boolean;
+}
+
 export interface DiffViewProps {
+  arrival?: DiffArrival;
   /** 앱의 유효 키맵에 구간 이동을 연결한다. 반환한 함수는 뷰 변경·해제 때 정리한다 */
   onNavigationReady?: (
     element: HTMLElement,
@@ -175,6 +186,7 @@ export function DiffView({
   wrap = false,
   tabWidth = 4,
   onNavigationReady,
+  arrival,
 }: DiffViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const baseId = useId();
@@ -333,59 +345,71 @@ export function DiffView({
   }, [wrap, splitRatio, tabWidth, mode, virtualizer]);
 
   /** 공통 세로 뷰포트 안의 코드만 이동해 거터와 중앙 경계를 고정한다. */
-  const scrollHorizontal = (side: 'left' | 'right', value: number) => {
-    if (pendingScroll.current[side] === value) {
-      delete pendingScroll.current[side];
-      return;
-    }
-    delete pendingScroll.current[side];
-    offsets.current[side] = value;
-    viewRef.current?.style.setProperty(`--diff-${side}-scroll`, `${value}px`);
-    if (horizontalSync) {
-      const other = side === 'left' ? 'right' : 'left';
-      offsets.current[other] = value;
-      viewRef.current?.style.setProperty(`--diff-${other}-scroll`, `${value}px`);
-      const bar = other === 'left' ? leftScroll.current : rightScroll.current;
-      if (bar && bar.scrollLeft !== value) {
-        bar.scrollLeft = value;
-        pendingScroll.current[other] = bar.scrollLeft;
+  const scrollHorizontal = useCallback(
+    (side: 'left' | 'right', value: number) => {
+      if (pendingScroll.current[side] === value) {
+        delete pendingScroll.current[side];
+        return;
       }
-    }
-  };
+      delete pendingScroll.current[side];
+      offsets.current[side] = value;
+      viewRef.current?.style.setProperty(`--diff-${side}-scroll`, `${value}px`);
+      if (horizontalSync) {
+        const other = side === 'left' ? 'right' : 'left';
+        const bar = other === 'left' ? leftScroll.current : rightScroll.current;
+        if (bar && bar.scrollLeft !== value) {
+          bar.scrollLeft = value;
+          pendingScroll.current[other] = bar.scrollLeft;
+        }
+        const actual = bar?.scrollLeft ?? value;
+        offsets.current[other] = actual;
+        viewRef.current?.style.setProperty(`--diff-${other}-scroll`, `${actual}px`);
+      }
+    },
+    [horizontalSync],
+  );
 
   /** 동기화를 켜거나 파일이 바뀌면 가로 위치를 공통 시작점으로 맞춘다. */
   useEffect(() => {
     void contentKey;
     void horizontalSync;
     void wrap;
+    void mode;
     offsets.current = { left: 0, right: 0 };
     viewRef.current?.style.setProperty('--diff-left-scroll', '0px');
     viewRef.current?.style.setProperty('--diff-right-scroll', '0px');
     if (leftScroll.current) leftScroll.current.scrollLeft = 0;
     if (rightScroll.current) rightScroll.current.scrollLeft = 0;
-  }, [contentKey, horizontalSync, wrap]);
+  }, [contentKey, horizontalSync, wrap, mode]);
 
-  /** 트랙패드의 가로 이동은 포인터가 있는 패널에만 전달한다. 세로 이동은 공통 본문이 담당한다. */
+  const horizontalEnabled = !!diff && !diff.binary && !wrap;
+  /** 비동기 원문 로드 뒤 새 본문에도 휠을 연결한다. 거터·빈 반쪽도 해당 패널을 따른다. */
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || wrap) return;
+    if (!element || !horizontalEnabled) return;
     const wheel = (event: WheelEvent) => {
       const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
       if (!delta) return;
-      const side =
+      const panel =
         event.target instanceof Element
-          ? event.target.closest('[data-side]')?.getAttribute('data-side')
+          ? event.target.closest('[data-side], [data-scroll-side]')
           : null;
+      const side = panel?.getAttribute('data-side') ?? panel?.getAttribute('data-scroll-side');
       const bar = side === 'left' ? leftScroll.current : rightScroll.current;
       if (bar) {
-        bar.scrollLeft += delta;
+        const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? bar.clientWidth : 1;
+        bar.scrollLeft += delta * unit;
+        scrollHorizontal(side === 'left' ? 'left' : 'right', bar.scrollLeft);
         event.preventDefault();
-        if (!event.shiftKey && event.deltaY) element.scrollTop += event.deltaY;
+        if (!event.shiftKey && event.deltaY)
+          element.scrollTop +=
+            event.deltaY *
+            (event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? element.clientHeight : 1);
       }
     };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
-  }, [wrap]);
+  }, [horizontalEnabled, scrollHorizontal]);
 
   /** 체크박스·클릭으로 줄 선택을 토글한다. Shift 면 같은 hunk 안의 범위 */
   const toggle = useCallback(
@@ -428,16 +452,18 @@ export function DiffView({
     cursor.key === contentKey ? Math.min(cursor.row, rows.length - 1) : (hunkRows[0] ?? 0);
   const cursorRef = useRef(cursorRow);
   cursorRef.current = cursorRow;
+  const position = useRef({ path: '', ordinal: 0 });
 
   /** 커서만 옮긴다. 구간 이동은 줄 선택·stage 를 실행하지 않는다 */
   const moveCursor = useCallback(
     (index: number, align: 'auto' | 'start' = 'auto') => {
       const row = Math.max(0, Math.min(rows.length - 1, index));
       cursorRef.current = row;
+      position.current.ordinal = Math.max(0, hunkRows.filter((index) => index <= row).length - 1);
       setCursor((prev) => ({ key: contentKey, row, side: prev.side }));
       virtualizer.scrollToIndex(row, { align });
     },
-    [contentKey, rows.length, virtualizer],
+    [contentKey, rows.length, virtualizer, hunkRows],
   );
 
   /** 새 문서를 처음 열 때 첫 변경으로 이동한다. 보기 모드 전환도 새 행 위치를 적용한다. */
@@ -445,8 +471,24 @@ export function DiffView({
     void contentKey;
     void mode;
     void fullFile;
-    moveCursor(hunkRows[0] ?? 0, 'start');
-  }, [contentKey, mode, fullFile, hunkRows, moveCursor]);
+    // 경로가 먼저 바뀌고 원문이 나중에 도착하는 중간 렌더에서는 도착 요청을 소비하지 않는다.
+    if (loading || !diff || (diff.newPath ?? diff.oldPath) !== path || !scrollRef.current) return;
+    const fresh = !!arrival && !consumedArrivals.has(arrival);
+    const changedPath = position.current.path !== path;
+    const ordinal = fresh
+      ? arrival.edge === 'last'
+        ? hunkRows.length - 1
+        : 0
+      : changedPath
+        ? 0
+        : position.current.ordinal;
+    position.current.path = path;
+    moveCursor(hunkRows[Math.max(0, Math.min(ordinal, hunkRows.length - 1))] ?? 0, 'start');
+    if (fresh) {
+      consumedArrivals.add(arrival);
+      if (arrival.focus) scrollRef.current?.focus();
+    }
+  }, [contentKey, mode, fullFile, hunkRows, moveCursor, arrival, path, loading, diff]);
 
   /** 다음·이전 변경 구간으로 옮기며 양끝에서 멈춘다 */
   useEffect(() => {
@@ -456,20 +498,27 @@ export function DiffView({
     }
     return onNavigationReady(element, {
       available: hunkRows.length > 0,
-      current: hunkRows.length
-        ? Math.max(1, hunkRows.filter((index) => index <= cursorRow).length)
-        : 0,
+      canMove: (direction) => {
+        const current = hunkRows.filter((index) => index <= cursorRef.current).length - 1;
+        const next = current + direction;
+        return next >= 0 && next < hunkRows.length;
+      },
+      focus: () => element.focus(),
+      moveToHunk: (index) => {
+        moveCursor(hunkRows[Math.max(0, Math.min(index, hunkRows.length - 1))] ?? 0, 'start');
+        element.focus();
+      },
+      current: hunkRows.length ? hunkRows.filter((index) => index <= cursorRow).length : 0,
       total: hunkRows.length,
       moveHunk: (direction) => {
-        const hunks = hunkRows;
-        const next =
-          direction === 1
-            ? hunks.find((index) => index > cursorRef.current)
-            : [...hunks].reverse().find((index) => index < cursorRef.current);
+        const current = hunkRows.filter((index) => index <= cursorRef.current).length - 1;
+        const next = hunkRows[current + direction];
         if (next !== undefined) {
           moveCursor(next, 'start');
+          element.focus();
+          return true;
         }
-        element.focus();
+        return false;
       },
     });
   }, [hunkRows, cursorRow, moveCursor, onNavigationReady]);
@@ -681,6 +730,7 @@ export function DiffView({
             ref={scrollRef}
             className={styles.scroller}
             data-testid="diff-scroller"
+            data-primary-focus="content"
             data-command-scope="diff"
             role="grid"
             aria-label={path}
@@ -1064,6 +1114,7 @@ function SplitLine({
         role="row"
         tabIndex={-1}
         className={styles.half}
+        data-scroll-side={position}
         data-kind={ref?.line.kind ?? 'empty'}
         data-selected={isSel ? 'true' : 'false'}
       >

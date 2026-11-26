@@ -2,6 +2,7 @@ import type { ExternalApps } from '@mgit/ipc';
 import { Button, ConfirmDialog, PromptDialog, type PromptField, S } from '@mgit/ui';
 import { useEffect, useId, useState } from 'react';
 import type { Action } from '../../actions';
+import { tabNavigationIndex } from '../../components/tab-navigation';
 import { bool, raw, str } from '../../components/use-dialogs';
 import { useModal } from '../../components/use-modal';
 import { useAppStore } from '../../store';
@@ -315,21 +316,10 @@ function SettingsForm({
               className={styles.pageTab}
               onClick={() => setPage(tab)}
               onKeyDown={(event) => {
-                if (
-                  event.key === 'ArrowLeft' ||
-                  event.key === 'ArrowRight' ||
-                  event.key === 'Home' ||
-                  event.key === 'End'
-                ) {
+                const nextIndex = tabNavigationIndex(event, index, 2);
+                if (nextIndex !== null) {
                   event.preventDefault();
-                  const next =
-                    event.key === 'Home'
-                      ? 'general'
-                      : event.key === 'End'
-                        ? 'shortcuts'
-                        : index === 0
-                          ? 'shortcuts'
-                          : 'general';
+                  const next = nextIndex === 0 ? 'general' : 'shortcuts';
                   setPage(next);
                   document
                     .getElementById(`${next === 'general' ? generalId : shortcutsId}-tab`)
@@ -354,7 +344,14 @@ function SettingsForm({
           {fields.map((field) => (
             <label key={field.key} className={styles.field} htmlFor={`${generalId}-${field.key}`}>
               <span>{field.label}</span>
-              {field.type === 'select' ? (
+              {field.type === 'checkbox' ? (
+                <input
+                  id={`${generalId}-${field.key}`}
+                  type="checkbox"
+                  checked={values[field.key] === true}
+                  onChange={(event) => setValues({ ...values, [field.key]: event.target.checked })}
+                />
+              ) : field.type === 'select' ? (
                 <select
                   id={`${generalId}-${field.key}`}
                   value={String(values[field.key] ?? '')}
@@ -369,6 +366,11 @@ function SettingsForm({
               ) : (
                 <input
                   id={`${generalId}-${field.key}`}
+                  type={field.key === 'printWidth' ? 'number' : 'text'}
+                  min={field.key === 'printWidth' ? 40 : undefined}
+                  max={field.key === 'printWidth' ? 1000 : undefined}
+                  step={field.key === 'printWidth' ? 1 : undefined}
+                  required={field.required}
                   value={String(values[field.key] ?? '')}
                   onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
                 />

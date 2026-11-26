@@ -1,6 +1,9 @@
+import type { DiffArrival } from '@mgit/diff-view';
 import type { ChangedFile, DiffDocument } from '@mgit/ipc';
+import { settingsStorage } from '@mgit/storage';
 import { Button, S } from '@mgit/ui';
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import {
   getSessionStore,
   useActiveTab,
@@ -10,8 +13,10 @@ import {
   useSessionOf,
   useWorkspace,
 } from '../../store';
+import { diffArrival, nearestDiffFile, orderedDiffFiles } from '../../store/diff-origin';
 import { fileEditors } from '../../store/file-editor-store';
 import type { ComparisonTarget } from '../../store/workspace-store';
+import { ChangedFilesTree } from '../detail/ChangedFilesTree';
 import { DiffPaneView } from '../diff/DiffPaneView';
 import { useCurrentFile } from '../workspace/use-current-file';
 import { ComparisonCommits } from './ComparisonCommits';
@@ -52,6 +57,7 @@ type ComparisonRequest = { a: string; b: string; three: boolean; attempt: number
 type FixedComparison = { request: ComparisonRequest; a: string; b: string };
 const fixedComparisons = new WeakMap<ComparisonTarget, FixedComparison>();
 const chosenPaths = new WeakMap<ComparisonTarget, string>();
+const collapsedTrees = new WeakMap<ComparisonTarget, ReadonlySet<string>>();
 
 /** 비교마다 독립된 기준과 파일 선택을 유지하고 원문 편집은 기존 파일 탭으로 연결한다. */
 export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
@@ -85,6 +91,17 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
     };
   }, [folder, doc.session, doc.repoPath, doc.repoName]);
   const client = useAppStore((s) => s.client);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
+    collapsedTrees.get(doc) ?? new Set(),
+  );
+  const [arrival, setArrival] = useState<DiffArrival>();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'comparison-files',
+    storage: settingsStorage,
+  });
+  useEffect(() => {
+    collapsedTrees.set(doc, collapsed);
+  }, [doc, collapsed]);
   const ws = useWorkspace((w) => ({
     mode: w.diffMode,
     options: w.diffOptions,
@@ -175,12 +192,14 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
             : allChanged;
           if (live) {
             fixedComparisons.set(doc, { request, a: base, b: target });
-            setFiles(changed);
+            setFiles(orderedDiffFiles(changed));
             setFull(false);
             setResolved({ a: base, b: target, drafts });
-            setPath((previous) =>
-              changed.some((f) => f.path === previous) ? previous : (changed[0]?.path ?? null),
-            );
+            setPath((previous) => {
+              if (changed.some((f) => f.path === previous)) return previous;
+              const sorted = orderedDiffFiles(changed);
+              return nearestDiffFile(previous, files, sorted)?.path ?? null;
+            });
           }
         })()
           .catch((e) => {
@@ -350,47 +369,79 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
           {error}
         </div>
       )}
-      {loading || (session === null && !error) ? (
-        <div className={styles.empty}>{S.history.loading}</div>
-      ) : (
-        <div className={styles.split} style={{ flex: 1, height: 'auto' }}>
-          <ul className={styles.files}>
-            {!error && files.length === 0 && <li>{S.history.noDiff}</li>}
-            {files.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className={styles.file}
-                  data-open={path === f.path}
-                  onClick={() => {
-                    setPath(f.path);
-                    setFull(false);
-                  }}
-                >
-                  {f.path}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className={styles.diffArea}>
+      {(loading || session === null) && !error && <div role="status">{S.history.loading}</div>}
+      <Group
+        orientation="horizontal"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+        style={{ flex: 1, minHeight: 0 }}
+      >
+        <Panel
+          id="comparison-files"
+          defaultSize="300px"
+          minSize="160px"
+          maxSize="55%"
+          style={{ display: 'flex', minHeight: 0 }}
+        >
+          {files.length === 0 ? (
+            <div className={styles.empty}>{!loading && !error ? S.history.noDiff : ''}</div>
+          ) : (
+            <ChangedFilesTree
+              files={files}
+              root={{ name: doc.repoName }}
+              selectedPath={path}
+              collapsedIds={collapsed}
+              onCollapsedChange={setCollapsed}
+              previewOnSelection
+              toolbar
+              onPreview={(file) => {
+                setArrival(undefined);
+                setPath(file.path);
+                setFull(false);
+              }}
+              onOpen={(file) => {
+                setArrival(diffArrival(1));
+                setPath(file.path);
+                setFull(false);
+              }}
+              menu={() => []}
+            />
+          )}
+        </Panel>
+        <Separator className={styles.separator} aria-label={S.comparison.resizeFiles} />
+        <Panel id="comparison-diff" minSize="240px" style={{ minHeight: 0 }}>
+          <div className={styles.diffArea} style={{ height: '100%' }}>
             {path && (
               <DiffPaneView
                 diff={document?.diff ?? null}
                 document={document}
                 areaLabel={S.history.compareTitle}
-                error={null}
+                error={error}
                 options={ws.options}
                 onOptionsChange={ws.setOptions}
                 onLoadFull={() => setFull(true)}
                 path={path}
                 mode={ws.mode}
                 onModeChange={ws.setMode}
-                loading={diffLoading}
+                loading={loading || diffLoading}
+                arrival={arrival}
+                fileNavigation={{
+                  index: files.findIndex((file) => file.path === path),
+                  total: files.length,
+                  move: (direction) => {
+                    const next = files[files.findIndex((file) => file.path === path) + direction];
+                    if (next) {
+                      setArrival(diffArrival(direction));
+                      setPath(next.path);
+                      setFull(false);
+                    }
+                  },
+                }}
               />
             )}
           </div>
-        </div>
-      )}
+        </Panel>
+      </Group>
     </section>
   );
 }

@@ -1,6 +1,8 @@
+import type { DiffArrival } from '@mgit/diff-view';
 import type { GraphScrollAnchor } from '@mgit/graph-view';
 import type { SessionId } from '@mgit/ipc';
 import { createStore, type StoreApi } from 'zustand';
+import type { DiffOrigin } from './diff-origin';
 import { writePref } from './prefs';
 import { nextActiveRepo, type RepoSessionLedger } from './repo-sessions';
 import {
@@ -23,6 +25,8 @@ export type RootKind = 'repo' | 'folder';
  * 저장소는 경로로 가리킨다 (타임라인 번호는 재스캔으로 밀린다)
  */
 export interface CommitDiffTarget {
+  origin?: DiffOrigin;
+  arrival?: DiffArrival;
   kind: 'commitDiff';
   repoPath: string;
   /** 표시용 저장소 이름 (탭 툴팁·영역 표시). 여러 저장소의 같은 이름 파일을 가른다 (ED-02) */
@@ -37,6 +41,8 @@ export interface CommitDiffTarget {
 
 /** 선택 범위의 파일 diff 문서. 범위를 바꾸어도 열린 문서의 비교 양 끝은 유지한다. */
 export interface RangeDiffTarget {
+  origin?: DiffOrigin;
+  arrival?: DiffArrival;
   kind: 'rangeDiff';
   repoPath: string;
   repoName: string;
@@ -486,8 +492,13 @@ export function docActivated(tabs: EditorTabs, id: string): EditorTabs {
 export function docOpened(tabs: EditorTabs, doc: DocRequest, mode: OpenMode): EditorTabs {
   const existing = tabs.docs.find((d) => d.id === doc.id);
   if (existing) {
-    const docs =
-      mode === 'pinned' && !existing.pinned
+    const carriesOrigin =
+      (doc.kind === 'commitDiff' || doc.kind === 'rangeDiff') && doc.origin !== undefined;
+    const docs = carriesOrigin
+      ? tabs.docs.map((d) =>
+          d.id === doc.id ? { ...doc, pinned: existing.pinned || mode === 'pinned' } : d,
+        )
+      : mode === 'pinned' && !existing.pinned
         ? tabs.docs.map((d) => (d.id === doc.id ? { ...d, pinned: true } : d))
         : tabs.docs;
     return docActivated({ ...tabs, docs }, doc.id);
@@ -650,6 +661,7 @@ export interface WorkspaceState extends EditorTabs {
 
   openDoc(doc: DocRequest, mode: OpenMode): void;
   activateDoc(id: string): void;
+  navigateDiffDoc(id: string, next: DocRequest): void;
   /**
    * 열려 있는 문서(세션 문서 포함)를 보인다: 활성화하고 "문서가 열렸다"고 알린다 (아래 도구 창 최대화 해제, WS-03).
    * 세션 문서를 연 쪽이 슬롯을 채운 뒤에 부른다
@@ -802,6 +814,26 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
       const current = get().activeRepo;
       const tabs = docOpened(tabsOf(get()), doc, mode);
       set(applyTabs(tabs, settle(current, activeRepoAfter(tabs, current))));
+      deps.onDocOpened?.();
+    },
+
+    navigateDiffDoc(id, next) {
+      const before = get();
+      const current = before.docs.find((doc) => doc.id === id);
+      if (!current || (current.kind !== 'commitDiff' && current.kind !== 'rangeDiff')) return;
+      const existing = before.docs.find((doc) => doc.id === next.id);
+      const docs = existing
+        ? before.docs.map((doc) => (doc.id === next.id ? { ...next, pinned: doc.pinned } : doc))
+        : before.docs.map((doc) => (doc.id === id ? { ...next, pinned: current.pinned } : doc));
+      const tabs = docActivated(
+        {
+          ...tabsOf(before),
+          docs,
+          recentDocIds: before.recentDocIds.filter((old) => old !== id || !!existing),
+        },
+        next.id,
+      );
+      set(applyTabs(tabs, settle(before.activeRepo, activeRepoAfter(tabs, before.activeRepo))));
       deps.onDocOpened?.();
     },
 

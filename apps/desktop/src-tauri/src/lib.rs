@@ -128,6 +128,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_remote::stash_pop,
             commands_remote::stash_drop,
             commands_remote::stash_files,
+            commands_remote::stash_file_diff_document,
             commands_remote::suggest_worktree_path,
             commands_remote::worktree_add,
             commands_remote::worktree_remove_check,

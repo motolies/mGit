@@ -134,7 +134,8 @@ test('occupied preferred port falls back while settings survive port changes and
     assert.equal(config.build.devUrl, restarted.url);
     assert.equal(config.build.beforeDevCommand, '');
     assert.ok(config.app.security.devCsp.includes(restarted.url.replace('http:', 'ws:')));
-    assert.deepEqual(config.app.windows[0].dataStoreIdentifier, a.dataStoreIdentifier);
+    assert.equal(config.app.windows[0].dataStoreIdentifier, undefined);
+    assert.ok(!JSON.stringify(config).includes('dataStoreIdentifier'));
     assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'unrelated server');
   } finally {
     for (const server of servers) await server.close();

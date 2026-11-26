@@ -213,7 +213,11 @@ export function developmentEnvironment(profile, environment = process.env) {
   return env;
 }
 
-/** 실제 바인딩된 서버 주소를 Tauri와 CSP에 한 번에 전달한다. */
+/**
+ * 실제 바인딩된 서버 주소를 Tauri와 CSP에 한 번에 전달한다.
+ * WebKit 저장소 ID는 Rust RuntimeProfile.configure에서 창 생성 전에 적용한다.
+ * 설정 매크로에 넘기면 Tauri가 고정 배열 대신 Vec을 생성하므로 여기서는 제외한다.
+ */
 export function tauriConfiguration(profile, url, base) {
   const websocket = url.replace(/^http:/, 'ws:');
   return {
@@ -224,7 +228,7 @@ export function tauriConfiguration(profile, url, base) {
       windows: base.app.windows.map((window) => ({
         ...window,
         title: profile.title,
-        dataStoreIdentifier: profile.dataStoreIdentifier,
+        dataStoreIdentifier: undefined,
       })),
       security: {
         devCsp: `default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ${url} ${websocket}`,

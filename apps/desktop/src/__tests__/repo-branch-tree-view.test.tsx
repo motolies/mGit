@@ -346,8 +346,10 @@ describe('Worktrees 그룹의 머리 단추와 우클릭 메뉴 (앱에서)', ()
     await tick();
     expect(menuLabels()).toEqual([
       'checkout',
+      'upstream과 비교',
       '업데이트',
       '이 branch 만 그래프에 표시',
+      '현재 로컬 내용과 비교',
       '현재 branch 와 development 비교…',
       'development 을(를) 현재 branch 에 merge▸',
       'development merge 미리보기…',

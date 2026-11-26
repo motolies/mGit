@@ -26,6 +26,7 @@ mod commands_remote;
 mod commands_repo;
 mod commands_runtime;
 mod commands_safety;
+mod commands_search;
 mod commands_settings;
 mod commands_submodule;
 mod commands_tags;
@@ -208,6 +209,12 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_history::graph_layout_prefs,
             commands_history::set_graph_layout_prefs,
             commands_history::blame,
+            commands_history::blame_contents,
+            commands_history::revision_file_content,
+            commands_history::compare_local_files,
+            commands_history::comparison_commits,
+            commands_history::resolve_revision,
+            commands_history::compare_local_document,
             commands_history::file_history,
             commands_history::compare_refs,
             commands_history::compare_file_diff,
@@ -277,6 +284,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_fs_operations::fs_clipboard_write,
             commands_fs_operations::fs_clipboard_read,
             commands_fs_operations::fs_recovery_warnings,
+            commands_search::workspace_search,
+            commands_search::workspace_search_cancel,
             commands_fs::fs_list_dir,
             commands_fs::fs_read_file,
             commands_fs::fs_read_image,
@@ -485,7 +494,7 @@ mod tests {
     /// 릴리스 CSP: xterm·CodeMirror 가 넣는 `<style>` 은 허용하고 스크립트는 엄격하게 둔다.
     /// Tauri 가 `style-src` 에 nonce 를 넣으면 `'unsafe-inline'` 이 무효가 되므로 수정을 끈다
     #[test]
-    fn release_csp_allows_runtime_styles_only() {
+    fn release_csp_allows_runtime_styles_and_bundled_wasm_only() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let security = &conf["app"]["security"];
@@ -493,8 +502,8 @@ mod tests {
         assert!(csp.contains("style-src 'self' 'unsafe-inline'"), "{csp}");
         let scripts = csp.split(';').find(|d| d.contains("script-src"));
         assert!(
-            scripts.is_none_or(|d| !d.contains("unsafe")),
-            "스크립트는 엄격해야 한다: {csp}"
+            scripts.is_some_and(|d| d.trim() == "script-src 'self' 'wasm-unsafe-eval'"),
+            "일반 eval과 인라인 스크립트를 허용하지 않아야 한다: {csp}"
         );
         assert!(
             !csp.split(';')
@@ -507,7 +516,7 @@ mod tests {
     }
 
     /// 파일 API는 코어 경계로 제한한다. 저장 보호가 끝난 뒤에만 창을 파괴하도록 destroy 권한을 추가한다.
-    /// 파일 시스템 플러그인 권한은 유지하고 CSP는 미리보기 이미지에만 HTTP(S)를 허용한다.
+    /// 파일 시스템 플러그인 권한은 유지하고 CSP는 미리보기 이미지 외 네트워크를 제한하고 로컬 Worker·WASM만 허용한다.
     #[test]
     fn webview_capability_and_csp_are_pinned() {
         let cap: serde_json::Value =
@@ -535,14 +544,11 @@ mod tests {
         let security = &conf["app"]["security"];
         assert_eq!(
             security["csp"],
-            "default-src 'self'; img-src 'self' data: http: https:; style-src 'self' 'unsafe-inline'; \
-             connect-src ipc: http://ipc.localhost"
+            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; img-src 'self' data: http: https:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
         );
         assert_eq!(
             security["devCsp"],
-            "default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline'; \
-             style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost \
-             ws://localhost:1420"
+            "default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420"
         );
         assert!(
             conf["plugins"]["fs"].is_null(),

@@ -5,6 +5,7 @@ import type { Action } from '../../actions';
 import { bool, raw, str } from '../../components/use-dialogs';
 import { useModal } from '../../components/use-modal';
 import { useAppStore } from '../../store';
+import { getEditorPreferences, setEditorPreferences } from '../../store/editor-preferences';
 import type { LanguagePreference } from '../../store/language';
 import { draftActions, hasShortcutConflicts, ShortcutSettings } from './ShortcutsDialog';
 import styles from './ShortcutsDialog.module.css';
@@ -158,7 +159,38 @@ function SettingsForm({
   const shortcutsId = useId();
   const { apps } = initial;
   const mac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform ?? '');
+  const editorPrefs = getEditorPreferences();
   const fields: readonly PromptField[] = [
+    {
+      key: 'printWidth',
+      label: S.fileEditor.printWidth,
+      initial: String(editorPrefs.printWidth),
+      required: true,
+    },
+    {
+      key: 'formatOnSave',
+      label: S.fileEditor.formatOnSave,
+      type: 'checkbox',
+      initial: editorPrefs.formatOnSave,
+    },
+    {
+      key: 'currentBlame',
+      label: S.fileEditor.currentBlame,
+      type: 'checkbox',
+      initial: editorPrefs.currentBlame,
+    },
+    {
+      key: 'allBlame',
+      label: S.fileEditor.allBlame,
+      type: 'checkbox',
+      initial: editorPrefs.allBlame,
+    },
+    {
+      key: 'changeMarkers',
+      label: S.fileEditor.changeMarkers,
+      type: 'checkbox',
+      initial: editorPrefs.changeMarkers,
+    },
     {
       key: 'language',
       label: S.settings.language,
@@ -216,6 +248,11 @@ function SettingsForm({
   /** 일반 설정 저장 후 단축키를 반영하고, 언어 변경은 창을 닫은 뒤 적용한다. */
   const submit = async () => {
     if (saving || conflicts) return;
+    const width = Number(str(values, 'printWidth'));
+    if (!Number.isInteger(width) || width < 40 || width > 1000) {
+      setError(S.fileEditor.printWidth);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -229,6 +266,13 @@ function SettingsForm({
       if (Number.isInteger(nextAutoFetch) && nextAutoFetch !== initial.autoFetch)
         await saveAutoFetch(nextAutoFetch);
       if (JSON.stringify(draft) !== JSON.stringify(overrides)) setOverrides(draft);
+      setEditorPreferences({
+        printWidth: width,
+        formatOnSave: bool(values, 'formatOnSave'),
+        currentBlame: bool(values, 'currentBlame'),
+        allBlame: bool(values, 'allBlame'),
+        changeMarkers: bool(values, 'changeMarkers'),
+      });
       setOpen(false);
       const nextLanguage = languageOf(values);
       if (nextLanguage !== initialLanguage) await setLanguage(nextLanguage);

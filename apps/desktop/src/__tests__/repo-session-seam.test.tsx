@@ -382,7 +382,7 @@ function present<T>(value: T | null | undefined): T {
 }
 
 describe('폴더 화면의 파일 히스토리·Blame 진입 (W13)', () => {
-  it('트리를 펼치고 파일·저장소 행을 골라도 세션은 없고, 파일 우클릭 → 파일 히스토리에서 처음 열린다', async () => {
+  it('트리·저장소 선택은 세션을 열지 않고 파일 편집기의 이력이 연 세션을 파일 히스토리가 재사용한다', async () => {
     const { mock, id } = await mountFolder();
     const open = vi.spyOn(mock, 'folderOpenRepoSession');
     await act(async () => {
@@ -393,10 +393,13 @@ describe('폴더 화면의 파일 히스토리·Blame 진입 (W13)', () => {
     fireEvent.click(row('auth-service'));
     await tick();
     expect(getWorkspaceStore(id)?.getState().activeRepo).toBe(AUTH);
+    expect(open).not.toHaveBeenCalled();
     fireEvent.click(row('create-order.ts'));
     await tick();
     expect(getWorkspaceStore(id)?.getState().activeRepo).toBe(API);
-    expect(open).not.toHaveBeenCalled();
+    // 기본으로 켜진 편집기 이력이 현재 파일의 저장소만 지연해서 연다.
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(id, API, expect.any(Function));
 
     fireEvent.contextMenu(row('create-order.ts'));
     await tick();

@@ -72,6 +72,7 @@ export function FileViewDoc({
         key={current.fileKey}
         doc={current}
         repoTools={repoTools}
+        repoPath={doc.repoPath}
         source={{ client, session, path: doc.path }}
         refreshEpoch={epoch}
       />

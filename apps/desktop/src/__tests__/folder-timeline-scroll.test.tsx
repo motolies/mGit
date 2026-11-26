@@ -430,6 +430,7 @@ describe('로그 탭의 행 선택: 저장소 경로 식별자 (W7)', () => {
           return label.textContent;
         }),
       ).toEqual([
+        S.comparison.withLocal,
         S.menu.copyHash,
         S.menu.copySubject,
         S.menu.reword,

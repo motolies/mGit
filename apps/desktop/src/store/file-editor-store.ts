@@ -33,6 +33,9 @@ export interface EditorFile {
   wrap: boolean;
   language: Compartment;
   controls: Compartment;
+  annotations: Compartment;
+  revealPosition?: number;
+  explicitSave?: () => Promise<boolean>;
   sources: Map<string, EditorSource>;
   timer?: ReturnType<typeof setTimeout>;
   inflight?: Promise<boolean>;
@@ -100,6 +103,14 @@ export class FileEditorStore {
     );
   }
 
+  /** 검색 결과의 위치를 공유 문서와 실제 화면에 전달한다. */
+  reveal(doc: EditorFile, position: number): void {
+    const anchor = Math.max(0, Math.min(position, doc.state.doc.length));
+    doc.state = doc.state.update({ selection: { anchor } }).state;
+    doc.revealPosition = anchor;
+    this.emit();
+  }
+
   /** 저장할 초안이나 진행 중 저장이 있는지 확인한다. */
   hasDirty(session?: SessionId, path?: string): boolean {
     return this.documents(session, path).some((doc) => doc.dirty || !!doc.inflight);
@@ -128,13 +139,14 @@ export class FileEditorStore {
       if (!doc) {
         const language = new Compartment();
         const controls = new Compartment();
+        const annotations = new Compartment();
         doc = {
           fileKey: file.fileKey,
           path,
           revision: file.revision,
           state: EditorState.create({
             doc: editorText(file.text),
-            extensions: [history(), language.of([]), controls.of([])],
+            extensions: [history(), language.of([]), controls.of([]), annotations.of([])],
           }),
           baseText: file.text,
           bom: file.bom,
@@ -151,6 +163,7 @@ export class FileEditorStore {
           wrap: false,
           language,
           controls,
+          annotations,
           sources: new Map(),
           readSequence: 0,
         };
@@ -326,7 +339,7 @@ export class FileEditorStore {
   private replace(doc: EditorFile, file: Extract<FsEditableFile, { kind: 'text' }>): void {
     doc.state = EditorState.create({
       doc: editorText(file.text),
-      extensions: [history(), doc.language.of([]), doc.controls.of([])],
+      extensions: [history(), doc.language.of([]), doc.controls.of([]), doc.annotations.of([])],
     });
     doc.revision = file.revision;
     doc.baseText = file.text;
@@ -404,7 +417,7 @@ export class FileEditorStore {
       clearTimeout(doc.timer);
       doc.state = EditorState.create({
         doc: editorText(doc.baseText),
-        extensions: [history(), doc.language.of([]), doc.controls.of([])],
+        extensions: [history(), doc.language.of([]), doc.controls.of([]), doc.annotations.of([])],
       });
       doc.dirty = false;
       doc.status = 'saved';

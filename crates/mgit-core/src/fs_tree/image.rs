@@ -312,7 +312,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("private.svg");
         std::fs::write(&path, b"<svg/>").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
         // root 계정에서는 권한 비트가 읽기를 막지 않으므로 해당 환경만 건너뛴다.
         if File::open(&path).is_err() {
             assert_eq!(

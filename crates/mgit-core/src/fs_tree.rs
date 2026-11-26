@@ -42,6 +42,8 @@ use crate::core::Core;
 use crate::error::CoreError;
 use crate::events::SessionId;
 
+mod search;
+pub use search::*;
 mod edit;
 mod image;
 mod operations;

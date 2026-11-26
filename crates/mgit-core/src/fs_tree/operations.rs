@@ -1352,6 +1352,41 @@ fn rename_exclusive(source: &Path, destination: &Path) -> std::io::Result<()> {
     }
 }
 
+/// 앱이 만든 작업 임시 이름만 Project 목록에서 숨긴다.
+pub(super) fn is_operation_temporary(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    [".mgit-fs-stage-", ".mgit-fs-backup-", ".mgit-fs-source-"]
+        .iter()
+        .any(|prefix| {
+            name.strip_prefix(prefix).is_some_and(|suffix| {
+                suffix.split('-').count() == 3
+                    && suffix
+                        .split('-')
+                        .all(|piece| !piece.is_empty() && piece.bytes().all(|b| b.is_ascii_digit()))
+            })
+        })
+}
+
+/// 충돌 대화상자에 필요한 파일 크기·수정 시각만 조회한다.
+fn metadata_values(path: Option<&Path>) -> (Option<f64>, Option<f64>) {
+    let Some(meta) = path.and_then(|p| fs::symlink_metadata(p).ok()) else {
+        return (None, None);
+    };
+    (
+        meta.is_file().then_some(meta.len() as f64),
+        meta.modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|time| time.as_millis() as f64),
+    )
+}
+/// 트리 전체 처리 항목 수를 센다.
+fn node_count(node: &Node) -> u32 {
+    1 + node.children.iter().map(node_count).sum::<u32>()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -1770,39 +1805,4 @@ mod tests {
             "body"
         );
     }
-}
-
-/// 앱이 만든 작업 임시 이름만 Project 목록에서 숨긴다.
-pub(super) fn is_operation_temporary(name: &std::ffi::OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    [".mgit-fs-stage-", ".mgit-fs-backup-", ".mgit-fs-source-"]
-        .iter()
-        .any(|prefix| {
-            name.strip_prefix(prefix).is_some_and(|suffix| {
-                suffix.split('-').count() == 3
-                    && suffix
-                        .split('-')
-                        .all(|piece| !piece.is_empty() && piece.bytes().all(|b| b.is_ascii_digit()))
-            })
-        })
-}
-
-/// 충돌 대화상자에 필요한 파일 크기·수정 시각만 조회한다.
-fn metadata_values(path: Option<&Path>) -> (Option<f64>, Option<f64>) {
-    let Some(meta) = path.and_then(|p| fs::symlink_metadata(p).ok()) else {
-        return (None, None);
-    };
-    (
-        meta.is_file().then_some(meta.len() as f64),
-        meta.modified()
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .map(|time| time.as_millis() as f64),
-    )
-}
-/// 트리 전체 처리 항목 수를 센다.
-fn node_count(node: &Node) -> u32 {
-    1 + node.children.iter().map(node_count).sum::<u32>()
 }

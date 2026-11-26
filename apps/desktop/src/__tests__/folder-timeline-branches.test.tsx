@@ -491,6 +491,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       S.branches.menu.checkout,
       // hotfix 는 어느 저장소에도 업스트림이 없다: 사유를 이름에 적고 끈다 (BR-09)
       S.branches.menu.updateNone,
+      `${S.comparison.withLocal}▸`,
+      `${S.menu.compareWithHead('hotfix')}▸`,
       S.branches.menu.newBranchHere,
       S.menu.rename,
       S.branches.menu.showOnly,
@@ -505,6 +507,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       null,
       null,
       null,
+      null,
+      null,
     ]);
   });
 
@@ -513,6 +517,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
     const menu = await openMenu(REMOTE('origin/hotfix'));
     expect(menu.map((m) => m.textContent)).toEqual([
       S.branches.menu.checkout,
+      `${S.comparison.withLocal}▸`,
+      `${S.menu.compareWithHead('origin/hotfix')}▸`,
       S.branches.menu.newBranchHere,
       S.menu.deleteRemote,
       S.branches.menu.showOnly,

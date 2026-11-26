@@ -134,6 +134,7 @@ export function GraphPane() {
     signingInfo: st.signingInfo,
     range: st.range,
     selectRange: st.selectRange,
+    openCompare: st.openCompare,
     graphColumns: st.graphColumns,
     graphQuery: st.graphQuery,
     setGraphQuery: st.setGraphQuery,

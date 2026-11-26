@@ -908,6 +908,7 @@ mod tests {
 /// 전체 원문과 확정된 비교 기준을 함께 조회한다.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 pub async fn folder_commit_file_diff_document(
     state: State<'_, AppState>,
     session: u32,

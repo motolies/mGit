@@ -232,3 +232,10 @@ export interface SearchFields {
   author: boolean;
   hash: boolean;
 }
+
+export type {
+  SearchDraft,
+  WorkspaceSearchHit,
+  WorkspaceSearchQuery,
+  WorkspaceSearchResult,
+} from './bindings';

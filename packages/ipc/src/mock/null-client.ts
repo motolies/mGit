@@ -28,6 +28,9 @@ const EMPTY_TIMELINE = {
 
 export function createNullClient(): IpcClient {
   return {
+    comparisonCommits: async () => [[], false],
+    workspaceSearch: async () => ({ hits: [], skipped: 0, truncated: false, cancelled: false }),
+    workspaceSearchCancel: async () => {},
     gitVersion: noSession,
     openRepo: noSession,
     graphWindow: noSession,
@@ -210,6 +213,13 @@ export function createNullClient(): IpcClient {
     graphLayoutPrefs: async () => ({ pinHead: true, refColors: true, collapseLongEdges: true }),
     setGraphLayoutPrefs: async () => {},
     blame: async () => [],
+    resolveRevision: async (_session, rev) => rev,
+    blameContents: async () => [],
+    revisionFileContent: async () => null,
+    compareLocalFiles: async (_session, base) => ({ base, files: [] }),
+    compareLocalDocument: async () => {
+      throw new Error('No local comparison');
+    },
     fileHistory: async () => [],
     compareRefs: async () => [],
     compareFileDiff: async () => null,

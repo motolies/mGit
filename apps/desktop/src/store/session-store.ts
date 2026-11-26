@@ -816,6 +816,7 @@ export interface SessionState {
 
   // 원격·동기화 (RM-01~06)
   setPullMode(mode: PullMode): void;
+  lastFetchAt: number | null;
   fetch(remote: string | null, prune: boolean): Promise<void>;
   /** 성공 여부. 실패는 힌트나 `actionError` 로 간다 */
   pull(): Promise<boolean>;
@@ -2041,6 +2042,7 @@ export function createSessionStore(
             }
             return;
           case 'autoFetched':
+            set({ lastFetchAt: Date.now() });
             notifyHub.notify({
               kind: 'info',
               title: S.notify.autoFetched(event.refs.length),
@@ -2609,6 +2611,7 @@ export function createSessionStore(
           },
         });
         try {
+          if (b === '@LOCAL') return;
           const files = await client.compareRefs(id, a, b, threeDot);
           const c = get().compare;
           if (seq === compareFilesSeq && c) set({ compare: { ...c, files, loading: false } });
@@ -3245,8 +3248,12 @@ export function createSessionStore(
         set({ pullMode: mode });
       },
 
+      lastFetchAt: null,
       fetch(remote, prune) {
-        return run(() => client.fetch(id, remote, prune)).then(() => {});
+        return run(async () => {
+          await client.fetch(id, remote, prune);
+          set({ lastFetchAt: Date.now() });
+        }).then(() => {});
       },
 
       pull() {

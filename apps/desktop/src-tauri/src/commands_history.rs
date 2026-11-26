@@ -684,6 +684,7 @@ mod tests {
 /// 전체 원문과 확정된 비교 기준을 함께 조회한다.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 pub async fn compare_file_diff_document(
     state: State<'_, AppState>,
     session: u32,
@@ -708,4 +709,137 @@ pub async fn compare_file_diff_document(
         )
         .await?;
     Ok(d.into())
+}
+
+/// 미저장 원문에 대한 줄별 이력이다.
+#[tauri::command]
+#[specta::specta]
+pub async fn blame_contents(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+    text: String,
+    ignore_whitespace: bool,
+) -> Result<Vec<BlameLine>, IpcError> {
+    let lines = state
+        .core()?
+        .core
+        .blame_contents(SessionId(session), &path, &text, ignore_whitespace)
+        .await?;
+    Ok(lines
+        .into_iter()
+        .map(|b| BlameLine {
+            oid: b.oid.to_hex(),
+            orig_line: b.orig_line,
+            line: b.line,
+            author: b.author,
+            author_mail: b.author_mail,
+            author_time: b.author_time,
+            summary: b.summary,
+            previous_oid: b.previous.as_ref().map(|(o, _)| o.to_hex()),
+            previous_path: b.previous.map(|(_, p)| p),
+            boundary: b.boundary,
+            text: b.text,
+        })
+        .collect())
+}
+/// 특정 커밋의 파일 원문이다.
+#[tauri::command]
+#[specta::specta]
+pub async fn revision_file_content(
+    state: State<'_, AppState>,
+    session: u32,
+    rev: String,
+    path: String,
+) -> Result<Option<String>, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .revision_file_content(SessionId(session), &rev, &path)
+        .await?)
+}
+/// 로컬 비교 기준과 파일 목록이다.
+#[derive(Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalComparison {
+    pub base: String,
+    pub files: Vec<ChangedFile>,
+}
+/// 미저장 초안을 포함한 로컬 비교 목록이다.
+#[tauri::command]
+#[specta::specta]
+pub async fn compare_local_files(
+    state: State<'_, AppState>,
+    session: u32,
+    base: String,
+    drafts: Vec<(String, String)>,
+) -> Result<LocalComparison, IpcError> {
+    let (base, files) = state
+        .core()?
+        .core
+        .compare_local_files(SessionId(session), &base, &drafts)
+        .await?;
+    Ok(LocalComparison {
+        base,
+        files: files.into_iter().map(Into::into).collect(),
+    })
+}
+/// 로컬 비교의 파일 원문과 패치다.
+#[tauri::command]
+#[specta::specta]
+pub async fn compare_local_document(
+    state: State<'_, AppState>,
+    session: u32,
+    base: String,
+    path: String,
+    draft: Option<String>,
+    options: DiffOptionsDto,
+    full: bool,
+) -> Result<crate::dto_diff::DiffDocument, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .compare_local_document(
+            SessionId(session),
+            &base,
+            &path,
+            draft.as_deref(),
+            options.into(),
+            full,
+        )
+        .await?
+        .into())
+}
+
+/// 비교 참조를 고정한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn resolve_revision(
+    state: State<'_, AppState>,
+    session: u32,
+    rev: String,
+) -> Result<String, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .resolve_revision(SessionId(session), &rev)
+        .await?)
+}
+
+type ComparisonCommitRows = (Vec<(String, String, String)>, bool);
+
+/// 한쪽에만 있는 커밋 목록과 잘림 여부를 전달한다.
+#[tauri::command]
+#[specta::specta]
+pub async fn comparison_commits(
+    state: State<'_, AppState>,
+    session: u32,
+    include: String,
+    exclude: String,
+) -> Result<ComparisonCommitRows, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .comparison_commits(SessionId(session), &include, &exclude)
+        .await?)
 }

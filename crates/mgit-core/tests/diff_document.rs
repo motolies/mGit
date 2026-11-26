@@ -418,3 +418,155 @@ async fn paired_row_discard_restores_index_without_other_changes() {
     );
     assert_eq!(repo.git_ok(["show", ":text.txt"]), before_index);
 }
+
+/// 초안은 저장 없이 비교하고 디스크 변경을 되돌린 초안은 목록에서 제거한다.
+#[tokio::test]
+async fn local_comparison_uses_drafts_and_keeps_disk_and_index() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("text.txt", "base\n");
+    repo.write_file(".gitignore", "ignored.txt\n");
+    repo.commit("base");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    repo.write_file("text.txt", "disk\n");
+    repo.write_file("new.txt", "new\n");
+    repo.write_file("ignored.txt", "ignored\n");
+    let index = std::fs::read(repo.path().join(".git/index")).unwrap();
+    let (base, files) = core
+        .compare_local_files(
+            opened.session,
+            "HEAD",
+            &[("text.txt".into(), "base\n".into())],
+        )
+        .await
+        .unwrap();
+    assert!(!files.iter().any(|f| f.path == "text.txt"));
+    assert!(!files.iter().any(|f| f.path == "ignored.txt"));
+    assert!(files.iter().any(|f| f.path == "new.txt"));
+    let d = core
+        .compare_local_document(
+            opened.session,
+            &base,
+            "text.txt",
+            Some("draft\n"),
+            DiffOptions::default(),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(d.old.content.as_deref(), Some("base\n"));
+    assert_eq!(d.new.content.as_deref(), Some("draft\n"));
+    assert!(!d.diff.hunks.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("text.txt")).unwrap(),
+        "disk\n"
+    );
+    assert_eq!(
+        std::fs::read(repo.path().join(".git/index")).unwrap(),
+        index
+    );
+    let lines = core
+        .blame_contents(opened.session, "text.txt", "base\nnew\n", false)
+        .await
+        .unwrap();
+    assert_ne!(lines[0].oid.to_hex(), "0".repeat(40));
+    assert_eq!(lines[1].oid.to_hex(), "0".repeat(40));
+}
+
+/// 이름 변경의 원래 경로와 기준 blob이 유지된다.
+#[tokio::test]
+async fn local_comparison_preserves_rename_source() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("before.txt", "same\n");
+    repo.commit("base");
+    std::fs::rename(
+        repo.path().join("before.txt"),
+        repo.path().join("after.txt"),
+    )
+    .unwrap();
+    repo.stage(&["before.txt", "after.txt"]);
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let (base, files) = core
+        .compare_local_files(opened.session, "HEAD", &[])
+        .await
+        .unwrap();
+    let file = files.iter().find(|f| f.path == "after.txt").unwrap();
+    assert_eq!(file.old_path.as_deref(), Some("before.txt"));
+    let d = core
+        .compare_local_document(
+            opened.session,
+            &base,
+            "after.txt",
+            None,
+            DiffOptions::default(),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(d.old.path.as_deref(), Some("before.txt"));
+    assert_eq!(d.old.content.as_deref(), Some("same\n"));
+}
+
+/// 대괄호·별표·pathspec 접두가 있는 이름도 다른 파일과 섞지 않고 초안 허용 여부를 판정한다.
+#[tokio::test]
+async fn comparison_paths_are_literal_in_sources_and_draft_lookup() {
+    let core = core().await;
+    let mut repo = build(Scenario::Linear(1));
+    repo.write_file("a[1].txt", "brackets\n");
+    repo.write_file("a1.txt", "not brackets\n");
+    repo.write_file(":(glob)*.txt", "literal magic\n");
+    repo.write_file("ignored1.txt", "tracked\n");
+    repo.commit("literal files");
+    repo.write_file(".gitignore", "ignored*\n");
+    repo.commit("ignore untracked matches");
+    repo.write_file("ignored[1].txt", "ignored disk\n");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+
+    for (path, expected) in [
+        ("a[1].txt", "brackets\n"),
+        (":(glob)*.txt", "literal magic\n"),
+    ] {
+        assert_eq!(
+            core.revision_file_content(opened.session, "HEAD", path)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+        let doc = core
+            .compare_local_document(
+                opened.session,
+                "HEAD",
+                path,
+                Some("draft\n"),
+                DiffOptions::default(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(doc.old.content.as_deref(), Some(expected));
+        assert_eq!(doc.new.content.as_deref(), Some("draft\n"));
+        assert_eq!(doc.old.path.as_deref(), Some(path));
+    }
+    let (_, files) = core
+        .compare_local_files(
+            opened.session,
+            "HEAD",
+            &[
+                ("a[1].txt".into(), "draft brackets\n".into()),
+                (":(glob)*.txt".into(), "draft magic\n".into()),
+                ("ignored[1].txt".into(), "ignored draft\n".into()),
+            ],
+        )
+        .await
+        .unwrap();
+    let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, [":(glob)*.txt", "a[1].txt"]);
+}

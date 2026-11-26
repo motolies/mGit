@@ -24,6 +24,7 @@ tracing.workspace = true
 thiserror.workspace = true
 keyring = { version = "4", features = ["apple-native-keyring-store", "windows-native-keyring-store"] }
 regex = "1"
+ignore = "0.4"
 sha2 = "0.10"
 base64 = "0.22"
 quick-xml = "0.42"

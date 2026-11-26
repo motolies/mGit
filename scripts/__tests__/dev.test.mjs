@@ -134,6 +134,10 @@ test('occupied preferred port falls back while settings survive port changes and
     assert.equal(config.build.devUrl, restarted.url);
     assert.equal(config.build.beforeDevCommand, '');
     assert.ok(config.app.security.devCsp.includes(restarted.url.replace('http:', 'ws:')));
+    assert.ok(config.app.security.devCsp.includes("'wasm-unsafe-eval'"));
+    assert.ok(config.app.security.devCsp.includes("worker-src 'self'"));
+    assert.ok(config.app.security.devCsp.includes("connect-src 'self'"));
+    assert.ok(!config.app.security.devCsp.includes("'unsafe-eval'"));
     assert.equal(config.app.windows[0].dataStoreIdentifier, undefined);
     assert.ok(!JSON.stringify(config).includes('dataStoreIdentifier'));
     assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'unrelated server');

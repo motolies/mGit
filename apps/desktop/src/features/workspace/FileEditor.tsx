@@ -1,4 +1,4 @@
-import { defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, historyKeymap, indentWithTab, isolateHistory } from '@codemirror/commands';
 import { indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import {
   highlightSelectionMatches,
@@ -15,9 +15,19 @@ import {
   lineNumbers,
 } from '@codemirror/view';
 import { codeHighlighter, loadLanguage } from '@mgit/diff-view';
+import type { BlameLine, SessionId } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { registerCommand } from '../../command-registry';
+import { useAppStore } from '../../store';
+import { useEditorPreferences } from '../../store/editor-preferences';
 import { type EditorFile, fileEditors } from '../../store/file-editor-store';
+import { getFolderStore, getSessionStore } from '../../store/session-registry';
+import { openFileComparison } from '../history/comparison';
+import { annotationExtension, type ChangePreview } from './editor/annotations';
+import { editorContextItems } from './editor/editor-context';
+import { formatText } from './editor/formatter';
+import { formatterParser } from './editor/formatter-language';
 import styles from './FileEditor.module.css';
 import { canHighlight, type FileViewRepoTools } from './FileView';
 import { MarkdownPreview, type PreviewSource } from './markdown/MarkdownPreview';
@@ -71,7 +81,7 @@ function extensions(doc: EditorFile): Extension {
       {
         key: 'Mod-s',
         run: () => {
-          void fileEditors.save(doc);
+          void (doc.explicitSave?.() ?? fileEditors.save(doc));
           return true;
         },
       },
@@ -114,18 +124,237 @@ function extensions(doc: EditorFile): Extension {
 export function FileEditor({
   doc,
   repoTools,
+  repoPath,
   source,
   refreshEpoch = 0,
 }: {
   doc: EditorFile;
+  repoPath?: string | null;
   source?: PreviewSource;
   refreshEpoch?: number;
   repoTools?: FileViewRepoTools | null;
 }) {
   useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const host = useRef<HTMLDivElement>(null);
+  const paneRef = useRef<HTMLElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [confirm, setConfirm] = useState<'reload' | 'overwrite' | null>(null);
+  const preferences = useEditorPreferences();
+  const [overrides, setOverrides] = useState<Partial<typeof preferences>>({});
+  const prefs = { ...preferences, ...overrides };
+  const [formatting, setFormatting] = useState(false);
+  const [formatError, setFormatError] = useState<string | null>(null);
+  const [gitSession, setGitSession] = useState<SessionId | null>(null);
+  const [gitEpoch, setGitEpoch] = useState(0);
+  const [annotation, setAnnotation] = useState<{
+    lines: BlameLine[];
+    head: string | null;
+    sequence: number;
+  } | null>(null);
+  const [changePreview, setChangePreview] = useState<ChangePreview | null>(null);
+  const formatBusy = useRef(false);
+  const canFormat = formatterParser(source?.path ?? doc.path) !== null;
+  /** 현재 초안에만 포맷 결과를 적용하며 저장 큐와 실행 취소를 공유한다. */
+  const format = async (): Promise<boolean> => {
+    if (
+      !canFormat ||
+      formatBusy.current ||
+      doc.composing ||
+      doc.mutationLocked ||
+      doc.status === 'conflict'
+    )
+      return false;
+    formatBusy.current = true;
+    setFormatting(true);
+    setFormatError(null);
+    const sequence = doc.sequence;
+    const generation = doc.generation;
+    try {
+      const text = await formatText(
+        doc.state.doc.toString(),
+        source?.path ?? doc.path,
+        prefs.printWidth,
+      );
+      if (
+        doc.sequence !== sequence ||
+        doc.generation !== generation ||
+        doc.mutationLocked ||
+        doc.composing
+      )
+        throw new Error(S.fileEditor.formatStale);
+      const view = viewRef.current;
+      if (!view || view.state !== doc.state) return false;
+      if (text !== doc.state.doc.toString())
+        view.dispatch({
+          changes: { from: 0, to: doc.state.doc.length, insert: text },
+          annotations: isolateHistory.of('full'),
+          userEvent: 'input.format',
+        });
+      return true;
+    } catch (cause) {
+      setFormatError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      formatBusy.current = false;
+      setFormatting(false);
+    }
+  };
+  /** 명시적 저장에서만 선택적으로 포맷하고 자동 저장은 기존 큐를 유지한다. */
+  const saveExplicit = async () => {
+    if (prefs.formatOnSave && canFormat && !(await format())) return false;
+    return fileEditors.save(doc);
+  };
+  useEffect(() => {
+    doc.explicitSave = saveExplicit;
+    const unregister = paneRef.current
+      ? registerCommand('editor.format', paneRef.current, {
+          enabled: () => canFormat && !formatting && !doc.composing && !doc.mutationLocked,
+          run: () => void format(),
+        })
+      : undefined;
+    const view = viewRef.current;
+    if (view)
+      editorContextItems.set(view, () => [
+        {
+          label: S.fileEditor.format,
+          disabled: !canFormat || formatting,
+          separator: true,
+          onSelect: () => void format(),
+        },
+        {
+          label: S.comparison.file,
+          disabled: gitSession === null || !repoTools,
+          onSelect: () => {
+            if (gitSession !== null && repoTools)
+              void openFileComparison(
+                gitSession,
+                repoPath ?? getSessionStore(gitSession)?.getState().path ?? '',
+                repoTools.path,
+              );
+          },
+        },
+        ...(['currentBlame', 'allBlame', 'changeMarkers'] as const).map((key) => ({
+          label: `${prefs[key] ? '✓ ' : ''}${S.fileEditor[key]}`,
+          disabled: !repoTools,
+          onSelect: () => setOverrides((old) => ({ ...old, [key]: !prefs[key] })),
+        })),
+        { label: S.fileEditor.editorDefaults, onSelect: () => setOverrides({}) },
+      ]);
+    return () => {
+      unregister?.();
+      delete doc.explicitSave;
+      if (view) editorContextItems.delete(view);
+    };
+  });
+  // 저장소 세션은 현재 파일의 소속으로 고정한다. 폴더 탭에서도 다른 저장소의 이력을 섞지 않는다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: source와 도구 객체는 매 렌더 새로 생성되므로 식별자만 추적한다.
+  useEffect(() => {
+    let live = true;
+    setGitSession(null);
+    setAnnotation(null);
+    if (!source || !repoTools) return;
+    if (getSessionStore(source.session)) setGitSession(source.session);
+    else if (repoPath)
+      void useAppStore.getState().withRepoSession(source.session, repoPath, (state) => {
+        if (live) setGitSession(state.id);
+      });
+    return () => {
+      live = false;
+    };
+  }, [source?.session, repoPath, repoTools?.path]);
+  useEffect(() => {
+    if (gitSession === null) return;
+    return getSessionStore(gitSession)?.subscribe((now, before) => {
+      if (now.refs !== before.refs || now.status !== before.status)
+        setGitEpoch((epoch) => epoch + 1);
+    });
+  }, [gitSession]);
+  // 입력이 멈춘 뒤 초안을 조회한다. 늦은 응답은 행 번호가 달라진 화면에 적용하지 않는다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sequence·generation이 공유 문서 변경과 교체를 식별한다.
+  useEffect(() => {
+    if (
+      !source ||
+      !repoTools ||
+      gitSession === null ||
+      doc.composing ||
+      !(prefs.currentBlame || prefs.allBlame || prefs.changeMarkers)
+    )
+      return;
+    let live = true;
+    const sequence = doc.sequence;
+    const timer = setTimeout(() => {
+      void Promise.all([
+        prefs.currentBlame || prefs.allBlame
+          ? source.client
+              .blameContents(gitSession, repoTools.path, doc.state.doc.toString(), false)
+              .catch(() => [])
+          : Promise.resolve([]),
+        prefs.changeMarkers
+          ? source.client
+              .revisionFileContent(gitSession, 'HEAD', repoTools.path)
+              .then((text) => text ?? '')
+              .catch(() => null)
+          : Promise.resolve(null),
+      ]).then(([lines, head]) => {
+        if (live && doc.sequence === sequence) setAnnotation({ lines, head, sequence });
+      });
+    }, 500);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [
+    gitSession,
+    doc.sequence,
+    doc.generation,
+    doc.composing,
+    gitEpoch,
+    refreshEpoch,
+    prefs.currentBlame,
+    prefs.allBlame,
+    prefs.changeMarkers,
+  ]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sequence는 편집 상태 변경을 나타내고 compartment는 문서 동안 고정된다.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (!view || !doc.annotations) return;
+    if (view.state !== doc.state) view.setState(doc.state);
+    view.dispatch({
+      effects: doc.annotations.reconfigure(
+        repoTools && annotation
+          ? annotationExtension(
+              {
+                lines: annotation.lines,
+                head: annotation.head,
+                current: prefs.currentBlame,
+                all: prefs.allBlame,
+                changes: prefs.changeMarkers,
+                pending: annotation.sequence !== doc.sequence,
+                openCommit: (oid) => {
+                  const folder = source ? getFolderStore(source.session) : undefined;
+                  if (folder && repoPath) folder.getState().revealTimelineCommit(repoPath, oid);
+                  else if (gitSession !== null)
+                    void getSessionStore(gitSession)?.getState().jumpToCommit(oid);
+                  const app = useAppStore.getState();
+                  if (app.dock.tool !== 'git' || app.dock.gitTab !== 'log')
+                    app.toggleDock('git', 'log');
+                },
+                preview: setChangePreview,
+              },
+              doc.state.doc.toString(),
+            )
+          : [],
+      ),
+    });
+  }, [
+    annotation,
+    doc.sequence,
+    prefs.currentBlame,
+    prefs.allBlame,
+    prefs.changeMarkers,
+    gitSession,
+  ]);
+
   const [wrap, setWrap] = useState(doc.wrap);
   const markdown = isMarkdown(source?.path ?? doc.path);
   const viewState = markdownViewState(doc.fileKey);
@@ -221,6 +450,10 @@ export function FileEditor({
       view.setState(doc.state);
       view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
     }
+    if (view && doc.revealPosition !== undefined) {
+      view.dispatch({ effects: EditorView.scrollIntoView(doc.revealPosition, { y: 'center' }) });
+      delete doc.revealPosition;
+    }
   });
 
   useEffect(() => {
@@ -252,6 +485,7 @@ export function FileEditor({
 
   return (
     <section
+      ref={paneRef}
       className={styles.pane}
       aria-label={S.fileEditor.title}
       onKeyDownCapture={(event) => {
@@ -265,7 +499,7 @@ export function FileEditor({
         if (['s', 'f', 'h'].includes(key)) {
           event.preventDefault();
           event.stopPropagation();
-          if (key === 's') void fileEditors.save(doc);
+          if (key === 's') void (doc.explicitSave?.() ?? fileEditors.save(doc));
           else find();
         }
       }}
@@ -284,11 +518,17 @@ export function FileEditor({
         </span>
         <Button
           onClick={() => {
-            void fileEditors.save(doc);
+            void (doc.explicitSave?.() ?? fileEditors.save(doc));
           }}
           disabled={!doc.dirty || doc.status === 'conflict' || doc.status === 'saving'}
         >
           {S.fileEditor.save}
+        </Button>
+        <Button
+          onClick={() => void format()}
+          disabled={!canFormat || formatting || doc.composing || doc.mutationLocked}
+        >
+          {formatting ? S.fileEditor.formatting : S.fileEditor.format}
         </Button>
         <Button onClick={find}>{S.fileEditor.findReplace}</Button>
         <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
@@ -310,13 +550,29 @@ export function FileEditor({
           </>
         ) : null}
       </header>
+      {formatError ? (
+        <div className={styles.warning} role="alert">
+          {formatError}
+        </div>
+      ) : null}
+      {changePreview ? (
+        <div className={`${styles.warning} ${styles.changePreview}`}>
+          <div>
+            <strong>{S.fileEditor.previousContent}</strong>
+            <pre>{changePreview.before}</pre>
+            <strong>{S.fileEditor.localChange}</strong>
+            <pre>{changePreview.after}</pre>
+          </div>
+          <Button onClick={() => setChangePreview(null)}>{S.history.close}</Button>
+        </div>
+      ) : null}
       {doc.status === 'conflict' || doc.status === 'error' ? (
         <div className={styles.warning} role="alert">
           <span>{doc.error ?? S.fileEditor.externalChanged}</span>
           {doc.status === 'error' ? (
             <Button
               onClick={() => {
-                void fileEditors.save(doc);
+                void (doc.explicitSave?.() ?? fileEditors.save(doc));
               }}
             >
               {S.fileEditor.retrySave}

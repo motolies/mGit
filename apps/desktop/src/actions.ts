@@ -2,6 +2,7 @@ import { S } from '@mgit/ui';
 import { COMMAND_SCOPES, type CommandScope, defaultShortcut } from './command-keymap';
 import { commandTarget, executeCommand, resolveCommand } from './command-registry';
 import { projectEditStrings } from './features/project/project-edit-strings';
+import { useSearchPanel } from './features/search/search-state';
 import { type AppStore, effectiveDock, type LeftTool, type TabKind } from './store/app-store';
 import type { SessionState } from './store/session-store';
 import { type TagsDocRequest, tagsDoc, type WorkspaceState } from './store/workspace-store';
@@ -819,6 +820,24 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       input: 'allow',
       run: () => ctx.prepareCommit?.(),
     },
+    {
+      id: 'workspace.quickOpen',
+      title: S.workspaceSearch.quickOpen,
+      group: 'view',
+      shortcut: 'mod+p',
+      enabled: hasRepo || inFolder,
+      input: 'allow',
+      run: () => useSearchPanel.getState().open('files'),
+    },
+    {
+      id: 'workspace.searchContent',
+      title: S.workspaceSearch.title,
+      group: 'view',
+      shortcut: 'mod+alt+f',
+      enabled: hasRepo || inFolder,
+      input: 'allow',
+      run: () => useSearchPanel.getState().open('content'),
+    },
   ];
 }
 
@@ -845,6 +864,7 @@ function contextActions(): Action[] {
     ['file.unstage', S.actions.unstage, 'repo'],
     ['file.discard', S.actions.discard, 'repo'],
     ['editor.pin', S.actions.pin, 'view'],
+    ['editor.format', S.fileEditor.format, 'view'],
     ['branch.rename', S.actions.renameBranch, 'branch'],
     ['branch.checkout', S.actions.checkoutBranch, 'branch'],
   ];
@@ -857,6 +877,9 @@ function contextActions(): Action[] {
     run: () => {
       executeCommand(id);
     },
-    input: id === 'commit.execute' || id.startsWith('log.search') ? 'allow' : 'deny',
+    input:
+      id === 'commit.execute' || id === 'editor.format' || id.startsWith('log.search')
+        ? 'allow'
+        : 'deny',
   }));
 }

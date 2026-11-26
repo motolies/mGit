@@ -96,3 +96,10 @@
 .body[data-direction="vertical"] .separator {
   cursor: row-resize;
 }
+
+.changePreview {
+  max-height: 240px;
+  overflow: auto;
+  flex-shrink: 0;
+  color: var(--fg);
+}

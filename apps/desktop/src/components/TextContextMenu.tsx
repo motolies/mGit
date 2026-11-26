@@ -2,12 +2,13 @@ import { redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
 import { queryTextContext, S, type TextContextAdapter } from '@mgit/ui';
 import { type ReactNode, useEffect } from 'react';
+import { editorContextItems } from '../features/workspace/editor/editor-context';
 import { useAppStore } from '../store';
 import { ContextMenuArea, type MenuItem } from './ContextMenu';
 import styles from './TextContextMenu.module.css';
 
 /** 우클릭 당시 선택을 보존해 CodeMirror의 트랜잭션으로 편집한다. */
-function codeActions(view: EditorView): TextContextAdapter {
+function codeActions(view: EditorView): TextContextAdapter & { editorMenu: MenuItem[] } {
   const selection = view.state.selection.main;
   const text = view.state.sliceDoc(selection.from, selection.to);
   const replace = (insert: string) => {
@@ -20,6 +21,7 @@ function codeActions(view: EditorView): TextContextAdapter {
     view.focus();
   };
   return {
+    editorMenu: editorContextItems.get(view)?.() ?? [],
     copy: text ? () => navigator.clipboard.writeText(text) : undefined,
     cut:
       text && !view.state.readOnly
@@ -134,8 +136,8 @@ export function TextContextMenu({ children }: { children: ReactNode }) {
         const selected = selectedTextAt(target);
         return selected ? { copy: () => navigator.clipboard.writeText(selected) } : null;
       }}
-      items={(adapter) =>
-        (Object.keys(labels) as (keyof TextContextAdapter)[]).flatMap((key): MenuItem[] => {
+      items={(adapter) => [
+        ...(Object.keys(labels) as (keyof TextContextAdapter)[]).flatMap((key): MenuItem[] => {
           const action = adapter[key];
           return action
             ? [
@@ -155,8 +157,9 @@ export function TextContextMenu({ children }: { children: ReactNode }) {
                 },
               ]
             : [];
-        })
-      }
+        }),
+        ...((adapter as TextContextAdapter & { editorMenu?: MenuItem[] }).editorMenu ?? []),
+      ]}
     >
       {children}
     </ContextMenuArea>

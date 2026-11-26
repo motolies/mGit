@@ -125,6 +125,8 @@ import type {
   UndoOutcome,
   UndoState,
   UnresolveMode,
+  WorkspaceSearchQuery,
+  WorkspaceSearchResult,
   WorktreeRemoveCheck,
   WorktreeSource,
   WorktreeWip,
@@ -482,7 +484,33 @@ export interface IpcClient {
     rev: string | null,
     ignoreWhitespace: boolean,
   ): Promise<BlameLine[]>;
+  resolveRevision(session: SessionId, rev: string): Promise<string>;
+  blameContents(
+    session: SessionId,
+    path: string,
+    text: string,
+    ignoreWhitespace: boolean,
+  ): Promise<BlameLine[]>;
+  revisionFileContent(session: SessionId, rev: string, path: string): Promise<string | null>;
+  compareLocalFiles(
+    session: SessionId,
+    base: string,
+    drafts: [string, string][],
+  ): Promise<{ base: string; files: ChangedFile[] }>;
+  compareLocalDocument(
+    session: SessionId,
+    base: string,
+    path: string,
+    draft: string | null,
+    options: DiffOptions,
+    full: boolean,
+  ): Promise<DiffDocument>;
   fileHistory(session: SessionId, path: string, limit: number): Promise<HistoryEntry[]>;
+  comparisonCommits(
+    session: SessionId,
+    include: string,
+    exclude: string,
+  ): Promise<[[string, string, string][], boolean]>;
   compareRefs(session: SessionId, a: string, b: string, threeDot: boolean): Promise<ChangedFile[]>;
   compareFileDiff(
     session: SessionId,
@@ -650,6 +678,12 @@ export interface IpcClient {
    * 자르고 `truncated`·`total` — "… N개 더 보기" 는 `limit` 을 올려 다시 부른다. 심볼릭 링크는 종류만 오고
    * 나열하면 거부된다. 결과: `listed` / `missing`(지워졌거나 디렉터리가 아님) / `denied`(권한 없음)
    */
+  workspaceSearch(
+    session: SessionId,
+    request: string,
+    query: WorkspaceSearchQuery,
+  ): Promise<WorkspaceSearchResult>;
+  workspaceSearchCancel(session: SessionId, request: string): Promise<void>;
   fsListDir(session: SessionId, dir: string, limit?: number | null): Promise<FsDirListing>;
   /**
    * 파일 하나를 텍스트로 읽는다 (상한 1 MiB). 결과: `text`(UTF-8, BOM·CRLF 그대로) / `binary`(앞 8,000
@@ -1058,9 +1092,20 @@ export function createTauriClient(): IpcClient {
     graphLayoutPrefs: (session) => call(() => commands.graphLayoutPrefs(session)),
     setGraphLayoutPrefs: (session, prefs) =>
       voidCall(() => commands.setGraphLayoutPrefs(session, prefs)),
+    resolveRevision: (session, rev) => call(() => commands.resolveRevision(session, rev)),
+    blameContents: (session, path, text, ignoreWhitespace) =>
+      call(() => commands.blameContents(session, path, text, ignoreWhitespace)),
+    revisionFileContent: (session, rev, path) =>
+      call(() => commands.revisionFileContent(session, rev, path)),
+    compareLocalFiles: (session, base, drafts) =>
+      call(() => commands.compareLocalFiles(session, base, drafts)),
+    compareLocalDocument: (session, base, path, draft, options, full) =>
+      call(() => commands.compareLocalDocument(session, base, path, draft, options, full)),
     blame: (session, path, rev, ignoreWhitespace) =>
       call(() => commands.blame(session, path, rev, ignoreWhitespace)),
     fileHistory: (session, path, limit) => call(() => commands.fileHistory(session, path, limit)),
+    comparisonCommits: (session, include, exclude) =>
+      call(() => commands.comparisonCommits(session, include, exclude)),
     compareRefs: (session, a, b, threeDot) =>
       call(() => commands.compareRefs(session, a, b, threeDot)),
     compareFileDiff: (session, a, b, threeDot, path, options, full) =>
@@ -1163,6 +1208,9 @@ export function createTauriClient(): IpcClient {
     fsClipboardRead: () => call(() => commands.fsClipboardRead()),
     fsClipboardWrite: (sources, cut) => voidCall(() => commands.fsClipboardWrite(sources, cut)),
     fsRecoveryWarnings: () => call(() => commands.fsRecoveryWarnings()),
+    workspaceSearch: (session, request, query) =>
+      call(() => commands.workspaceSearch(session, request, query)),
+    workspaceSearchCancel: (session, request) => commands.workspaceSearchCancel(session, request),
     fsListDir: (session, dir, limit) => call(() => commands.fsListDir(session, dir, limit ?? null)),
     fsReadFile: (session, path) => call(() => commands.fsReadFile(session, path)),
     fsReadImage: (session, path) => call(() => commands.fsReadImage(session, path)),

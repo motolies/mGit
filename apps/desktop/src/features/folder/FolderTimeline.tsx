@@ -53,6 +53,7 @@ import {
   hasConditions,
   logBodyState,
 } from '../filter-bar/filter-model';
+import { LOCAL } from '../history/comparison';
 import { useBatchReport } from './batch-report';
 import { type CheckoutCandidate, useFolderBatchFlows } from './FolderBatchBar';
 import { FolderCommitPane } from './FolderCommitPane';
@@ -176,6 +177,7 @@ export function FolderTimeline() {
     rememberTimelineAnchor: st.rememberTimelineAnchor,
     timelineAnchor: st.timelineAnchor,
   }));
+  const withRepoSession = useAppStore((s) => s.withRepoSession);
   const openRepositoryAt = useAppStore((s) => s.openRepositoryAt);
   const logRef = useRef<HTMLDivElement>(null);
   const [expansion, setExpansion] = useState<BranchTreeExpansion>({});
@@ -474,6 +476,34 @@ export function FolderTimeline() {
         },
         ...update,
         {
+          label: S.comparison.withLocal,
+          children: branch.repos.map((repo) => ({
+            label: repoNameIn(branchRepos, repo.path),
+            onSelect: () => {
+              if (folderId !== null)
+                void withRepoSession(
+                  folderId,
+                  repo.path,
+                  (st) => void st.openCompare(folderBranchFullName(branch), LOCAL, false),
+                );
+            },
+          })),
+        },
+        {
+          label: S.menu.compareWithHead(branch.name),
+          children: branch.repos.map((repo) => ({
+            label: repoNameIn(branchRepos, repo.path),
+            onSelect: () => {
+              if (folderId !== null)
+                void withRepoSession(
+                  folderId,
+                  repo.path,
+                  (st) => void st.openCompare('HEAD', folderBranchFullName(branch), false),
+                );
+            },
+          })),
+        },
+        {
           label: S.branches.menu.newBranchHere,
           disabled: running,
           // "여기서 새 branch…": 그 브랜치를 가진 저장소 중 체크한 저장소에서 그 브랜치를 시작점으로 만든다
@@ -521,6 +551,8 @@ export function FolderTimeline() {
       renameBranch,
       deletion.running,
       deletion.execute,
+      folderId,
+      withRepoSession,
     ],
   );
 
@@ -724,6 +756,35 @@ export function FolderTimeline() {
                 const repoPath = timelineRepoPath(info, row.repo);
                 const scoped = repoPath === null ? null : rowScopeAction(tl.scope, repoPath);
                 return [
+                  {
+                    label: S.comparison.withLocal,
+                    disabled: !repoPath || folderId === null,
+                    onSelect: () => {
+                      if (repoPath && folderId !== null)
+                        void withRepoSession(
+                          folderId,
+                          repoPath,
+                          (st) => void st.openCompare(row.oid, LOCAL, false),
+                        );
+                    },
+                  },
+                  ...(selectedRow &&
+                  selectedRow.repoPath === repoPath &&
+                  selectedRow.oid !== row.oid
+                    ? [
+                        {
+                          label: S.comparison.twoCommits,
+                          onSelect: () => {
+                            if (folderId !== null && repoPath)
+                              void withRepoSession(
+                                folderId,
+                                repoPath,
+                                (st) => void st.openCompare(selectedRow.oid, row.oid, false),
+                              );
+                          },
+                        },
+                      ]
+                    : []),
                   {
                     label: S.menu.copyHash,
                     commandId: 'log.copyHash',

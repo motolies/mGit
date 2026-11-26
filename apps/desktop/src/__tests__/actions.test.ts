@@ -811,6 +811,9 @@ describe('팔레트·단축키 대화상자의 제목 정리 (W27) — 동작 id
     );
     expect(keys).toEqual({
       ...DEFAULT_KEYS,
+      'workspace.quickOpen': 'mod+p',
+      'workspace.searchContent': 'mod+alt+f',
+      'editor.format': 'mod+alt+l',
       'project.newFile': 'mod+n',
       'project.newFolder': 'mod+shift+n',
       'project.rename': 'f2',

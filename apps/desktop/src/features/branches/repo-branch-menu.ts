@@ -1,3 +1,4 @@
+import { LOCAL } from '../history/comparison';
 // 저장소 탭 브랜치 트리의 메뉴와 동작 (BT-11, W22). 옛 사이드바(`Sidebar.tsx`)의 다섯 섹션 메뉴·더블클릭·머리 버튼을
 // 옮겼다 — 메뉴의 항목·순서·구분선·하위 메뉴·비활성 조건·확인창 문구가 옛 것과 같다. 다만 branch 더블클릭·Enter 는
 // checkout 대신 그래프 거르기다 (2026-11-23 사용자 결정, checkout 은 메뉴). 구조는 순수 함수가 만들고,
@@ -185,6 +186,11 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
       onSelect: () => void s.checkout({ kind: 'branch', name }),
     },
     {
+      label: S.comparison.upstream,
+      disabled: !target.label.upstream,
+      onSelect: () => void s.openCompare(name, target.label.upstream ?? 'HEAD', false),
+    },
+    {
       label: S.branches.menu.update,
       disabled: updateBlocked(target.label, state),
       onSelect: () => void s.updateBranch(name),
@@ -194,9 +200,13 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
       onSelect: () => void s.setGraphQuery({ ...state.graphQuery, revs: { kind: 'solo', name } }),
     },
     {
+      label: S.comparison.withLocal,
+      onSelect: () => void s.openCompare(name, LOCAL, false),
+    },
+    {
       label: S.menu.compareWithHead(name),
       disabled: needsOther,
-      onSelect: () => void s.openCompare(state.headBranch ?? 'HEAD', name, true),
+      onSelect: () => void s.openCompare(state.headBranch ?? 'HEAD', name, false),
     },
     {
       label: S.menu.mergeInto(name),
@@ -333,9 +343,13 @@ function remoteItems(
         void s.setGraphQuery({ ...state.graphQuery, revs: { kind: 'solo', name: short } }),
     },
     {
+      label: S.comparison.withLocal,
+      onSelect: () => void s.openCompare(short, LOCAL, false),
+    },
+    {
       label: S.menu.compareWithHead(short),
       disabled: disabled || !state.headBranch,
-      onSelect: () => void s.openCompare(state.headBranch ?? 'HEAD', short, true),
+      onSelect: () => void s.openCompare(state.headBranch ?? 'HEAD', short, false),
     },
     {
       label: S.menu.mergeInto(short),

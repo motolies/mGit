@@ -133,7 +133,20 @@ export interface TagsDocTarget {
  * 세션에 묶인 문서(작업 트리 diff, 커밋·범위 파일 diff, 충돌)는 `docs` 에 저장하지 않고 세션 상태에서 파생해
  * `sessionDocs` 로 받는다 (W14~W15, W20)
  */
+/** 저장소에 묶인 독립 비교 문서다. */
+export interface ComparisonTarget {
+  kind: 'comparison';
+  repoPath: string;
+  repoName: string;
+  session: number;
+  a: string;
+  b: string;
+  threeDot: boolean;
+  filterPath?: string;
+}
+
 export type DocTarget =
+  | ComparisonTarget
   | { kind: 'overview' }
   | CommitDiffTarget
   | RangeDiffTarget
@@ -240,6 +253,7 @@ export function docRepoPath(doc: DocTarget): string | null {
     case 'worktreeDiff':
     case 'historyDiff':
     case 'conflict':
+    case 'comparison':
     case 'tags':
       return doc.repoPath;
   }
@@ -382,6 +396,7 @@ export function isSessionDoc(doc: DocTarget): doc is SessionDocTarget {
     case 'commitDiff':
     case 'rangeDiff':
     case 'file':
+    case 'comparison':
     case 'tags':
       return false;
   }

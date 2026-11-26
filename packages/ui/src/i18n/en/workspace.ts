@@ -4,6 +4,8 @@ import type { Strings } from '../../strings';
 // 영어 사전: 앱·상태·작업 공간·브랜치·필터·프로젝트·커밋·변경·diff 구역 (ko.ts 의 같은 구역과 키가 같다)
 export const enWorkspace: Pick<
   Strings,
+  | 'comparison'
+  | 'workspaceSearch'
   | 'textContext'
   | 'app'
   | 'date'
@@ -28,6 +30,46 @@ export const enWorkspace: Pick<
   | 'commit'
   | 'diff'
 > = {
+  workspaceSearch: {
+    quickOpen: 'Quick Open',
+    title: 'Workspace Search',
+    close: 'Close',
+    query: 'Search query',
+    filePlaceholder: 'File name or path',
+    contentPlaceholder: 'Search file contents',
+    repoScope: 'Repository scope',
+    all: 'Entire workspace',
+    folderScope: 'Repository or folder scope',
+    scopePlaceholder: 'Scope: all (repository relative path)',
+    pathFilter: 'Path filter',
+    pathContains: 'Path contains',
+    regex: 'Regex',
+    matchCase: 'Match case',
+    searching: 'Searching\u2026',
+    limited: ' \u00b7 Result limit reached. Narrow the search.',
+    cancel: 'Cancel',
+    results: (n: number) => `${n} results`,
+    skipped: (n: number) => ` · ${n} skipped`,
+  },
+  comparison: {
+    onlyA: 'Commits only in A',
+    onlyB: 'Commits only in B',
+    commitsLimit: 'Showing the latest 200 commits.',
+    commits: 'Commit differences',
+    remoteTime: 'Last observed fetch',
+    unknownTime: 'Time unknown',
+    localContent: 'Current local content',
+    swap: 'Swap',
+    refresh: 'Compare / Refresh',
+    fetchRefresh: 'Fetch and compare',
+    includesDraft: 'Includes unsaved edits',
+    commitSnapshot: 'Commit snapshot comparison',
+    upstream: 'Compare with upstream',
+    withLocal: 'Compare with local content',
+    twoCommits: 'Compare with selected commit',
+    file: 'Compare file with branch/commit',
+  },
+
   textContext: {
     undo: 'Undo',
     redo: 'Redo',
@@ -424,6 +466,21 @@ export const enWorkspace: Pick<
     },
   },
   fileEditor: {
+    format: 'Format file',
+    formatting: 'Formatting…',
+    formatFailed: 'Failed to format file',
+    formatTimeout: 'Formatting timed out',
+    formatStale: 'Content changed while formatting. Try again',
+    printWidth: 'Formatter target line length (40–1000)',
+    formatOnSave: 'Format on explicit save (excluding auto save)',
+    currentBlame: 'Current line attribution',
+    allBlame: 'All line attribution',
+    changeMarkers: 'Editor change markers',
+    localChange: 'Local change',
+    uncommitted: 'Not committed yet',
+    editorDefaults: 'Use global settings',
+    previousContent: 'Previous content in HEAD',
+
     content: 'Edit file content',
     title: 'Edit current file',
     saved: 'Saved',

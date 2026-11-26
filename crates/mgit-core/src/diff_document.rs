@@ -33,9 +33,10 @@ struct Source {
     mode: u32,
 }
 
-/// 조회 명령이 실패하면 누락 파일로 오인하지 않고 오류를 전달한다.
+/// 파일 경로는 pathspec 문법으로 해석하지 않고 조회 실패는 누락 파일과 구분한다.
 async fn git(runner: &dyn GitRunner, wt: &Path, args: &[&str]) -> Result<Vec<u8>, CoreError> {
-    let req = GitRequest::new(wt, args.iter().copied());
+    let mut req = GitRequest::new(wt, args.iter().copied());
+    req.global_args.push("--literal-pathspecs".into());
     let display = req.display_args();
     Ok(runner.run(req).await?.ok(&display)?)
 }
@@ -153,10 +154,28 @@ fn work_source(wt: &Path, path: &str) -> Result<Source, CoreError> {
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes)
                 .map_err(|e| CoreError::Invalid(e.to_string()))?;
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+                if file
+                    .metadata()
+                    .map_err(|e| CoreError::Invalid(e.to_string()))?
+                    .permissions()
+                    .mode()
+                    & 0o111
+                    != 0
+                {
+                    0o100755
+                } else {
+                    0o100644
+                }
+            };
+            #[cfg(not(unix))]
+            let mode = 0o100644;
             return Ok(Source {
                 path: Some(path.into()),
                 bytes,
-                mode: 0o100644,
+                mode,
             });
         }
     }
@@ -475,4 +494,268 @@ pub(crate) fn stale_diff_error() -> CoreError {
         )
         .into(),
     )
+}
+
+impl Core {
+    /// 비교 입력을 이동하지 않는 객체 식별자로 확정한다.
+    pub async fn resolve_revision(
+        &self,
+        session: SessionId,
+        rev: &str,
+    ) -> Result<String, CoreError> {
+        let s = self.inner().get(session)?;
+        resolve(self.inner().runner(), &s.info.work_tree, rev).await
+    }
+
+    /// 편집기에서 사용할 특정 커밋의 파일 원문을 읽는다. 없는 경로는 None이다.
+    pub async fn revision_file_content(
+        &self,
+        session: SessionId,
+        rev: &str,
+        path: &str,
+    ) -> Result<Option<String>, CoreError> {
+        mgit_model::RelPath::parse(path).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let s = self.inner().get(session)?;
+        let runner = self.inner().runner();
+        let rev = resolve(runner, &s.info.work_tree, rev).await?;
+        let src = source(runner, &s.info.work_tree, Some(&rev), path).await?;
+        Ok(if src.path.is_some() && src.mode & 0o170000 == 0o100000 {
+            String::from_utf8(src.bytes).ok()
+        } else {
+            None
+        })
+    }
+
+    /// 미저장 원문을 stdin으로 전달하므로 작업 파일과 인덱스를 변경하지 않는다.
+    pub async fn blame_contents(
+        &self,
+        session: SessionId,
+        path: &str,
+        text: &str,
+        ignore_whitespace: bool,
+    ) -> Result<Vec<mgit_model::BlameLine>, CoreError> {
+        mgit_model::RelPath::parse(path).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let s = self.inner().get(session)?;
+        let mut args = vec!["blame", "--line-porcelain", "--contents", "-"];
+        if ignore_whitespace {
+            args.push("-w");
+        }
+        args.extend(["--", path]);
+        let req = GitRequest::new(&s.info.work_tree, args).with_stdin(text.as_bytes().to_vec());
+        let display = req.display_args();
+        let out = self.inner().runner().run(req).await?.ok(&display)?;
+        Ok(mgit_git::cmd::parse_blame_porcelain(
+            &String::from_utf8_lossy(&out),
+        ))
+    }
+
+    /// 기준 커밋을 고정하고 디스크와 초안을 합친 최종 상태의 변경 파일을 찾는다.
+    pub async fn compare_local_files(
+        &self,
+        session: SessionId,
+        base: &str,
+        drafts: &[(String, String)],
+    ) -> Result<(String, Vec<mgit_model::ChangedFile>), CoreError> {
+        let s = self.inner().get(session)?;
+        let wt = &s.info.work_tree;
+        let runner = self.inner().runner();
+        let base = resolve(runner, wt, base).await?;
+        let raw = git(
+            runner,
+            wt,
+            &["diff", "--no-renames", "--name-only", "-z", &base, "--"],
+        )
+        .await?;
+        let untracked = git(
+            runner,
+            wt,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )
+        .await?;
+        let mut paths = std::collections::BTreeSet::new();
+        for bytes in [&raw, &untracked] {
+            for p in bytes.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                if let Ok(p) = std::str::from_utf8(p) {
+                    paths.insert(p.to_owned());
+                }
+            }
+        }
+        for (path, _) in drafts {
+            mgit_model::RelPath::parse(path).map_err(|e| CoreError::Invalid(e.to_string()))?;
+            let listed = git(
+                runner,
+                wt,
+                &[
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                    path,
+                ],
+            )
+            .await?;
+            if !listed.is_empty() {
+                paths.insert(path.clone());
+            }
+        }
+        let mut files = Vec::new();
+        for path in paths {
+            let old = source(runner, wt, Some(&base), &path).await?;
+            let mut new = work_source(wt, &path)?;
+            if let Some((_, text)) = drafts.iter().find(|(p, _)| *p == path) {
+                new = Source {
+                    path: Some(path.clone()),
+                    bytes: text.as_bytes().to_vec(),
+                    mode: if new.path.is_some() {
+                        new.mode
+                    } else if old.path.is_some() {
+                        old.mode
+                    } else {
+                        0o100644
+                    },
+                };
+            }
+            if old.bytes != new.bytes
+                || old.path.is_some() != new.path.is_some()
+                || old.mode != new.mode
+            {
+                files.push(mgit_model::ChangedFile {
+                    path,
+                    old_path: None,
+                    change: if old.path.is_none() {
+                        DiffChange::Added
+                    } else if new.path.is_none() {
+                        DiffChange::Deleted
+                    } else {
+                        DiffChange::Modified
+                    },
+                });
+            }
+        }
+        let renames = mgit_git::cmd::parse_name_status(
+            &git(
+                runner,
+                wt,
+                &["diff", "--name-status", "-M", "-z", &base, "--"],
+            )
+            .await?,
+        );
+        for rename in renames.into_iter().filter(|f| f.old_path.is_some()) {
+            let old_path = rename.old_path.as_deref().unwrap_or_default();
+            if files
+                .iter()
+                .any(|f| f.path == old_path && f.change == DiffChange::Deleted)
+                && files
+                    .iter()
+                    .any(|f| f.path == rename.path && f.change == DiffChange::Added)
+            {
+                files.retain(|f| f.path != old_path && f.path != rename.path);
+                files.push(rename);
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok((base, files))
+    }
+
+    /// 임시 원문 두 개의 패치만 계산하고 실제 저장소에는 쓰지 않는다.
+    pub async fn compare_local_document(
+        &self,
+        session: SessionId,
+        base: &str,
+        path: &str,
+        draft: Option<&str>,
+        opts: DiffOptions,
+        full: bool,
+    ) -> Result<DiffDocument, CoreError> {
+        mgit_model::RelPath::parse(path).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let s = self.inner().get(session)?;
+        let wt = &s.info.work_tree;
+        let runner = self.inner().runner();
+        let base = resolve(runner, wt, base).await?;
+        let renames = mgit_git::cmd::parse_name_status(
+            &git(
+                runner,
+                wt,
+                &["diff", "--name-status", "-M", "-z", &base, "--"],
+            )
+            .await?,
+        );
+        let rename = renames
+            .iter()
+            .find(|f| f.path == path && f.old_path.is_some());
+        let old_path = rename.and_then(|f| f.old_path.as_deref()).unwrap_or(path);
+        let old = source(runner, wt, Some(&base), old_path).await?;
+        let mut new = work_source(wt, path)?;
+        if let Some(text) = draft {
+            new = Source {
+                path: Some(path.into()),
+                bytes: text.as_bytes().to_vec(),
+                mode: if new.path.is_some() {
+                    new.mode
+                } else if old.path.is_some() {
+                    old.mode
+                } else {
+                    0o100644
+                },
+            };
+        }
+        let temp = tempfile::tempdir().map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let a = temp.path().join("before");
+        let b = temp.path().join("after");
+        std::fs::write(&a, &old.bytes).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        std::fs::write(&b, &new.bytes).map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let mut args = vec![
+            "diff".to_string(),
+            "--no-index".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-color".into(),
+        ];
+        args.extend(mgit_git::cmd::diff_option_args(&opts));
+        args.extend([
+            "--".into(),
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ]);
+        let req = GitRequest::new(wt, args);
+        let display = req.display_args();
+        let out = runner.run(req).await?;
+        let output = if out.exit.status == Some(1) {
+            out.stdout
+        } else {
+            out.ok(&display)?
+        };
+        let patch = mgit_git::parse::parse_diff(&output)
+            .into_iter()
+            .next()
+            .map(|mut d| {
+                d.old_path = old.path.clone();
+                d.new_path = new.path.clone();
+                d.change = if old.path.is_none() {
+                    DiffChange::Added
+                } else if new.path.is_none() {
+                    DiffChange::Deleted
+                } else {
+                    rename.map(|f| f.change).unwrap_or(DiffChange::Modified)
+                };
+                d
+            });
+        let revision = format!("{}:{:x}", base, Sha256::digest(&new.bytes));
+        let mut doc = document(
+            patch,
+            old,
+            new,
+            base,
+            "LOCAL".into(),
+            revision,
+            self.config().diff_max_lines,
+            full,
+        );
+        if let Some(rename) = rename {
+            doc.diff.change = rename.change;
+        }
+        Ok(doc)
+    }
 }

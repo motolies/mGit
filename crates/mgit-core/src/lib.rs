@@ -14,6 +14,7 @@ mod changes;
 mod diff_document;
 pub use diff_document::{DiffDocument, DiffDocumentSide};
 mod commit_table;
+mod comparison_commits;
 mod config;
 mod conflict;
 mod conflict_assist;
@@ -176,3 +177,5 @@ pub use mgit_model::{
 pub use mgit_model::{
     HookInfo, PerfStatus, RepoSettings, SecretHit, SecretIgnore, SignatureStatus, SigningInfo,
 };
+
+pub use fs_tree::{SearchDraft, WorkspaceSearchHit, WorkspaceSearchQuery, WorkspaceSearchResult};

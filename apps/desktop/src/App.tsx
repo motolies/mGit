@@ -26,7 +26,7 @@ import {
   ReviewDialog,
 } from './features/conflict/AssistDialogs';
 import { BlameDialog } from './features/history/BlameDialog';
-import { CompareDialog } from './features/history/CompareDialog';
+import { ComparisonLauncher } from './features/history/ComparisonDoc';
 import { FileHistoryDialog } from './features/history/FileHistoryDialog';
 import { columnsFlow, compareFlow } from './features/history/flows';
 import { HomeScreen } from './features/home/HomeScreen';
@@ -41,6 +41,7 @@ import { RebasePreviewDialog } from './features/preview/RebasePreviewDialog';
 import { RebasePlanDialog } from './features/rebase/RebasePlanDialog';
 import { FileBackupsDialog } from './features/safety/FileBackupsDialog';
 import { ReflogDialog } from './features/safety/ReflogDialog';
+import { WorkspaceSearch } from './features/search/WorkspaceSearch';
 import {
   ConflictLeaveDialog,
   FolderCloseDialog,
@@ -430,7 +431,7 @@ export function App() {
       {isRepoTab ? <ReflogDialog /> : null}
       {isRepoTab ? <FileBackupsDialog /> : null}
       {isRepoTab ? <RebasePlanDialog /> : null}
-      {isRepoTab ? <CompareDialog /> : null}
+      {hasSession ? <ComparisonLauncher /> : null}
       {isRepoTab ? <MergePreviewDialog /> : null}
       {isRepoTab ? <RebasePreviewDialog /> : null}
       {isRepoTab ? <RenameConflictDialog /> : null}
@@ -441,6 +442,7 @@ export function App() {
       <ProfilesDialog />
       <SshKeysDialog />
       <RemoteReposDialog />
+      <WorkspaceSearch />
       <Toasts />
       {quickSwitch && isRepoTab ? (
         <BranchQuickSwitch onClose={() => setQuickSwitch(false)} />

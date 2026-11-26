@@ -242,11 +242,13 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
 
   it('로컬 (현재가 아닌 branch, 업스트림 있음) — 13개 (옛 12개 + checkout 다음의 업데이트, BR-09)', () => {
     const items = repoBranchMenu(T.development, setup().deps);
-    expect(items).toHaveLength(13);
+    expect(items).toHaveLength(15);
     expect(shape(items)).toEqual([
       'checkout',
+      'upstream과 비교',
       '업데이트',
       '이 branch 만 그래프에 표시',
+      '현재 로컬 내용과 비교',
       '현재 branch 와 development 비교…',
       `development 을(를) 현재 branch 에 merge${MERGE_SUB}`,
       'development merge 미리보기…',
@@ -266,8 +268,10 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     expect(menu(T.main)).toEqual([
       'checkout [off]',
       // 현재 branch 도 업데이트할 수 있다 (작업 트리까지 fast-forward)
+      'upstream과 비교',
       '업데이트',
       '이 branch 만 그래프에 표시',
+      '현재 로컬 내용과 비교',
       '현재 branch 와 main 비교… [off]',
       'main 을(를) 현재 branch 에 merge▸ [off]',
       'main merge 미리보기… [off]',
@@ -284,8 +288,8 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
   });
 
   it('로컬 (업스트림 없음) 은 "업스트림 지정…"·업데이트 꺼짐, 다른 워크트리에 체크아웃된 branch 는 업데이트만 꺼진다', () => {
-    expect(menu(T.searchFilters)[1]).toBe('업데이트 [off]');
-    expect(menu(T.searchFilters)[11]).toBe('업스트림 지정…');
+    expect(menu(T.searchFilters)[2]).toBe('업데이트 [off]');
+    expect(menu(T.searchFilters)[13]).toBe('업스트림 지정…');
     expect(menu(T.hotfix)).toEqual(
       menu(T.development).map((l) =>
         l === '업데이트' ? '업데이트 [off]' : l.replaceAll('development', 'hotfix/payment-timeout'),
@@ -307,10 +311,11 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
 
   it('원격 branch (origin/main) — 7개', () => {
     const items = repoBranchMenu(T.originMain, setup().deps);
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(8);
     expect(shape(items)).toEqual([
       'checkout',
       '이 branch 만 그래프에 표시',
+      '현재 로컬 내용과 비교',
       '현재 branch 와 origin/main 비교…',
       'origin/main 을(를) 현재 branch 에 merge',
       '현재 branch 를 origin/main 위로 rebase',
@@ -516,7 +521,7 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
       revs: { kind: 'solo', name: n },
     });
     await select(items, S.menu.compareWithHead(n));
-    expect(session.openCompare).toHaveBeenCalledWith('main', n, true);
+    expect(session.openCompare).toHaveBeenCalledWith('main', n, false);
     for (const [label, mode] of [
       ['merge', 'default'],
       [S.menu.mergeIntoNoFf, 'noFf'],
@@ -639,7 +644,7 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
       revs: { kind: 'solo', name: 'origin/main' },
     });
     await select(items, S.menu.compareWithHead('origin/main'));
-    expect(session.openCompare).toHaveBeenCalledWith('main', 'origin/main', true);
+    expect(session.openCompare).toHaveBeenCalledWith('main', 'origin/main', false);
     await select(items, S.menu.mergeInto('origin/main'));
     expect(session.merge).toHaveBeenCalledWith('origin/main', 'default');
     await select(items, S.menu.rebaseCurrentOnto('origin/main'));

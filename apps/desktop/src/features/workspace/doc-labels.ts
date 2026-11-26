@@ -28,6 +28,8 @@ export function docTitle(doc: DocTarget): string {
       return doc.path === ''
         ? S.workspace.conflictOpening
         : S.workspace.conflictTitle(baseName(doc.path), doc.draft);
+    case 'comparison':
+      return `${doc.a} → ${doc.b === '@LOCAL' ? S.comparison.localContent : doc.b}`;
     case 'tags':
       return S.tag.doc.title;
   }
@@ -47,6 +49,7 @@ export function docDetail(doc: DocTarget): string | undefined {
     case 'worktreeDiff':
     case 'historyDiff':
     case 'conflict':
+    case 'comparison':
     case 'tags':
       return doc.repoName;
     case 'file': {
@@ -87,6 +90,7 @@ export function docTooltip(doc: DocTarget): string | undefined {
       return doc.path === ''
         ? S.workspace.conflictOpeningTip(doc.repoName)
         : S.workspace.conflictTip(doc.repoName, doc.path, doc.draft);
+    case 'comparison':
     case 'tags':
       return undefined;
   }

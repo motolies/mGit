@@ -46,6 +46,7 @@ import { createMockFileOperations } from './mock-file-operations';
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
 import { pick } from './mock-l10n';
+import { mockWorkspaceSearch } from './mock-search';
 import {
   MockGitFailure,
   type MockTagFail,
@@ -1930,6 +1931,24 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
             folder.emit({ type: 'folderChanged', session: id, refs: false, repo: null });
         }),
         // 파일 트리·파일 보기 (W10): 폴더·저장소 세션 모두. 거부는 코어처럼 internal 오류
+        async workspaceSearch(session, _request, query) {
+          const root = fsRootOf(session);
+          const result = mockWorkspaceSearch(scene.fs, root, query);
+          for (const hit of result.hits) {
+            const absolute = `${root}/${hit.path}`;
+            const repo = scene.folder?.openFolder
+              .filter((r) => absolute.startsWith(`${r.path}/`))
+              .sort((a, b) => b.path.length - a.path.length)[0];
+            hit.repo = repo
+              ? repo.path === root
+                ? ''
+                : repo.path.slice(root.length + 1)
+              : sessions.has(session)
+                ? ''
+                : null;
+          }
+          return result;
+        },
         async fsListDir(session, dir, limit) {
           countMockCall('fsListDir');
           const g = globalThis as { __mgitMockFsDirs?: string[] };
@@ -2243,6 +2262,80 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
     },
     async autoFetchSet(minutes) {
       settingsStorage.setItem('mgit.mock.autoFetch', String(minutes));
+    },
+    /** 목 비교도 브랜치 이름을 고정하고 편집 초안을 독립 원문으로 표시한다. */
+    async resolveRevision(session, rev) {
+      const state = stateOf(entryOf(session));
+      const label = state.refs.labels.find((r) => r.fullName === rev || r.shortName === rev);
+      if (label) return label.target;
+      if (rev === 'HEAD' && state.refs.head.state !== 'unborn') return state.refs.head.oid;
+      if (/^[a-f0-9]{7,40}$/i.test(rev)) return rev;
+      throw new Error(`Unknown revision: ${rev}`);
+    },
+    async revisionFileContent(session, _rev, path) {
+      return editedFiles.get(`${fsRootOf(session)}/${path}`)?.before ?? textOf(session, path);
+    },
+    async blameContents(session, path, text) {
+      return mockBlame(entryOf(session).source.graph, path, text).map((line, i) => {
+        const before = textOf(session, path)?.split('\n')[i];
+        return before === line.text
+          ? line
+          : { ...line, oid: '0'.repeat(40), author: '', summary: '' };
+      });
+    },
+    async compareLocalFiles(session, base, drafts) {
+      const paths = new Set([
+        ...stateOf(entryOf(session)).status.entries.map((f) => f.path),
+        ...drafts.map(([p]) => p),
+      ]);
+      return {
+        base: await this.resolveRevision(session, base),
+        files: [...paths].map((path) => ({
+          path,
+          oldPath: null,
+          change: { kind: 'modified' as const },
+        })),
+      };
+    },
+    async compareLocalDocument(session, base, path, draft, _options, _full) {
+      const old = (await this.revisionFileContent(session, base, path)) ?? '';
+      const next = draft ?? textOf(session, path) ?? '';
+      const doc = mockDiffDocument(null, base, 'LOCAL');
+      const oldLines = old.split('\n'),
+        newLines = next.split('\n');
+      doc.diff.oldPath = path;
+      doc.diff.newPath = path;
+      doc.old = { path, label: base, content: old, lineCount: oldLines.length };
+      doc.new = { path, label: 'LOCAL', content: next, lineCount: newLines.length };
+      doc.diff.hunks =
+        old === next
+          ? []
+          : [
+              {
+                oldStart: 1,
+                newStart: 1,
+                oldLines: oldLines.length,
+                newLines: newLines.length,
+                section: '',
+                lines: [
+                  ...oldLines.map((text, i) => ({
+                    kind: 'del' as const,
+                    oldNo: i + 1,
+                    newNo: null,
+                    text,
+                    noNewline: false,
+                  })),
+                  ...newLines.map((text, i) => ({
+                    kind: 'add' as const,
+                    oldNo: null,
+                    newNo: i + 1,
+                    text,
+                    noNewline: false,
+                  })),
+                ],
+              },
+            ];
+      return doc;
     },
     async workTreeDiffDocument(session, path, staged, full, options) {
       return mockDiffDocument(

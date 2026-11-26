@@ -28,6 +28,8 @@ import { Dashboard } from '../folder/Dashboard';
 import { useFolderBatchFlows } from '../folder/FolderBatchBar';
 import { FolderCommitDiff } from '../folder/FolderCommitDiff';
 import { FolderSettingsDialog } from '../folder/FolderSettingsDialog';
+import { ComparisonDoc } from '../history/ComparisonDoc';
+import { openFileComparison } from '../history/comparison';
 import { ownEntries } from '../project/file-actions-menu';
 import { buildStatusLookup } from '../project/file-status';
 import { ManagedProjectTree } from '../project/ManagedProjectTree';
@@ -52,6 +54,8 @@ import { WorktreeDiffDoc } from './WorktreeDiffDoc';
  */
 function renderDoc(doc: EditorDoc, repoTools: (doc: EditorDoc) => FileViewRepoTools | null) {
   switch (doc.kind) {
+    case 'comparison':
+      return <ComparisonDoc key={doc.id} doc={doc} />;
     case 'overview':
       return <Dashboard />;
     case 'commitDiff':
@@ -363,6 +367,13 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
         createBranch: (paths) => void flows.createBranch(paths),
         checkout: (paths) => void flows.checkout(paths),
         worktree: (paths) => void flows.worktree(paths),
+        compare: (repoPath, path) => {
+          void useAppStore
+            .getState()
+            .withRepoSession(f.id, repoPath, (state) =>
+              openFileComparison(state.id, repoPath, path),
+            );
+        },
         fileHistory: (repoPath, path) => repoActions?.history(repoPath, path),
         blame: (repoPath, path) => repoActions?.blame(repoPath, path, null),
         copy: (text) => void navigator.clipboard.writeText(text).catch(() => {}),

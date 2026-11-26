@@ -21,6 +21,8 @@ import { RepoCommitTool } from '../commit/RepoCommitTool';
 import { SessionConflictPane } from '../conflict/ConflictPane';
 import { SessionDiffPane } from '../diff/DiffPane';
 import { HistoricalDiffDoc } from '../diff/HistoricalDiffDoc';
+import { ComparisonDoc } from '../history/ComparisonDoc';
+import { openFileComparison } from '../history/comparison';
 import { PullRequestsTool } from '../hosting/PullRequestsTool';
 import { useRepoStructure } from '../modules/RepoStructure';
 import { ownEntries } from '../project/file-actions-menu';
@@ -350,6 +352,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
       {
         refresh,
         openFile: openDocument,
+        compare: (repo, path) => {
+          if (tabId !== null) openFileComparison(tabId, repo, path);
+        },
         fileHistory: (_repo, path) => void s.openFileHistory(path),
         blame: (_repo, path) => void s.openBlame(path, null),
         copy: (text) => void navigator.clipboard.writeText(text).catch(() => {}),
@@ -388,6 +393,8 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
       case 'commitDiff':
       case 'rangeDiff':
         return <HistoricalDiffDoc key={doc.id} doc={doc} />;
+      case 'comparison':
+        return <ComparisonDoc key={doc.id} doc={doc} />;
       case 'overview':
         return null;
     }

@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 // 개발 런처가 바인딩한 주소를 Tauri에 전달하며 직접 Vite 실행도 loopback으로 제한한다.
 export default defineConfig({
   plugins: [react()],
+  worker: { format: 'es' },
   clearScreen: false,
   server: {
     host: '127.0.0.1',

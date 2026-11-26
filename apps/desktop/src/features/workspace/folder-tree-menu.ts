@@ -38,6 +38,7 @@ export interface FolderTreeMenuActions {
   fileHistory(repoPath: string, path: string): void;
   /** 작업 트리 파일의 blame (저장소 절대 경로, 저장소 기준 상대 경로) */
   blame(repoPath: string, path: string): void;
+  compare?(repoPath: string, path: string): void;
   copy(text: string): void;
   /** 파일 동작 (Finder·터미널·변경 되돌리기·ignore). 없으면 그 항목들을 두지 않는다 */
   files?: FileActions;
@@ -115,7 +116,7 @@ export type EntryMenuInput = Pick<
 /** 일반 폴더·파일 행의 메뉴가 거는 동작 (폴더 탭·저장소 탭 공용, W21) */
 export type EntryMenuActions = Pick<
   FolderTreeMenuActions,
-  'openFile' | 'fileHistory' | 'blame' | 'copy' | 'files'
+  'openFile' | 'fileHistory' | 'blame' | 'compare' | 'copy' | 'files'
 >;
 
 /**
@@ -295,6 +296,9 @@ export function entryMenu(input: EntryMenuInput, act: EntryMenuActions): MenuIte
           onSelect: () => act.fileHistory(repo.repoPath, repo.path),
         },
         { label: S.menu.blame, onSelect: () => act.blame(repo.repoPath, repo.path) },
+        ...(act.compare
+          ? [{ label: S.comparison.file, onSelect: () => act.compare?.(repo.repoPath, repo.path) }]
+          : []),
       ]
     : [];
   return joinGroups([open, [...vcs, ...changes], openIn, copyItems(input, act)]);

@@ -1,0 +1,83 @@
+.dialog {
+  width: min(760px, 90vw);
+  padding: 0;
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.panel {
+  position: fixed;
+  z-index: 20;
+  top: 85px;
+  left: 45px;
+  bottom: 30px;
+  width: min(560px, 60vw);
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 5px 20px #0004;
+}
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  max-height: 75vh;
+  height: 100%;
+}
+.body header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.body input:not([type="checkbox"]) {
+  padding: 7px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.options label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.results {
+  overflow: auto;
+  min-height: 0;
+}
+.hit {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+  padding: 8px;
+  text-align: left;
+  border: 0;
+  color: var(--fg);
+  background: transparent;
+}
+.hit:hover,
+.hit[data-selected="true"] {
+  background: var(--bg-hover);
+}
+.hit span,
+.hit code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hit small {
+  color: var(--fg-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.results h4 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

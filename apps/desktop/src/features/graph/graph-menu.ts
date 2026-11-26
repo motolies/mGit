@@ -5,12 +5,14 @@ import { bool, raw, str, type useDialogs } from '../../components/use-dialogs';
 import type { SessionState } from '../../store';
 import { rangeRowCount } from '../../store/squash-range';
 import { branchNameField } from '../branch/branch-name';
+import { LOCAL } from '../history/comparison';
 import { tagWriteItems } from '../tags/tag-flows';
 import { createWorktreeFlow } from '../worktree/create-worktree';
 
 /** 그래프 컨텍스트 메뉴에 필요한 스토어 조각 */
 export type GraphMenuActions = Pick<
   SessionState,
+  | 'openCompare'
   | 'checkout'
   | 'createBranch'
   | 'createTag'
@@ -162,7 +164,19 @@ export function graphMenuItems(row: GraphRow, a: GraphMenuActions, d: Dialogs): 
   // HEAD 에서 닿지 않는 커밋의 이력은 현재 브랜치에서 고칠 수 없다
   const canRewrite = !disabled && a.headBranch !== null && row.inHead;
   const localBranches = row.refs.filter((l) => l.kind.kind === 'localBranch' && !l.isCurrent);
-  const items: MenuItem[] = [];
+  const items: MenuItem[] = [
+    {
+      label: S.comparison.withLocal,
+      onSelect: () => void a.openCompare(oid, LOCAL, false),
+    },
+    {
+      label: S.comparison.twoCommits,
+      disabled: !a.selectedCommit || a.selectedCommit === oid,
+      onSelect: () => {
+        if (a.selectedCommit) void a.openCompare(a.selectedCommit, oid, false);
+      },
+    },
+  ];
 
   for (const l of localBranches) {
     items.push({

@@ -1,6 +1,7 @@
 import { S } from '@mgit/ui';
 import { bool, str, type useDialogs } from '../../components/use-dialogs';
 import { headBranchOf, type SessionState } from '../../store';
+import { LOCAL } from './comparison';
 
 type Dialogs = ReturnType<typeof useDialogs>;
 
@@ -17,8 +18,14 @@ export async function compareFlow(
     title: S.history.compareTitle,
     fields: [
       { key: 'a', label: S.history.compareA, type: 'select', initial: head, options },
-      { key: 'b', label: S.history.compareB, type: 'select', initial: other, options },
-      { key: 'threeDot', label: S.history.threeDot, type: 'checkbox', initial: true },
+      {
+        key: 'b',
+        label: S.history.compareB,
+        type: 'select',
+        initial: other,
+        options: [...options, { value: LOCAL, label: S.comparison.localContent }],
+      },
+      { key: 'threeDot', label: S.history.threeDot, type: 'checkbox', initial: false },
     ],
     confirmLabel: S.history.compareRun,
   });

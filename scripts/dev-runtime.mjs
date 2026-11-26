@@ -231,7 +231,7 @@ export function tauriConfiguration(profile, url, base) {
         dataStoreIdentifier: undefined,
       })),
       security: {
-        devCsp: `default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ${url} ${websocket}`,
+        devCsp: `default-src 'self'; img-src 'self' data: http: https:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ${url} ${websocket}`,
       },
     },
   };

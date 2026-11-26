@@ -13,6 +13,7 @@ import {
 import { repoTreeMenu } from '../features/workspace/repo-tree-menu';
 import { noteRowId } from '../store/file-tree';
 import { innermostRepo, joinRoot, relativeTo, rootToRepo } from '../store/fs-path';
+import { dirSpace } from '../store/root-space';
 
 const ROOT = '/w/acme';
 const REPOS: Record<string, string> = { api: 'api', web: 'web', 'libs/core': 'core' };
@@ -82,7 +83,7 @@ function input(
   return {
     row: r,
     targets,
-    root: ROOT,
+    space: dirSpace(ROOT),
     repoAt: (rel) => {
       const name = REPOS[rel];
       return name ? { path: `${ROOT}/${rel}`, name } : null;

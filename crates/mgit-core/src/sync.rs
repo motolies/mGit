@@ -113,7 +113,15 @@ impl Core {
         if let Some(op) = op {
             spec = spec.with_op(op).progress();
         }
-        self.run_write_tracking_tags(session, spec).await
+        let all = remote.is_none();
+        self.run_write_tracking_tags(session, spec).await?;
+        // 모든 원격을 받았으면 적어 두어 다른 탭의 자동 fetch 가 곧바로 다시 받지 않게 한다 (M5). 원격 하나만 받은 것은
+        // 다른 원격을 대신하지 않으므로 적지 않는다
+        // 그사이 세션이 닫혔으면 적지 않는다 (fetch 의 성공은 그대로)
+        if all && let Ok(s) = self.inner().get(session) {
+            self.inner().note_fetched(&s.info.common_dir);
+        }
+        Ok(())
     }
 
     /// fetch·pull 을 돌리고, 로컬 tag 집합이 바뀌었으면 원격 tag 캐시를 오래됨으로 둔다 (실패해도 일부 받았을 수 있다)

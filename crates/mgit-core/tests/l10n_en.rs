@@ -125,6 +125,44 @@ async fn batch_label_summary_and_skip_reason_are_english() {
         "{r:?}"
     );
 
+    // 일괄 stash (G): 라벨과 건너뜀 사유 (변경 없음 · 미추적 파일만 · 그 묶음의 stash 없음)
+    a.write_file("new.txt", "untracked\n");
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::StashPush {
+                batch: "e1".into(),
+                message: Some("tidy".into()),
+                include_untracked: false,
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.label, "Batch stash: tidy");
+    let skipped = |name: &str| {
+        r.results
+            .iter()
+            .find(|x| x.name == name)
+            .and_then(|x| x.skipped.clone())
+    };
+    assert_eq!(
+        skipped("a").as_deref(),
+        Some("Only untracked files (turn on Include untracked files to stash them)")
+    );
+    assert_eq!(skipped("b").as_deref(), Some("No changes to stash"));
+    let r = core
+        .folder_batch(fid, BatchOp::StashPop { batch: "e1".into() }, &[])
+        .await
+        .unwrap();
+    assert_eq!(r.label, "Batch stash pop (e1)");
+    assert!(
+        r.results
+            .iter()
+            .all(|x| x.skipped.as_deref() == Some("No stash from this batch")),
+        "{r:?}"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 

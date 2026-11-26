@@ -7,6 +7,7 @@ use mgit_core::{CoreEvent, EventSink};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::commands_group::GroupInfo;
 use crate::commands_history::GraphQueryDto;
 use crate::commands_repo::FoundRepo;
 use crate::dto::{CommandLogRecord, InProgressOp, RepoRefs, WorkTreeStatus, narrow_u64};
@@ -133,6 +134,12 @@ pub enum SessionEvent {
         session: u32,
         repo: String,
         record: CommandLogRecord,
+    },
+    /// 그룹 세션의 멤버 상태가 바뀌었다 (MR-13, 재스캔 = 멤버 재확인). 같은 재스캔의 `folderRescanned` 바로 뒤에 온다.
+    /// 폴더 세션 채널로만, 그룹일 때만 온다
+    GroupChanged {
+        session: u32,
+        group: GroupInfo,
     },
 }
 
@@ -332,6 +339,10 @@ impl From<CoreEvent> for SessionEvent {
                 session: session.0,
                 repo: repo.display().to_string(),
                 record: record.into(),
+            },
+            CoreEvent::GroupChanged { session, group } => SessionEvent::GroupChanged {
+                session: session.0,
+                group: group.into(),
             },
         }
     }

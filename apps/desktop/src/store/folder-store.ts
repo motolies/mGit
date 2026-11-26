@@ -5,6 +5,7 @@ import {
   type BatchOp,
   type BatchResult,
   type BranchDeleteTarget,
+  type CloneBatchRequest,
   type CommitDetail,
   type DiffDocument,
   type DiffOptions,
@@ -19,11 +20,13 @@ import {
   type GraphQuery,
   GraphRangeCache,
   type GraphRevs,
+  type GroupInfo,
   type IndexTarget,
   type IndexWriteResult,
   type IpcClient,
   isListModeQuery,
   type RepoChanges,
+  type RepoCommitMessage,
   type RepoSummary,
   type SessionEvent,
   type TimelineInfo,
@@ -35,11 +38,22 @@ import { commandFailed, type FolderLogEntry, prependCapped } from './command-log
 import { type ContainingEntry, createContainingLoader } from './containing-loader';
 import { describeError } from './errors';
 import { createFileTree, type FileTreeStore, type SelectionSet } from './file-tree';
-import { relativeTo } from './fs-path';
 import { notifyHub } from './notify';
+import { dirSpace, groupSpace, type RootSpace } from './root-space';
 
-export type FolderFilter = 'all' | 'changed' | 'behind' | 'inProgress';
-export type FolderSort = 'name' | 'changed' | 'behind';
+/**
+ * 대시보드 필터 (하나만 고른다): 전체 / 변경 있음 / 뒤처짐(받을 것) / 보낼 것 있음 / 업스트림 없음(branch 는 있는데
+ * 업스트림이 없음 — 분리 HEAD·상태를 못 읽은 줄은 빠진다) / stash 있음 / 진행 중
+ */
+export type FolderFilter =
+  | 'all'
+  | 'changed'
+  | 'behind'
+  | 'ahead'
+  | 'noUpstream'
+  | 'stashed'
+  | 'inProgress';
+export type FolderSort = 'name' | 'changed' | 'behind' | 'stash';
 
 /** 폴더 stage·unstage 의 방향 (Commit 도구 창의 체크 = stage, 해제 = unstage) */
 export type IndexOp = 'stage' | 'unstage';
@@ -144,6 +158,51 @@ export interface TaskEntry {
   error: string | null;
   autoFetch?: AutoFetchedRepo[];
   repeat?: number;
+  /**
+   * 일괄 작업을 실행한 인자 (작업과 넘긴 대상 경로, 빈 목록 = 전부). "실패한 저장소만 다시 실행"이 쓴다. 기록은 메모리에만
+   * 있어 앱을 다시 켜면 함께 사라진다 (오래된 인자가 남지 않는다). commit·자동 fetch 줄에는 없다
+   */
+  request?: { op: BatchOp; repos: string[] };
+  /**
+   * 여러 저장소 clone 줄의 요청 (상위 폴더·대상·옵션). "실패한 저장소만 다시 실행" 이 실패·취소된 대상으로 clone 창을 다시
+   * 연다. 메모리에만 있다
+   */
+  clone?: CloneBatchRequest;
+  /** 일괄 명령 줄의 저장소별 출력을 지웠다 (오래된 기록 — `pruneCommandOutputs`). 종료 코드·소요 시간은 남는다 */
+  outputsDropped?: boolean;
+}
+
+/** 저장소별 출력을 남기는 일괄 명령 기록 수. 그보다 오래된 일괄 명령 줄은 출력만 지운다 (저장소마다 1 MiB 까지라 쌓이면 크다) */
+export const COMMAND_OUTPUT_KEEP = 5;
+
+/**
+ * 작업 기록에서 최근 `keep` 개를 넘는 일괄 명령 줄의 출력(stdout·stderr)을 지운다 (순수 함수). 종료 코드·소요 시간·잘림
+ * 표시는 남기고 `outputsDropped` 를 켠다. 바꿀 것이 없으면 같은 줄 객체를 그대로 둔다
+ */
+export function pruneCommandOutputs(
+  history: readonly TaskEntry[],
+  keep: number = COMMAND_OUTPUT_KEEP,
+): TaskEntry[] {
+  let seen = 0;
+  return history.map((entry) => {
+    if (!entry.result?.results.some((r) => r.command)) {
+      return entry;
+    }
+    seen++;
+    if (seen <= keep || entry.outputsDropped) {
+      return entry;
+    }
+    return {
+      ...entry,
+      outputsDropped: true,
+      result: {
+        ...entry.result,
+        results: entry.result.results.map((r) =>
+          r.command ? { ...r, command: { ...r.command, stdout: '', stderr: '' } } : r,
+        ),
+      },
+    };
+  });
 }
 
 /** 자동 fetch 에서 실패한 저장소 경로들 */
@@ -329,7 +388,16 @@ export interface TimelineState {
 /** 멀티 저장소 폴더 탭 상태 (MR-01~04) */
 export interface FolderState {
   id: number;
+  /** 세션 키. 폴더 탭은 폴더의 절대 경로, 그룹 탭은 `mgit-group:<id>` 다 (경로 변환은 `space` 로 한다) */
   path: string;
+  /**
+   * 파일 경로 공간 (MR-13): 트리의 루트 기준 상대 경로와 절대 경로를 잇는다. 폴더 탭은 폴더 디렉터리 하나
+   * (`dirSpace(path)`), 그룹 탭은 별칭 공간(`groupSpace`)이다. 그룹 멤버가 바뀔 때만 새 객체가 된다
+   */
+  space: RootSpace;
+  /** 그룹 탭이면 그룹 모습(이름·멤버 상태 — `groupChanged` 로 바뀐다). 폴더 탭은 null */
+  group: GroupInfo | null;
+  /** 탭 이름. 폴더는 폴더 이름, 그룹은 그룹 이름 */
   name: string;
   repos: FoundRepo[];
   summaries: RepoSummary[];
@@ -348,7 +416,10 @@ export interface FolderState {
   /** "폴더 설정" 대화상자가 열려 있는지 (W12: 개요 탭·프로젝트 트리 루트 메뉴·Project 머리줄이 연다) */
   settingsOpen: boolean;
   batchRunning: boolean;
-  batchProgress: { label: string; phase: string; percent: number | null } | null;
+  /** 도는 일괄 작업의 진행. `opId` 는 취소에 쓰는 코어 작업 id (시작 이벤트가 오기 전이면 없다) */
+  batchProgress: { opId: number; label: string; phase: string; percent: number | null } | null;
+  /** 일괄 작업 취소를 요청했고 아직 끝나지 않았다 (취소 단추를 끈다) */
+  batchCancelling: boolean;
   /**
    * 작업 기록 (Git 도구 창의 작업 기록 탭): 끝난 일괄 작업·commit 과 자동 fetch. 최신이 앞이고 상한은
    * `TASK_HISTORY_CAPACITY`. 메모리에만 두어 폴더 탭을 닫으면 사라진다
@@ -428,10 +499,26 @@ export interface FolderState {
     reference: string,
     repos: readonly string[],
   ): ReturnType<IpcClient['folderIntegrationPreview']>;
+  /**
+   * 일괄 스태시 묶음 (최근 묶음부터): 저장소들의 stash 목록에서 묶음 표시를 모은다. 빈 목록은 전부. 작업 기록과 상관없이
+   * 저장소에서 읽는다 (일괄 스태시 꺼내기의 묶음 고르기·저장소 체크 목록)
+   */
+  listStashBatches(repos: readonly string[]): ReturnType<IpcClient['folderStashBatches']>;
   runBatch(op: BatchOp, repos?: readonly string[]): Promise<BatchResult | null>;
+  /**
+   * 도는 일괄 작업을 취소한다 (`cancelOperation`). 아직 시작하지 않은 저장소는 "취소됨", 실행 중이던 fetch·push 는 멈추고
+   * 나머지 실행 중 작업은 끝까지 둔다 — 결과는 `runBatch` 가 평소처럼 돌려준다. 도는 작업이 없거나 이미 취소를 요청했으면
+   * 아무것도 하지 않는다 (중복 클릭·끝난 직후 클릭). 코어가 받았는지를 돌려준다
+   */
+  cancelBatch(): Promise<boolean>;
   inspectRemoteBranchDeletion(remote: string, name: string): Promise<BranchDeleteTarget[]>;
   /** 작업 기록을 비운다 (작업 기록 탭의 "기록 지우기") */
   clearTaskHistory(): void;
+  /**
+   * 끝난 여러 저장소 clone 을 작업 기록에 남긴다 (clone 은 폴더 밖에서 시작해 끝난 뒤 이 폴더 탭을 연다). 요청을 함께 남겨
+   * "실패한 저장소만 다시 실행" 이 쓴다
+   */
+  recordClone(result: BatchResult, request: CloneBatchRequest, startedAt: number): void;
   loadChanges(): Promise<void>;
   /**
    * 변경 목록을 아직 읽지 않았으면 한 번 읽는다 (프로젝트 트리의 파일 상태 색, PT-06). 한 번 읽은 뒤에는 전체
@@ -448,9 +535,14 @@ export interface FolderState {
   /**
    * 일괄 커밋 (`folderCommit`). 실행 중에는 `batchRunning` 이다. 끝나면 대상 저장소의 요약·브랜치·변경을 다시 읽은
    * 뒤에 결과를 돌려준다 (Commit and Push 의 push 확인창이 새 ahead 를 보도록). 부르지 못했으면 null. 결과나 사유를
-   * 작업 기록에 남긴다
+   * 작업 기록에 남긴다. `repoMessages` 의 저장소는 자기 메시지로 커밋한다 (없으면 모두 공통 메시지 — 옛 호출 그대로)
    */
-  commitAll(repos: string[], message: string, stageAll: boolean): Promise<BatchResult | null>;
+  commitAll(
+    repos: string[],
+    message: string,
+    stageAll: boolean,
+    repoMessages?: RepoCommitMessage[],
+  ): Promise<BatchResult | null>;
   loadSettings(): Promise<void>;
   /** 성공 여부. 실패 사유는 `error` 에 남긴다 */
   saveSettings(settings: FolderSettings): Promise<boolean>;
@@ -549,20 +641,43 @@ export type FolderStore = StoreApi<FolderState>;
 
 /**
  * 트리 선택 중 저장소 디렉터리인 행의 절대 경로들 (PT-07, WS-09). `root` 는 트리 루트(폴더)의 절대 경로, 순서는
- * 저장소 목록 순서. 루트 밖의 저장소는 트리에 행이 없으므로 고를 수 없다
+ * 저장소 목록 순서. 루트 밖의 저장소는 트리에 행이 없으므로 고를 수 없다. 디렉터리 하나인 공간의
+ * `selectedRepoPathsIn` 이다
  */
 export function selectedRepoPaths(
   root: string,
   repos: readonly FoundRepo[],
   selection: SelectionSet,
 ): string[] {
+  return selectedRepoPathsIn(dirSpace(root), repos, selection);
+}
+
+/** `selectedRepoPaths` 의 경로 공간 판 (MR-13): 저장소 행의 트리 경로를 공간의 `toRel` 로 찾는다 */
+export function selectedRepoPathsIn(
+  space: RootSpace,
+  repos: readonly FoundRepo[],
+  selection: SelectionSet,
+): string[] {
   return repos.flatMap((repo) => {
-    const rel = relativeTo(root, repo.path);
+    const rel = space.toRel(repo.path);
     return rel !== null && selection[rel] === true ? [repo.path] : [];
   });
 }
 
-/** 필터·정렬을 적용한 목록 (순수 함수, 테스트 대상) */
+/**
+ * 업스트림이 없는 branch 인지: 현재 branch 가 있고(분리 HEAD 아님) 상태를 읽었는데 앞섬·뒤처짐이 없다 (코어는 업스트림이
+ * 없으면 `ahead` 를 비운다). 일괄 push 가 새 업스트림을 지정해 게시할 저장소다
+ */
+export function lacksUpstream(s: RepoSummary): boolean {
+  return (
+    (s.branch ?? null) !== null &&
+    !s.detached &&
+    (s.error ?? null) === null &&
+    (s.ahead === null || s.ahead === undefined)
+  );
+}
+
+/** 필터·정렬을 적용한 목록 (순수 함수, 테스트 대상). stash 수가 없는 줄은 0 개로 본다 */
 export function visibleSummaries(
   summaries: readonly RepoSummary[],
   filter: FolderFilter,
@@ -574,6 +689,12 @@ export function visibleSummaries(
         return s.changed > 0;
       case 'behind':
         return (s.behind ?? 0) > 0;
+      case 'ahead':
+        return (s.ahead ?? 0) > 0;
+      case 'noUpstream':
+        return lacksUpstream(s);
+      case 'stashed':
+        return (s.stashCount ?? 0) > 0;
       case 'inProgress':
         return s.op !== null && s.op !== undefined;
       default:
@@ -586,6 +707,8 @@ export function visibleSummaries(
       return filtered.sort((a, b) => b.changed - a.changed || byName(a, b));
     case 'behind':
       return filtered.sort((a, b) => (b.behind ?? 0) - (a.behind ?? 0) || byName(a, b));
+    case 'stash':
+      return filtered.sort((a, b) => (b.stashCount ?? 0) - (a.stashCount ?? 0) || byName(a, b));
     default:
       return filtered.sort(byName);
   }
@@ -879,12 +1002,16 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
     const patchTimeline = (patch: Partial<TimelineState>) =>
       set({ timeline: { ...get().timeline, ...patch } });
 
-    /** 끝난 일괄 작업·commit 을 작업 기록 맨 앞에 남긴다. 결과가 있으면 코어의 라벨을, 없으면 `label` 을 쓴다 */
+    /**
+     * 끝난 일괄 작업·commit·여러 저장소 clone 을 작업 기록 맨 앞에 남긴다. 결과가 있으면 코어의 라벨을, 없으면 `label` 을
+     * 쓴다. 다시 실행에 쓸 인자(일괄 작업 `request`, clone `clone`)가 있으면 함께 남긴다
+     */
     const recordTask = (
       kind: 'batch' | 'commit',
       label: string,
       startedAt: number,
       outcome: { result: BatchResult } | { error: string },
+      extra: Pick<TaskEntry, 'request' | 'clone'> = {},
     ) => {
       const result = 'result' in outcome ? outcome.result : null;
       const entry: TaskEntry = {
@@ -895,8 +1022,14 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         finishedAt: Date.now(),
         result,
         error: 'error' in outcome ? outcome.error : null,
+        ...(extra.request ? { request: extra.request } : {}),
+        ...(extra.clone ? { clone: extra.clone } : {}),
       };
-      set({ taskHistory: prependCapped(get().taskHistory, entry, TASK_HISTORY_CAPACITY) });
+      set({
+        taskHistory: pruneCommandOutputs(
+          prependCapped(get().taskHistory, entry, TASK_HISTORY_CAPACITY),
+        ),
+      });
     };
 
     /**
@@ -1049,7 +1182,9 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
     return {
       id,
       path: opened.path,
-      name: nameOf(opened.path),
+      space: opened.group ? groupSpace(opened.group) : dirSpace(opened.path),
+      group: opened.group ?? null,
+      name: opened.group?.name ?? nameOf(opened.path),
       repos: opened.repos,
       summaries: [],
       branches: null,
@@ -1061,6 +1196,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       settingsOpen: false,
       batchRunning: false,
       batchProgress: null,
+      batchCancelling: false,
       taskHistory: [],
       changes: [],
       changesLoading: false,
@@ -1112,6 +1248,25 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           reloadFiles();
           return;
         }
+        if (event.type === 'groupChanged') {
+          // 그룹 멤버 상태가 바뀌었다 (재스캔 = 멤버 재확인, 바로 앞 `folderRescanned` 가 목록·트리를 다시 읽었다). 멤버
+          // (별칭·경로)가 같으면 공간은 그대로 두어 공간을 참조로 기억하는 화면이 다시 계산하지 않게 한다
+          const before = get().group;
+          const sameMembers =
+            before !== null &&
+            before.members.length === event.group.members.length &&
+            before.members.every(
+              (m, i) =>
+                m.alias === event.group.members[i]?.alias &&
+                m.path === event.group.members[i]?.path,
+            );
+          set({
+            group: event.group,
+            name: event.group.name,
+            ...(sameMembers ? {} : { space: groupSpace(event.group) }),
+          });
+          return;
+        }
         // 통합 타임라인: 폴더 세션 id 로 오는 그래프 이벤트
         if (event.type === 'graphLoadStarted') {
           patchTimeline({ loadState: 'loading', generation: event.generation, error: null });
@@ -1134,7 +1289,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         if (event.type === 'operationStarted' && event.kind === 'batch') {
           set({
             batchRunning: true,
-            batchProgress: { label: event.label, phase: '', percent: null },
+            batchProgress: { opId: event.opId, label: event.label, phase: '', percent: null },
           });
           return;
         }
@@ -1146,7 +1301,7 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           return;
         }
         if (event.type === 'operationFinished') {
-          set({ batchRunning: false, batchProgress: null });
+          set({ batchRunning: false, batchProgress: null, batchCancelling: false });
           return;
         }
         if (event.type === 'folderAutoFetched') {
@@ -1266,22 +1421,22 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
 
       selectedRepos() {
-        return selectedRepoPaths(get().path, get().repos, fileTree.getState().selection);
+        return selectedRepoPathsIn(get().space, get().repos, fileTree.getState().selection);
       },
 
       toggleSelect(path) {
-        const rel = relativeTo(get().path, path);
+        const rel = get().space.toRel(path);
         if (rel !== null) {
           fileTree.getState().markSelected([rel], fileTree.getState().selection[rel] !== true);
         }
       },
 
       setSelected(paths) {
-        const { path: root, repos } = get();
+        const { space, repos } = get();
         const want = new Set(paths);
         const rels = (keep: boolean) =>
           repos.flatMap((repo) => {
-            const rel = relativeTo(root, repo.path);
+            const rel = space.toRel(repo.path);
             return rel !== null && want.has(repo.path) === keep ? [rel] : [];
           });
         // 동작은 매번 스토어의 지금 상태를 읽는다 (두 번째 호출이 첫 번째의 결과 위에 얹힌다)
@@ -1298,21 +1453,26 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         return client.folderIntegrationPreview(id, reference, [...repos]);
       },
 
+      listStashBatches(repos) {
+        return client.folderStashBatches(id, [...repos]);
+      },
+
       async runBatch(op, repos) {
         if (get().batchRunning) {
           return null;
         }
         const startedAt = Date.now();
+        const request = { op, repos: [...(repos ?? get().selectedRepos())] };
         set({ batchRunning: true, error: null });
         try {
-          const r = await client.folderBatch(id, op, [...(repos ?? get().selectedRepos())]);
-          set({ batchRunning: false, batchProgress: null });
-          recordTask('batch', batchOpLabel(op), startedAt, { result: r });
+          const r = await client.folderBatch(id, op, request.repos);
+          set({ batchRunning: false, batchProgress: null, batchCancelling: false });
+          recordTask('batch', batchOpLabel(op), startedAt, { result: r }, { request });
           return r;
         } catch (e) {
           const error = describeError(e);
-          set({ batchRunning: false, batchProgress: null, error });
-          recordTask('batch', batchOpLabel(op), startedAt, { error });
+          set({ batchRunning: false, batchProgress: null, batchCancelling: false, error });
+          recordTask('batch', batchOpLabel(op), startedAt, { error }, { request });
           return null;
         } finally {
           // pull·checkout 등은 작업 트리 파일을 바꾼다. 실패해도 일부 저장소에서는 바뀌었을 수 있다
@@ -1320,8 +1480,31 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         }
       },
 
+      async cancelBatch() {
+        const progress = get().batchProgress;
+        if (!progress || get().batchCancelling) {
+          return false;
+        }
+        set({ batchCancelling: true });
+        let accepted = false;
+        try {
+          accepted = await client.cancelOperation(progress.opId);
+        } catch {
+          accepted = false;
+        }
+        // 코어가 받지 않았으면(이미 끝남) 단추를 되살린다. 받았으면 끝 이벤트·결과가 푼다
+        if (!accepted && get().batchProgress?.opId === progress.opId) {
+          set({ batchCancelling: false });
+        }
+        return accepted;
+      },
+
       clearTaskHistory() {
         set({ taskHistory: [] });
+      },
+
+      recordClone(result, request, startedAt) {
+        recordTask('batch', result.label, startedAt, { result }, { clone: request });
       },
 
       async loadChanges() {
@@ -1374,11 +1557,14 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         }
       },
 
-      async commitAll(repos, message, stageAll) {
+      async commitAll(repos, message, stageAll, repoMessages) {
         const startedAt = Date.now();
         set({ batchRunning: true, error: null });
         try {
-          const r = await client.folderCommit(id, repos, message, stageAll);
+          // 저장소별 메시지가 없으면 옛 모양 그대로 부른다
+          const r = await (repoMessages === undefined
+            ? client.folderCommit(id, repos, message, stageAll)
+            : client.folderCommit(id, repos, message, stageAll, repoMessages));
           // 대상 저장소를 다시 읽은 뒤에 끝낸다: 커밋된 줄이 빠지고 ahead 가 오른 값이 실린 다음에 체크·버튼을 푼다
           await reloadNow(r.results.map((row) => row.path));
           set({ batchRunning: false });
@@ -1758,7 +1944,13 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       },
     };
   });
-  void store.getState().refresh();
+  // 첫 요약을 읽은 뒤 하위 저장소의 보관 기간이 지난 백업 ref·폐기 백업을 조용히 정리한다 (#18·#26). 코어가 저장소마다
+  // 하루 한 번만, 낮은 동시성으로 돌며 실패해도 알리지 않는다
+  void store
+    .getState()
+    .refresh()
+    .then(() => (disposed ? undefined : client.folderPruneBackupsDaily(id)))
+    .catch(() => {});
   void store.getState().loadSettings();
   return store;
 }

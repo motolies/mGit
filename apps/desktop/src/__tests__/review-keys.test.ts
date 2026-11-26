@@ -156,15 +156,49 @@ describe('handleGlobalKey', () => {
     }
   });
 
-  it('입력란 안의 Esc 는 미리보기 탭을 닫지 않는다 (세션 diff 는 지금처럼 닫는다)', () => {
-    document.body.innerHTML = '<input />';
+  it('입력란 안의 Esc 는 검색·세션 diff·충돌·미리보기 탭을 닫지 않는다 (#37). 입력란 밖이면 그대로 닫는다', () => {
+    document.body.innerHTML =
+      '<textarea data-commit-message></textarea><input /><div contenteditable="true"><p></p></div>';
+    const fields = [
+      document.querySelector('textarea'),
+      document.querySelector('input'),
+      document.querySelector('p'),
+    ] as HTMLElement[];
+    const cases: Partial<GlobalKeyContext>[] = [
+      { searchOpen: true },
+      { activeDoc: 'diff' },
+      { activeDoc: 'conflict' },
+      { activeDoc: 'preview' },
+    ];
+    for (const over of cases) {
+      for (const field of fields) {
+        const c = ctx(over);
+        const e = key('Escape', {}, field);
+        handleGlobalKey(e, c);
+        expect(c.closeActiveDoc, JSON.stringify(over)).not.toHaveBeenCalled();
+        expect(c.closeSearch, JSON.stringify(over)).not.toHaveBeenCalled();
+        // 입력란이 쓰도록 기본 동작을 막지 않는다
+        expect(e.defaultPrevented).toBe(false);
+      }
+      const outside = ctx(over);
+      handleGlobalKey(key('Escape'), outside);
+      expect(
+        over.searchOpen ? outside.closeSearch : outside.closeActiveDoc,
+        JSON.stringify(over),
+      ).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('홈 화면은 입력란 안에서도 Esc 로 돌아간다 (홈을 닫는 것이 그 화면 Esc 의 뜻이다)', () => {
+    document.body.innerHTML = '<input aria-label="search" />';
     const input = document.querySelector('input') as HTMLElement;
-    const preview = ctx({ activeDoc: 'preview' });
-    handleGlobalKey(key('Escape', {}, input), preview);
-    expect(preview.closeActiveDoc).not.toHaveBeenCalled();
-    const diff = ctx({ activeDoc: 'diff' });
-    handleGlobalKey(key('Escape', {}, input), diff);
-    expect(diff.closeActiveDoc).toHaveBeenCalledTimes(1);
+    const returnHome = vi.fn(() => true);
+    const c = ctx({ activeDoc: 'diff', returnHome });
+    const e = key('Escape', {}, input);
+    handleGlobalKey(e, c);
+    expect(returnHome).toHaveBeenCalledTimes(1);
+    expect(e.defaultPrevented).toBe(true);
+    expect(c.closeActiveDoc).not.toHaveBeenCalled();
   });
 
   it('평소에는 단축키가 실행되고 팔레트가 열린다', () => {

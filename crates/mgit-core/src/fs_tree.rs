@@ -1,5 +1,6 @@
 //! 파일 트리·파일 보기 API (W10: FS-01~10, PT-01·03·09, ED-04). 세션의 루트 아래만 읽는다 — 저장소
-//! 세션은 작업 트리, 폴더 세션은 폴더 경로이고, API 는 루트·절대 경로를 받지 않는다 (FS-01).
+//! 세션은 작업 트리, 폴더 세션은 폴더 경로이고, API 는 루트·절대 경로를 받지 않는다 (FS-01). 진입점은 세션의
+//! 경로 공간(`space`, `Core::fs_space`)에서 요청 경로의 루트를 얻고, 아래 단계는 그 루트 기준으로 돈다.
 //! 조회 API는 git 을 실행하지 않고 파일을 만들거나 고치지 않는다 (FS-10). 편집·저장은 `edit` 모듈에서
 //! 별도 revision 계약으로 처리한다. 파일 시스템 호출은 블로킹이므로
 //! `spawn_blocking` 에서 돈다 (항목이 수만 개인 디렉터리도 비동기 런타임을 막지 않는다).
@@ -44,12 +45,19 @@ use crate::events::SessionId;
 
 mod search;
 pub use search::*;
+mod replace;
+pub use replace::*;
 mod edit;
+mod encoding;
+pub use encoding::FsEncoding;
 mod image;
 mod operations;
 pub use operations::*;
+mod space;
+pub(crate) use space::{FsSpace, Located};
 pub(super) static FS_MUTATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-pub use edit::{FsEditableFile, FsLineEnding, FsSaveResult};
+pub use edit::{FsEditableFile, FsLineEnding, FsLineEndingCounts, FsSaveResult};
+use encoding::{decode, is_utf16, sniff_bom};
 pub use image::{FS_IMAGE_MAX_BYTES, FsImage};
 
 /// 나열 항목 수의 기본 상한 (FS-09, PT-03)
@@ -147,35 +155,37 @@ impl Core {
         dir: &str,
         limit: Option<u32>,
     ) -> Result<FsListing, CoreError> {
-        let root = self.fs_root(session)?;
-        let dir = dir.to_owned();
         let limit = limit
             .unwrap_or(FS_LIST_DEFAULT_LIMIT)
             .clamp(1, FS_LIST_MAX_LIMIT) as usize;
+        let (root, dir) = match self.fs_space(session)?.locate(dir)? {
+            Located::Under { root, rest } => (root, rest),
+            Located::GroupTop(mounts) => return Ok(list_group_top(&mounts, limit)),
+        };
         run_blocking(move || list_dir_at(&root, &dir, limit)).await
     }
 
     /// 루트 기준 상대 경로의 파일 하나를 텍스트로 읽는다 (FS-01~08). 모르는 세션은 `SessionNotFound`,
     /// 거부는 `Invalid`, 예상하지 못한 입출력 오류는 `Io`
     pub async fn fs_read_file(&self, session: SessionId, path: &str) -> Result<FsFile, CoreError> {
-        let root = self.fs_root(session)?;
-        let path = path.to_owned();
+        let (root, path) = self.fs_space(session)?.locate(path)?.into_under(path)?;
         run_blocking(move || read_file_at(&root, &path)).await
     }
 
-    /// 세션 id 로 정한 루트 (FS-01). 저장소 세션과 폴더 세션은 id 공간을 공유하므로(`alloc_session_id`)
-    /// 한 id 는 둘 중 하나만 가리킨다
-    pub fn fs_root(&self, session: SessionId) -> Result<PathBuf, CoreError> {
+    /// 세션 id 로 정한 파일 경로 공간 (FS-01). 저장소 세션은 작업 트리 하나, 폴더 세션은 세션이 정한 공간이다.
+    /// 저장소 세션과 폴더 세션은 id 공간을 공유하므로(`alloc_session_id`) 한 id 는 둘 중 하나만 가리킨다.
+    /// 파일 API 진입점은 루트를 직접 묻지 않고 이 공간의 `locate`·`roots` 로 루트를 얻는다
+    pub(crate) fn fs_space(&self, session: SessionId) -> Result<FsSpace, CoreError> {
         let inner = self.inner_arc();
         if let Ok(repo) = inner.get(session) {
-            return Ok(repo.info.work_tree.clone());
+            return Ok(FsSpace::Dir(repo.info.work_tree.clone()));
         }
-        Ok(inner.folders_get(session)?.path.clone())
+        Ok(inner.folders_get(session)?.fs_space())
     }
 }
 
-/// 블로킹 파일 시스템 작업을 전용 스레드에서 돌린다. 작업이 패닉하면 입출력 오류로 바꾼다
-async fn run_blocking<T: Send + 'static>(
+/// 블로킹 파일 시스템 작업을 전용 스레드에서 돌린다. 작업이 패닉하면 입출력 오류로 바꾼다 (그룹 고치기의 멤버 검사도 쓴다)
+pub(crate) async fn run_blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, CoreError> + Send + 'static,
 ) -> Result<T, CoreError> {
     tokio::task::spawn_blocking(work).await.map_err(|_| {
@@ -244,6 +254,33 @@ fn fs_state(error: io::Error) -> Result<FsState, CoreError> {
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => Ok(FsState::Missing),
         io::ErrorKind::PermissionDenied => Ok(FsState::Denied),
         _ => Err(CoreError::Io(error)),
+    }
+}
+
+/// 그룹 맨 위 나열 (MR-13): 멤버 별칭을 디렉터리 항목으로 돌려준다 (디스크를 보지 않는다). 없는 멤버도 줄이 있고,
+/// 그 안을 나열하면 "없음"이다. 정렬·자르기는 디렉터리 나열과 같고 맨 위 항목은 파일 보기로 열 수 없다
+fn list_group_top(mounts: &[crate::group::GroupMount], limit: usize) -> FsListing {
+    let mut keys: Vec<SortKey> = mounts
+        .iter()
+        .map(|m| SortKey::new(FsEntryKind::Dir, m.alias.clone()))
+        .collect();
+    keys.sort_unstable();
+    let total = keys.len();
+    keys.truncate(limit);
+    FsListing::Listed {
+        entries: keys
+            .into_iter()
+            .map(|key| FsEntry {
+                name: key.name,
+                kind: FsEntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+                openable: false,
+            })
+            .collect(),
+        total: u32::try_from(total).unwrap_or(u32::MAX),
+        truncated: total > limit,
+        non_utf8_names: 0,
     }
 }
 
@@ -473,59 +510,81 @@ fn list_target(target: &Target, dir: &str, limit: usize) -> Result<FsListing, Co
     })
 }
 
-/// 4단계 읽기 (FS-06·07·08): 정규 파일만 연다. 연 핸들이 정규 파일이 아니면 "지원 안 함", 확인한 그
-/// 파일이 아니면(장치·inode 가 다르면) 거부한다. 크기가 상한을 넘으면 읽지 않고, 아니면 상한+1
-/// 바이트까지만 읽는다 (그사이 커졌을 수 있다)
+/// 4단계 읽기 (FS-06·07·08): 원문 바이트를 읽어 결과로 나눈다 (`read_target_bytes` → `classify`)
 fn read_target(target: &Target, request: &str) -> Result<FsFile, CoreError> {
+    Ok(match read_target_bytes(target, request)? {
+        RawFile::Bytes { bytes, stat_size } => classify(bytes, stat_size),
+        RawFile::Other(file) => file,
+    })
+}
+
+/// 원문 바이트 읽기의 결과: 바이트(상한+1 까지) 또는 바이트를 읽지 않은 상태 (너무 큼·지원 안 함·없음·권한 없음)
+enum RawFile {
+    Bytes { bytes: Vec<u8>, stat_size: u64 },
+    Other(FsFile),
+}
+
+/// 4단계 원문 바이트 읽기 (FS-06·07): 정규 파일만 연다. 연 핸들이 정규 파일이 아니면 "지원 안 함", 확인한 그
+/// 파일이 아니면(장치·inode 가 다르면) 거부한다. 크기가 상한을 넘으면 읽지 않고, 아니면 상한+1
+/// 바이트까지만 읽는다 (그사이 커졌을 수 있다). 편집 조회(`edit`)는 이 바이트를 인코딩 규칙으로 디코드한다
+fn read_target_bytes(target: &Target, request: &str) -> Result<RawFile, CoreError> {
     let kind = kind_of(target.meta.file_type());
     if kind != FsEntryKind::File {
-        return Ok(FsFile::Unsupported { kind });
+        return Ok(RawFile::Other(FsFile::Unsupported { kind }));
     }
     let file = match open_no_follow(&target.path) {
         Ok(file) => file,
         // 확인 뒤 끝 구성요소가 링크로 바뀌었다: 대상을 읽지 않는다
         Err(e) if is_link_refusal(&e) => {
-            return Ok(FsFile::Unsupported {
+            return Ok(RawFile::Other(FsFile::Unsupported {
                 kind: FsEntryKind::Symlink,
-            });
+            }));
         }
-        Err(e) => return fs_state(e).map(Into::into),
+        Err(e) => return fs_state(e).map(|state| RawFile::Other(state.into())),
     };
     let opened = file.metadata()?;
     if !opened.is_file() {
-        return Ok(FsFile::Unsupported {
+        return Ok(RawFile::Other(FsFile::Unsupported {
             kind: kind_of(opened.file_type()),
-        });
+        }));
     }
     if !same_file(&target.meta, &opened) {
         return Err(rejected(request, CHANGED_REASON));
     }
     if opened.len() > FS_READ_MAX_BYTES {
-        return Ok(FsFile::TooLarge {
+        return Ok(RawFile::Other(FsFile::TooLarge {
             size: opened.len(),
             limit: FS_READ_MAX_BYTES,
-        });
+        }));
     }
     let capacity = usize::try_from(opened.len()).unwrap_or(0).saturating_add(1);
     let mut bytes = Vec::with_capacity(capacity);
     (&file)
         .take(FS_READ_MAX_BYTES + 1)
         .read_to_end(&mut bytes)?;
-    Ok(classify(bytes, opened.len()))
+    Ok(RawFile::Bytes {
+        bytes,
+        stat_size: opened.len(),
+    })
 }
 
-/// 읽은 바이트를 결과로 (FS-07·08): 상한을 넘으면 본문 없이 "너무 큼"(크기는 읽은 양과 메타데이터 중
-/// 큰 값), 앞 8,000 바이트에 NUL 이 있으면 바이너리, UTF-8 이 아니면 그 사실만 — 손실 변환본을 만들지
-/// 않는다. 텍스트는 바이트 그대로다 (BOM·CRLF 유지)
+/// 읽은 바이트가 상한을 넘었으면 "너무 큼" 결과 (크기는 읽은 양과 메타데이터 중 큰 값). 아니면 None
+fn too_large(read: u64, stat_size: u64) -> Option<FsFile> {
+    (read > FS_READ_MAX_BYTES).then(|| FsFile::TooLarge {
+        size: read.max(stat_size),
+        limit: FS_READ_MAX_BYTES,
+    })
+}
+
+/// 읽은 바이트를 결과로 (FS-07·08): 상한을 넘으면 본문 없이 "너무 큼", 앞 8,000 바이트에 NUL 이 있으면
+/// 바이너리, UTF-8 이 아니면 그 사실만 — 손실 변환본을 만들지 않는다. 텍스트는 바이트 그대로다 (BOM·CRLF
+/// 유지). UTF-16 BOM 이 있으면 NUL 이 글자의 반이라 바이너리로 보지 않고 UTF-8 아님이다 (편집 조회가 디코드한다, R2)
 fn classify(bytes: Vec<u8>, stat_size: u64) -> FsFile {
     let read = bytes.len() as u64;
-    if read > FS_READ_MAX_BYTES {
-        return FsFile::TooLarge {
-            size: read.max(stat_size),
-            limit: FS_READ_MAX_BYTES,
-        };
+    if let Some(large) = too_large(read, stat_size) {
+        return large;
     }
-    if has_nul_in_probe(&bytes) {
+    if has_nul_in_probe(&bytes) && !sniff_bom(&bytes).is_some_and(is_utf16) {
         return FsFile::Binary { size: read };
     }
     match String::from_utf8(bytes) {
@@ -830,6 +889,15 @@ mod tests {
                 text: "a\r\nb\r\n".into(),
                 size: 6
             }
+        );
+        // UTF-16 BOM 이 있으면 앞부분의 NUL 이 글자의 반이라 바이너리가 아니라 UTF-8 아님이다 (R2: 편집 조회가 디코드)
+        assert_eq!(
+            classify(vec![0xFF, 0xFE, b'a', 0, b'b', 0], 0),
+            FsFile::NotUtf8 { size: 6 }
+        );
+        assert_eq!(
+            classify(vec![b'a', 0, b'b', 0], 0),
+            FsFile::Binary { size: 4 }
         );
     }
 

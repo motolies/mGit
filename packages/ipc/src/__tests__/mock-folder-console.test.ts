@@ -301,6 +301,42 @@ describe('folder 장면의 일괄 작업과 폴더 콘솔 (W19 ②, WS-23)', () 
     ]);
   });
 
+  it('push 새 업스트림: 업스트림이 없는 branch 는 origin 으로 게시하고(-u), 분리 HEAD 는 건너뛴다. 고른 원격이 없으면 건너뛴다', async () => {
+    const { client, folder, repo, events } = await folderScene();
+    // 요약이 업스트림 없는 branch 의 원격 이름을 싣는다 (분리 HEAD·업스트림 있음은 싣지 않는다)
+    const summaries = await client.folderSummaries(folder, []);
+    expect(summaries.filter((s) => s.remotes).map((s) => [s.name, s.remotes])).toEqual([
+      ['design-system-hotfix', ['origin']],
+    ]);
+    const result = await client.folderBatch(
+      folder,
+      { kind: 'push', newUpstream: { remotes: [] } },
+      [repo('billing-service'), repo('design-system-hotfix')],
+    );
+    expect(result.results.map((r) => [r.name, r.ok, r.skipped, r.upstreamSet ?? null])).toEqual([
+      ['billing-service', true, '분리된 HEAD 상태에서는 푸시할 수 없습니다', null],
+      ['design-system-hotfix', true, null, 'origin/hotfix/token-contrast'],
+    ]);
+    // 워크트리의 명령 기록은 원 저장소(design-system) 줄에 남는다
+    expect(brief(logged(events))).toEqual([
+      [
+        'design-system',
+        'push -u --end-of-options origin refs/heads/hotfix/token-contrast:refs/heads/hotfix/token-contrast',
+        0,
+      ],
+    ]);
+    // 고른 원격이 그 저장소에 없으면 다른 원격으로 바꾸지 않고 건너뛴다
+    const missing = await client.folderBatch(
+      folder,
+      {
+        kind: 'push',
+        newUpstream: { remotes: [{ path: repo('design-system-hotfix'), remote: 'fork' }] },
+      },
+      [repo('design-system-hotfix')],
+    );
+    expect(missing.results[0]?.skipped).toBe('등록된 원격 저장소가 없습니다: fork');
+  });
+
   it('pull·branch·checkout 도 코어의 건너뜀 규칙을 따르고 실패하는 명령은 종료 코드와 사유를 싣는다', async () => {
     const { client, folder, events } = await folderScene();
     const pull = await client.folderBatch(folder, { kind: 'pull' }, []);
@@ -341,6 +377,44 @@ describe('folder 장면의 일괄 작업과 폴더 콘솔 (W19 ②, WS-23)', () 
       .catch((e: unknown) => toIpcError(e));
     expect(error).toMatchObject({ kind: 'internal' });
     expect(logged(events)).toEqual([]);
+  });
+
+  it('일괄 명령: 저장소마다 종료 코드·출력을 싣고, 없는 branch 의 rev-parse --verify 는 종료 코드 128 로 실패한다', async () => {
+    const { client, folder, repo, events } = await folderScene();
+    const auth = repo('auth-service');
+    const web = repo('web-console');
+    const status = await client.folderBatch(
+      folder,
+      { kind: 'runCommand', args: ['status', '-sb'] },
+      [auth],
+    );
+    expect(status.label).toBe(mockBatchLabel({ kind: 'runCommand', args: ['status', '-sb'] }));
+    const out = status.results[0]?.command;
+    expect(out?.status).toBe(0);
+    expect(out?.stdout.startsWith('## feature/login-rate-limit\n')).toBe(true);
+    const verify = await client.folderBatch(
+      folder,
+      { kind: 'runCommand', args: ['rev-parse', '--verify', 'staging'] },
+      [auth, web],
+    );
+    const byName = Object.fromEntries(verify.results.map((r) => [r.name, r]));
+    expect(byName['web-console']?.ok).toBe(true);
+    expect(byName['auth-service']).toMatchObject({
+      ok: false,
+      message: 'fatal: Needed a single revision',
+      command: { status: 128 },
+    });
+    expect(verify.failed).toBe(1);
+    // 저장소마다 콘솔 기록이 한 줄씩 남는다
+    expect(brief(logged(events)).slice(-2)).toEqual([
+      ['auth-service', 'rev-parse --verify staging', 128],
+      ['web-console', 'rev-parse --verify staging', 0],
+    ]);
+    // 빈 명령은 거부한다
+    const error = await client
+      .folderBatch(folder, { kind: 'runCommand', args: [] }, [auth])
+      .catch((e: unknown) => toIpcError(e));
+    expect(error).toMatchObject({ kind: 'internal' });
   });
 });
 

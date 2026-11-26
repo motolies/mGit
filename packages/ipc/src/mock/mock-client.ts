@@ -5,6 +5,7 @@ import { EMPTY_COMMIT_FILTER, isEmptyCommitFilter } from '../commit-filter';
 import type {
   ContainingRefs,
   FileDiff,
+  FsSaveResult,
   GraphQuery,
   HeadState,
   IndexTarget,
@@ -13,6 +14,8 @@ import type {
   ModuleOverrides,
   OpOutcome,
   RefLabel,
+  ReplaceOutcome,
+  ReplaceUndoOutcome,
   RepoOpened,
   RepoSessionRelease,
   RepoState,
@@ -46,9 +49,29 @@ import {
 import { mockDiffDocument } from './mock-diff-document';
 import { createMockFileOperations } from './mock-file-operations';
 import { compileMockFilter, filterMockGraph, mockAuthors } from './mock-filter';
+import { type MockFs, mockNormalizeLineEndings } from './mock-fs';
 import { MockGraphSource, windowOfGraph } from './mock-graph-source';
+import {
+  createMockGroupStore,
+  type MockGroupLocated,
+  mockGroupFiles,
+  mockGroupFolderData,
+  mockGroupKey,
+  mockGroupLocate,
+  mockGroupReplacePreview,
+  mockGroupSearch,
+  mockGroupSeed,
+  mockGroupTopListing,
+  mockGroupTopRejected,
+} from './mock-groups';
 import { pick } from './mock-l10n';
-import { mockWorkspaceSearch } from './mock-search';
+import {
+  mockReplacePreview,
+  mockReplaceText,
+  mockWorkspaceFiles,
+  mockWorkspaceSearch,
+} from './mock-search';
+import { applyMockBatchStashes, mockFolderStashBatches } from './mock-stash';
 import {
   MockGitFailure,
   type MockTagFail,
@@ -320,7 +343,12 @@ interface MockFolderSession {
   allHistory: MockTimeline | null;
   /** 지연 로드 중인 첫 타임라인의 타이머 */
   timelineTimer: ReturnType<typeof setTimeout> | null;
+  /** 가상 그룹 세션이면 그 그룹 id (MR-13). 파일 경로가 `별칭/…` 공간이다 */
+  group?: string;
 }
+
+/** 목 그룹의 마지막 연 시각 기준 (밀리초, 장면 기준 시각과 같은 날) */
+const MOCK_GROUP_OPENED_AT = 1_761_600_000_000;
 
 /** 통합 타임라인의 기본 질의: 날짜순 전체 (코어 기본값과 같다) */
 const TIMELINE_QUERY: GraphQuery = {
@@ -608,6 +636,59 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       throw new IpcClientError({ kind: 'sessionNotFound', session });
     }
     return root;
+  };
+
+  /**
+   * 검색·바꾸기 결과의 저장소 (코어 `repo_of` 흉내): 폴더는 그 경로를 품은 가장 긴 열린 저장소(루트 기준, 루트 자신은
+   * ''), 저장소 세션은 '', 어느 저장소에도 들지 않으면 null
+   */
+  const mockRepoOf = (session: SessionId, root: string, path: string): string | null => {
+    const absolute = `${root}/${path}`;
+    const repo = scene?.folder?.openFolder
+      .filter((r) => absolute.startsWith(`${r.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (repo) return repo.path === root ? '' : repo.path.slice(root.length + 1);
+    return sessions.has(session) ? '' : null;
+  };
+  /** 파일 하나의 실패 문구 (코어처럼 거부 오류면 그 문구 — 바꾸기 적용·되돌리기의 `failed` 결과) */
+  const mockErrorMessage = (cause: unknown): string =>
+    cause instanceof IpcClientError && 'message' in cause.error
+      ? String(cause.error.message)
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+  /** 바꾸기 되돌리기용 목 백업 (코어의 폐기 백업 `replace` 흉내): 원문을 담은 파일의 절대 경로와 원문 */
+  const replaceBackups = new Map<number, { file: string; text: string }>();
+  let replaceBackupSeq = 0;
+
+  /** 목 그룹 정의 (MR-13): 폴더 장면의 저장소로 만든 고정 그룹 하나에서 시작한다 */
+  const groupStore = createMockGroupStore(
+    () => scene?.folder?.openFolder ?? [],
+    mockGroupSeed(scene?.folder ?? null, MOCK_GROUP_OPENED_AT),
+  );
+  /** 그 그룹을 연 폴더 세션 */
+  const groupSessionOf = (id: string): SessionId | null => {
+    for (const [session, folder] of folders) {
+      if (folder.group === id) return session;
+    }
+    return null;
+  };
+
+  /**
+   * 파일 API 의 (루트, 나머지) (코어 `locate` 흉내): 그룹 세션은 첫 구성요소가 별칭이고 맨 위('')는 'top', 그 밖은 세션
+   * 루트 기준 그대로다. 잘못된 그룹 경로·모르는 별칭은 거부한다
+   */
+  const fsAt = (session: SessionId, path: string): MockGroupLocated | 'top' => {
+    const group = folders.get(session)?.group;
+    if (group === undefined) return { root: fsRootOf(session), path, present: true };
+    return mockGroupLocate(groupStore.info(group).members, path);
+  };
+
+  /** 파일·대상 하나를 가리키는 경로 (맨 위는 거부) */
+  const fsTarget = (session: SessionId, path: string): MockGroupLocated => {
+    const at = fsAt(session, path);
+    if (at === 'top') throw mockGroupTopRejected();
+    return at;
   };
 
   const editedFiles = new Map<string, { before: string; after: string }>();
@@ -1034,6 +1115,66 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       rows: entry.source.shown.rows.length,
       laneCount: entry.source.shown.laneCount,
     });
+  };
+
+  /** 목 원문 저장 (`fsSaveFile`·`fsNormalizeLineEndings` 공용): 장면 파일을 바꾸고 작업 트리 상태·diff 재료를 맞춘다 */
+  const saveSceneFile = (
+    fs: MockFs,
+    session: SessionId,
+    path: string,
+    expectedRevision: string,
+    text: string,
+  ): FsSaveResult => {
+    const at = fsTarget(session, path);
+    if (!at.present) return { kind: 'conflict' };
+    const root = at.root;
+    const before = fs.read(root, at.path);
+    const result = fs.save(root, at.path, expectedRevision, text);
+    if (result.kind !== 'saved' || before.kind !== 'text') return result;
+    const absolute = `${root}/${at.path}`;
+    editedFiles.set(absolute, {
+      before: editedFiles.get(absolute)?.before ?? before.text,
+      after: text,
+    });
+    /** 저장된 경로의 작업 트리 상태만 바꾸고 index 값은 보존한다. */
+    const changed = (entries: StatusEntry[], relative: string): StatusEntry[] => {
+      const found = entries.find((entry) => entry.path === relative);
+      if (!found)
+        return [...entries, { path: relative, index: 'unmodified', worktree: 'modified' }];
+      return entries.map((entry) =>
+        entry !== found
+          ? entry
+          : { ...entry, worktree: entry.worktree === 'untracked' ? 'untracked' : 'modified' },
+      );
+    };
+    for (const [id, entry] of sessions) {
+      if (!entry.data || !absolute.startsWith(`${entry.path}/`)) continue;
+      const relative = absolute.slice(entry.path.length + 1);
+      entry.data.repoState = mockStatusWith(
+        entry.data.repoState,
+        changed(entry.data.repoState.status.entries, relative),
+      );
+      entry.emit({
+        type: 'statusChanged',
+        session: id,
+        status: entry.data.repoState.status,
+        op: entry.data.repoState.op ?? null,
+      });
+    }
+    for (const [id, folder] of folders) {
+      for (const repo of folder.data.openFolder) {
+        if (!absolute.startsWith(`${repo.path}/`)) continue;
+        const relative = absolute.slice(repo.path.length + 1);
+        setMockFolderEntries(
+          folder.data,
+          repo.path,
+          changed(mockFolderEntries(folder.data, repo.path), relative),
+          false,
+        );
+        folder.emit({ type: 'folderChanged', session: id, refs: false, repo: repo.path });
+      }
+    }
+    return result;
   };
 
   /** 장면이 채우는 메서드. 아래에서 널 스텁 위에 덮어쓴다 (장면이 없으면 비어 있다) */
@@ -1664,6 +1805,63 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           });
           return { session, path, repos: data.openFolder };
         },
+        // 가상 그룹 (MR-13): 정의는 목 저장소, 연 세션은 폴더 장면 데이터에서 멤버 저장소만 남긴 폴더 세션이다
+        groupsList: async () => groupStore.list(),
+        groupCheckPaths: async (group, paths) => groupStore.check(group, paths),
+        groupCreate: async (name, paths) => groupStore.create(name, paths),
+        // 열린 그룹은 코어처럼 그 자리에서 반영한다: 모습(이름·멤버)이 바뀌었으면 세션의 저장소 목록을 다시 만들고
+        // `folderRescanned` → `groupChanged` 를 보낸다 (고정만 바꾸면 조용하다)
+        async groupUpdate(id, update) {
+          const before = JSON.stringify(groupStore.info(id));
+          const updated = groupStore.update(id, update);
+          const open = groupSessionOf(id);
+          const info = groupStore.info(id);
+          if (open !== null && scene.folder && JSON.stringify(info) !== before) {
+            const folder = folderOf(open);
+            folder.data = mockGroupFolderData(scene.folder, info);
+            folder.timeline = null;
+            folder.allHistory = null;
+            folder.emit({ type: 'folderRescanned', session: open, repos: folder.data.openFolder });
+            folder.emit({ type: 'groupChanged', session: open, group: info });
+          }
+          return updated;
+        },
+        groupDelete: async (id) => groupStore.remove(id, groupSessionOf(id) !== null),
+        async openGroup(id, onEvent) {
+          countMockCall('openGroup');
+          const folder = scene.folder;
+          if (!folder) {
+            throw new IpcClientError({
+              kind: 'internal',
+              message: pick('그룹을 열 수 없습니다', 'Cannot open the group'),
+            });
+          }
+          const info = groupStore.info(id);
+          const open = groupSessionOf(id);
+          if (open !== null) {
+            return {
+              session: open,
+              path: mockGroupKey(id),
+              repos: folderOf(open).data.openFolder,
+              group: info,
+            };
+          }
+          const data = mockGroupFolderData(folder, info);
+          const session = nextId++;
+          folders.set(session, {
+            data,
+            emit: onEvent,
+            query: TIMELINE_QUERY,
+            scope: [],
+            generation: 0,
+            timeline: null,
+            allHistory: null,
+            timelineTimer: null,
+            group: id,
+          });
+          groupStore.touch(id, MOCK_GROUP_OPENED_AT);
+          return { session, path: data.path, repos: data.openFolder, group: info };
+        },
         async closeFolder(session) {
           const timer = folders.get(session)?.timelineTimer;
           if (timer) {
@@ -1729,7 +1927,16 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         },
         folderSummaries: async (session, repos) =>
           onlyRepos(folderOf(session).data.folderSummaries, repos),
-        folderRescan: async (session) => folderOf(session).data.openFolder,
+        // 그룹 세션의 재스캔은 코어처럼 목록(`folderRescanned`) 뒤에 멤버 상태(`groupChanged`)를 알린다
+        async folderRescan(session) {
+          const folder = folderOf(session);
+          if (folder.group !== undefined) {
+            const repos = folder.data.openFolder;
+            folder.emit({ type: 'folderRescanned', session, repos });
+            folder.emit({ type: 'groupChanged', session, group: groupStore.info(folder.group) });
+          }
+          return folder.data.openFolder;
+        },
         folderChanges: async (session, repos) =>
           onlyRepos(folderOf(session).data.folderChanges, repos),
         // 브랜치 목록은 타임라인을 만들지 않고 답한다
@@ -1895,131 +2102,206 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           reloadTimeline(session);
         },
 
-        ...createMockFileOperations(scene.fs, fsRootOf, (items) => {
-          for (const [id, entry] of sessions) {
-            if (!entry.data) continue;
-            let entries = [...entry.data.repoState.status.entries];
-            for (const item of items) {
-              if (item.status !== 'committed' || item.directory) continue;
-              for (const absolute of [item.source, item.destination]) {
-                if (!absolute?.startsWith(`${entry.path}/`)) continue;
-                const relative = absolute.slice(entry.path.length + 1);
-                const exists = scene.fs.kind(entry.path, relative) !== null;
-                const found = entries.find((e) => e.path === relative);
-                entries = entries.filter((e) => e.path !== relative);
-                if (exists)
-                  entries.push({
-                    path: relative,
-                    index: found?.index ?? 'unmodified',
-                    worktree: found ? 'modified' : 'untracked',
-                  });
-                else if (found?.worktree !== 'untracked')
-                  entries.push({
-                    path: relative,
-                    index: found?.index ?? 'unmodified',
-                    worktree: 'deleted',
-                  });
+        ...createMockFileOperations(
+          scene.fs,
+          fsRootOf,
+          (items) => {
+            for (const [id, entry] of sessions) {
+              if (!entry.data) continue;
+              let entries = [...entry.data.repoState.status.entries];
+              for (const item of items) {
+                if (item.status !== 'committed' || item.directory) continue;
+                for (const absolute of [item.source, item.destination]) {
+                  if (!absolute?.startsWith(`${entry.path}/`)) continue;
+                  const relative = absolute.slice(entry.path.length + 1);
+                  const exists = scene.fs.kind(entry.path, relative) !== null;
+                  const found = entries.find((e) => e.path === relative);
+                  entries = entries.filter((e) => e.path !== relative);
+                  if (exists)
+                    entries.push({
+                      path: relative,
+                      index: found?.index ?? 'unmodified',
+                      worktree: found ? 'modified' : 'untracked',
+                    });
+                  else if (found?.worktree !== 'untracked')
+                    entries.push({
+                      path: relative,
+                      index: found?.index ?? 'unmodified',
+                      worktree: 'deleted',
+                    });
+                }
               }
+              entry.data.repoState = mockStatusWith(entry.data.repoState, entries);
+              entry.emit({
+                type: 'statusChanged',
+                session: id,
+                status: entry.data.repoState.status,
+                op: entry.data.repoState.op ?? null,
+              });
             }
-            entry.data.repoState = mockStatusWith(entry.data.repoState, entries);
-            entry.emit({
-              type: 'statusChanged',
-              session: id,
-              status: entry.data.repoState.status,
-              op: entry.data.repoState.op ?? null,
-            });
-          }
-          for (const [id, folder] of folders)
-            folder.emit({ type: 'folderChanged', session: id, refs: false, repo: null });
-        }),
-        // 파일 트리·파일 보기 (W10): 폴더·저장소 세션 모두. 거부는 코어처럼 internal 오류
+            for (const [id, folder] of folders)
+              folder.emit({ type: 'folderChanged', session: id, refs: false, repo: null });
+          },
+          // 그룹은 `별칭/…` 를 멤버 루트로 나누고 맨 위는 거부한다
+          (session, path) => fsTarget(session, path),
+        ),
+        // 파일 트리·파일 보기 (W10): 폴더·저장소 세션 모두. 거부는 코어처럼 internal 오류. 그룹은 멤버마다 훑어 `별칭/…`
         async workspaceSearch(session, _request, query) {
+          const group = folders.get(session)?.group;
+          if (group !== undefined) {
+            return mockGroupSearch(scene.fs, groupStore.info(group).members, query);
+          }
           const root = fsRootOf(session);
           const result = mockWorkspaceSearch(scene.fs, root, query);
-          for (const hit of result.hits) {
-            const absolute = `${root}/${hit.path}`;
-            const repo = scene.folder?.openFolder
-              .filter((r) => absolute.startsWith(`${r.path}/`))
-              .sort((a, b) => b.path.length - a.path.length)[0];
-            hit.repo = repo
-              ? repo.path === root
-                ? ''
-                : repo.path.slice(root.length + 1)
-              : sessions.has(session)
-                ? ''
-                : null;
-          }
+          for (const hit of result.hits) hit.repo = mockRepoOf(session, root, hit.path);
           return result;
         },
+        async workspaceReplacePreview(session, _request, query) {
+          countMockCall('workspaceReplacePreview');
+          // 그룹은 검색처럼 멤버마다 미리보고 경로를 `별칭/…` 로 돌려준다
+          const group = folders.get(session)?.group;
+          if (group !== undefined) {
+            return mockGroupReplacePreview(scene.fs, groupStore.info(group).members, query);
+          }
+          const root = fsRootOf(session);
+          return mockReplacePreview(scene.fs, root, query, (path) =>
+            mockRepoOf(session, root, path),
+          );
+        },
+        /**
+         * 코어처럼 파일마다 revision 을 확인해 같은 저장 경로로 쓰고, 원문은 되돌리기용 목 백업에 둔다. 경로는 세션 공간
+         * 경로다 (그룹은 `별칭/…` — 맨 위·모르는 별칭은 그 파일만 실패)
+         */
+        async workspaceReplaceApply(session, plan) {
+          countMockCall('workspaceReplaceApply');
+          return plan.files.map((choice): ReplaceOutcome => {
+            const { path } = choice;
+            let at: MockGroupLocated;
+            try {
+              at = fsTarget(session, path);
+            } catch (cause) {
+              return { kind: 'failed', path, message: mockErrorMessage(cause) };
+            }
+            const file = scene.fs.readEditable(at.root, at.path);
+            if (file.kind !== 'text' || file.revision !== choice.revision)
+              return { kind: 'skipped', path, reason: 'changed' };
+            const next = mockReplaceText(file.text, plan.pattern, new Set(choice.excluded));
+            if (next.replaced === 0 || next.text === file.text)
+              return { kind: 'skipped', path, reason: 'unchanged' };
+            const saved = saveSceneFile(scene.fs, session, path, choice.revision, next.text);
+            if (saved.kind === 'conflict') return { kind: 'skipped', path, reason: 'changed' };
+            if (saved.kind === 'failed') return { kind: 'failed', path, message: saved.message };
+            const backup = ++replaceBackupSeq;
+            replaceBackups.set(backup, { file: `${at.root}/${at.path}`, text: file.text });
+            return {
+              kind: 'applied',
+              path,
+              replaced: next.replaced,
+              backup,
+              revision: saved.revision,
+            };
+          });
+        },
+        async workspaceReplaceUndo(session, items) {
+          countMockCall('workspaceReplaceUndo');
+          return items.map((item): ReplaceUndoOutcome => {
+            const { path } = item;
+            let at: MockGroupLocated;
+            try {
+              at = fsTarget(session, path);
+            } catch (cause) {
+              return { kind: 'failed', path, message: mockErrorMessage(cause) };
+            }
+            const backup = replaceBackups.get(item.backup);
+            if (!backup || backup.file !== `${at.root}/${at.path}`)
+              return { kind: 'failed', path, message: 'Backup not found' };
+            const saved = saveSceneFile(scene.fs, session, path, item.revision, backup.text);
+            if (saved.kind === 'saved') return { kind: 'restored', path };
+            return saved.kind === 'conflict'
+              ? { kind: 'skipped', path, reason: 'changed' }
+              : { kind: 'failed', path, message: saved.message };
+          });
+        },
+        // 코어처럼 저장소 디렉터리를 루트 기준으로 준다: 폴더는 열린 저장소, 저장소 세션은 루트 자신('')
+        async workspaceFiles(session) {
+          countMockCall('workspaceFiles');
+          const group = folders.get(session)?.group;
+          if (group !== undefined) {
+            return {
+              ...mockGroupFiles(scene.fs, groupStore.info(group).members),
+              cancelled: false,
+            };
+          }
+          const root = fsRootOf(session);
+          const listed = mockWorkspaceFiles(scene.fs, root);
+          const repos = sessions.has(session)
+            ? ['']
+            : (scene.folder?.openFolder ?? [])
+                .filter((r) => r.path === root || r.path.startsWith(`${root}/`))
+                .map((r) => (r.path === root ? '' : r.path.slice(root.length + 1)))
+                .sort();
+          return { ...listed, repos, cancelled: false };
+        },
+        // 그룹 세션은 `별칭/…` 경로다 (코어 `FsSpace::Group`): 맨 위는 별칭만 나열하고 파일로는 거부, 없는 멤버 아래는 "없음"
         async fsListDir(session, dir, limit) {
           countMockCall('fsListDir');
           const g = globalThis as { __mgitMockFsDirs?: string[] };
           g.__mgitMockFsDirs ??= [];
           g.__mgitMockFsDirs.push(dir);
-          return scene.fs.list(fsRootOf(session), dir, limit);
+          const group = folders.get(session)?.group;
+          const at = fsAt(session, dir);
+          if (at === 'top') {
+            return mockGroupTopListing(group ? groupStore.info(group).members : [], limit);
+          }
+          return at.present ? scene.fs.list(at.root, at.path, limit) : { kind: 'missing' };
         },
         async fsReadFile(session, path) {
           countMockCall('fsReadFile');
-          return scene.fs.read(fsRootOf(session), path);
+          const at = fsTarget(session, path);
+          return at.present ? scene.fs.read(at.root, at.path) : { kind: 'missing' };
         },
         async fsReadImage(session, path) {
           countMockCall('fsReadImage');
-          return scene.fs.readImage(fsRootOf(session), path);
+          const at = fsTarget(session, path);
+          return at.present ? scene.fs.readImage(at.root, at.path) : { kind: 'missing' };
         },
         async fsReadEditableFile(session, path) {
           countMockCall('fsReadEditableFile');
-          return scene.fs.readEditable(fsRootOf(session), path);
+          const at = fsTarget(session, path);
+          return at.present ? scene.fs.readEditable(at.root, at.path) : { kind: 'missing' };
+        },
+        /** 주기 검사 표지: 목은 파일 노드의 revision 을 그대로 쓴다 (파일이 바뀌면 바뀐다). 잘못된 경로·맨 위는 null */
+        async fsFileStamps(session, paths) {
+          countMockCall('fsFileStamps');
+          return paths.map((path) => {
+            let at: MockGroupLocated;
+            try {
+              at = fsTarget(session, path);
+            } catch {
+              return null;
+            }
+            if (!at.present) return null;
+            const file = scene.fs.readEditable(at.root, at.path);
+            return file.kind === 'text' ? file.revision : null;
+          });
         },
         async fsSaveFile(session, path, expectedRevision, text) {
           countMockCall('fsSaveFile');
-          const root = fsRootOf(session);
-          const before = scene.fs.read(root, path);
-          const result = scene.fs.save(root, path, expectedRevision, text);
-          if (result.kind !== 'saved' || before.kind !== 'text') return result;
-          const absolute = `${root}/${path}`;
-          editedFiles.set(absolute, {
-            before: editedFiles.get(absolute)?.before ?? before.text,
-            after: text,
-          });
-          /** 저장된 경로의 작업 트리 상태만 바꾸고 index 값은 보존한다. */
-          const changed = (entries: StatusEntry[], relative: string): StatusEntry[] => {
-            const found = entries.find((entry) => entry.path === relative);
-            if (!found)
-              return [...entries, { path: relative, index: 'unmodified', worktree: 'modified' }];
-            return entries.map((entry) =>
-              entry !== found
-                ? entry
-                : { ...entry, worktree: entry.worktree === 'untracked' ? 'untracked' : 'modified' },
-            );
-          };
-          for (const [id, entry] of sessions) {
-            if (!entry.data || !absolute.startsWith(`${entry.path}/`)) continue;
-            const relative = absolute.slice(entry.path.length + 1);
-            entry.data.repoState = mockStatusWith(
-              entry.data.repoState,
-              changed(entry.data.repoState.status.entries, relative),
-            );
-            entry.emit({
-              type: 'statusChanged',
-              session: id,
-              status: entry.data.repoState.status,
-              op: entry.data.repoState.op ?? null,
-            });
-          }
-          for (const [id, folder] of folders) {
-            for (const repo of folder.data.openFolder) {
-              if (!absolute.startsWith(`${repo.path}/`)) continue;
-              const relative = absolute.slice(repo.path.length + 1);
-              setMockFolderEntries(
-                folder.data,
-                repo.path,
-                changed(mockFolderEntries(folder.data, repo.path), relative),
-                false,
-              );
-              folder.emit({ type: 'folderChanged', session: id, refs: false, repo: repo.path });
-            }
-          }
-          return result;
+          return saveSceneFile(scene.fs, session, path, expectedRevision, text);
+        },
+        async fsNormalizeLineEndings(session, path, expectedRevision, lineEnding) {
+          countMockCall('fsNormalizeLineEndings');
+          // 코어처럼 revision 이 맞은 지금 원문을 바꿔 같은 저장 경로로 쓴다
+          const at = fsTarget(session, path);
+          if (!at.present) return { kind: 'conflict' };
+          const current = scene.fs.readEditable(at.root, at.path);
+          if (
+            (current.kind !== 'text' && current.kind !== 'mixedLineEndings') ||
+            current.revision !== expectedRevision
+          )
+            return { kind: 'conflict' };
+          const text = mockNormalizeLineEndings(current.text, lineEnding);
+          return saveSceneFile(scene.fs, session, path, expectedRevision, text);
         },
 
         /**
@@ -2031,6 +2313,10 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
         async folderIntegrationPreview(session, reference, repos) {
           return mockIntegrationPreview(folderOf(session).data, reference, repos);
         },
+        /** 일괄 stash 묶음: 이 목에서 일괄 stash 저장으로 만든 항목만 모은다 (`mock-stash.ts`) */
+        async folderStashBatches(session, repos) {
+          return mockFolderStashBatches(folderOf(session).data, repos);
+        },
         async folderBatch(session, op, repos) {
           countMockCall('folderBatch');
           recordMockWrite({ op, repos: [...repos] });
@@ -2041,6 +2327,8 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           // 이름을 바꾼 branch 는 브랜치 목록·요약에서 새 이름으로 — 아래 folderChanged 로 다시 읽으면 보인다
           applyMockBatchRenames(folder.data, op, result.results);
           applyMockBatchDeletes(folder.data, op, result.results);
+          // 일괄 stash 는 변경 항목을 stash 항목으로 옮기거나 되돌린다 — 아래 folderChanged 로 다시 읽으면 보인다
+          applyMockBatchStashes(folder.data, op, result.results);
           const opId = nextOpId++;
           const total = result.results.length;
           folder.emit({
@@ -2088,11 +2376,23 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           folderIndexWrite('folderStage', session, repo, target),
         folderUnstage: async (session, repo, target) =>
           folderIndexWrite('folderUnstage', session, repo, target),
-        async folderCommit(session, repos, message, stageAll) {
+        async folderCommit(session, repos, message, stageAll, repoMessages) {
           countMockCall('folderCommit');
-          recordMockWrite({ method: 'folderCommit', repos: [...repos], message, stageAll });
+          recordMockWrite({
+            method: 'folderCommit',
+            repos: [...repos],
+            message,
+            stageAll,
+            ...(repoMessages ? { repoMessages: repoMessages.map((m) => ({ ...m })) } : {}),
+          });
           const folder = folderOf(session);
-          const { result, committed } = mockFolderCommit(folder.data, repos, message, stageAll);
+          const { result, committed } = mockFolderCommit(
+            folder.data,
+            repos,
+            message,
+            stageAll,
+            repoMessages,
+          );
           for (const { cwd, command } of mockCommitCommands(result, stageAll)) {
             logCommand(cwd, command);
           }

@@ -352,7 +352,82 @@ describe('툴바의 Fetch·Pull·Push (WS-09)', () => {
     await tick();
     act(() => fireEvent.submit(dialog()?.querySelector('form') as HTMLFormElement));
     await tick();
-    expect(folderBatch).toHaveBeenCalledWith(FOLDER_ID, { kind: 'push' }, [pathOf('api')]);
+    expect(folderBatch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      { kind: 'push', newUpstream: { remotes: [] } },
+      [pathOf('api')],
+    );
+  });
+
+  it('업스트림이 없는 저장소: origin 이면 새 업스트림으로 보이고, origin 이 없으면 원격 칸에서 고른 값을 넘긴다', async () => {
+    // api: origin 없이 원격 둘 (고르지 않음), auth: origin 있음, web: 원격 하나 (미리 고름)
+    const summaries = [
+      { ...summary('api', null), remotes: ['team', 'fork'] },
+      { ...summary('auth', null), remotes: ['origin'] },
+      { ...summary('web', null), remotes: ['upstream'] },
+    ];
+    const { folderBatch } = await mount({ folderSummaries: async () => summaries });
+    const all = S.folder.batch.allRepos(3);
+    const b = S.folder.batch;
+    act(() => fireEvent.click(toolbarButton(S.remote.push, all)));
+    await tick();
+    let open = dialog() as HTMLDialogElement;
+    expect(open.querySelector('p')?.textContent).toContain(b.pushPublishNote);
+    expect(
+      within(open)
+        .getAllByRole<HTMLInputElement>('checkbox')
+        .map((x) => [x.closest('label')?.textContent, x.checked, x.disabled]),
+    ).toEqual([
+      [b.pushChoose('api', 'main'), true, false],
+      [b.pushPublish('auth', 'origin/main'), true, false],
+      [b.pushChoose('web', 'main'), true, false],
+    ]);
+    // 원격 칸: 체크 칸 바로 아래, 하나뿐이면 미리 골라 두고 여럿이면 비워 둔다. 고르지 않으면 건너뛴다는 설명이 붙는다
+    const apiRemote = within(open).getByRole<HTMLSelectElement>('combobox', {
+      name: b.pushRemote('api'),
+    });
+    const webRemote = within(open).getByRole<HTMLSelectElement>('combobox', {
+      name: b.pushRemote('web'),
+    });
+    expect(apiRemote.value).toBe('');
+    expect([...apiRemote.options].map((o) => o.value)).toEqual(['', 'team', 'fork']);
+    expect(webRemote.value).toBe('upstream');
+    expect(
+      document.getElementById(apiRemote.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe(b.pushRemoteNote);
+    act(() => fireEvent.change(apiRemote, { target: { value: 'fork' } }));
+    act(() => fireEvent.submit(open.querySelector('form') as HTMLFormElement));
+    await tick();
+    expect(folderBatch).toHaveBeenLastCalledWith(
+      FOLDER_ID,
+      {
+        kind: 'push',
+        newUpstream: {
+          remotes: [
+            { path: pathOf('api'), remote: 'fork' },
+            { path: pathOf('web'), remote: 'upstream' },
+          ],
+        },
+      },
+      [pathOf('api'), pathOf('auth'), pathOf('web')],
+    );
+
+    // 고르지 않은 저장소도 체크했으면 넘긴다 (코어가 사유와 함께 건너뛴다). 체크를 푼 저장소의 선택은 넘기지 않는다
+    act(() => fireEvent.click(toolbarButton(S.remote.push, all)));
+    await tick();
+    open = dialog() as HTMLDialogElement;
+    act(() =>
+      fireEvent.click(
+        within(open).getByRole('checkbox', { name: b.pushChoose('web', 'main') }) as HTMLElement,
+      ),
+    );
+    act(() => fireEvent.submit(open.querySelector('form') as HTMLFormElement));
+    await tick();
+    expect(folderBatch).toHaveBeenLastCalledWith(
+      FOLDER_ID,
+      { kind: 'push', newUpstream: { remotes: [] } },
+      [pathOf('api'), pathOf('auth')],
+    );
   });
 
   it('Push 체크를 모두 풀면 확인 단추가 꺼지고, 그래도 제출되면 부르지 않는다 (빈 목록이 "전부" 로 가지 않는다)', async () => {
@@ -425,6 +500,82 @@ describe('툴바의 Fetch·Pull·Push (WS-09)', () => {
     act(() => finish(RESULT));
     await tick();
     expect(toolbarButton(S.remote.fetch, all).disabled).toBe(false);
+  });
+
+  it('진행 옆 × 로 일괄 작업을 취소한다: 한 번만 부르고 끝날 때까지 꺼지며, 결과는 취소됨을 건너뜀과 따로 센다', async () => {
+    let finish: (r: BatchResult) => void = () => {};
+    const cancelOperation = vi.fn<IpcClient['cancelOperation']>(async () => true);
+    await mount({
+      folderBatch: vi.fn(
+        () =>
+          new Promise<BatchResult>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+      cancelOperation,
+    });
+    const all = S.folder.batch.allRepos(3);
+    const b = S.folder.batch;
+    // 도는 작업이 없으면 취소 단추가 없다
+    expect(toolbar().queryByRole('button', { name: b.cancel })).toBeNull();
+    act(() => fireEvent.click(toolbarButton(S.remote.fetch, all)));
+    act(() =>
+      getFolderStore(FOLDER_ID)?.getState().applyEvent({
+        type: 'operationStarted',
+        session: FOLDER_ID,
+        opId: 9,
+        kind: 'batch',
+        label: '일괄 fetch',
+      }),
+    );
+    // 개요의 일괄 작업 줄에도 같은 취소가 있다
+    expect(area('editor').getByRole('button', { name: b.cancel })).toBeTruthy();
+    const cancel = toolbar().getByRole<HTMLButtonElement>('button', { name: b.cancel });
+    act(() => fireEvent.click(cancel));
+    await tick();
+    expect(cancelOperation).toHaveBeenCalledWith(9);
+    expect(cancel.disabled).toBe(true);
+    expect(toolbar().getByRole('status').textContent).toContain(b.cancelling);
+    act(() => fireEvent.click(cancel));
+    await tick();
+    expect(cancelOperation).toHaveBeenCalledTimes(1);
+    // 코어의 결과: 끝난 저장소 하나, 실행 중에 멈춘 것 하나, 시작 전에 취소된 것 하나
+    const cancelled: BatchResult = {
+      label: '일괄 fetch',
+      results: [
+        { path: pathOf('api'), name: 'api', ok: true, skipped: null, message: '' },
+        {
+          path: pathOf('auth'),
+          name: 'auth',
+          ok: true,
+          skipped: '실행 중에 취소했습니다 (반영 여부를 확인하세요)',
+          message: '',
+          cancelled: true,
+        },
+        {
+          path: pathOf('web'),
+          name: 'web',
+          ok: true,
+          skipped: '취소됨',
+          message: '',
+          cancelled: true,
+        },
+      ],
+      succeeded: 1,
+      skipped: 0,
+      failed: 0,
+      cancelled: 2,
+    };
+    act(() => finish(cancelled));
+    await tick();
+    expect(toolbar().queryByRole('button', { name: b.cancel })).toBeNull();
+    expect(toolbarButton(S.remote.fetch, all).disabled).toBe(false);
+    const toast = useAppStore.getState().toasts.at(-1);
+    expect(toast?.message?.split('\n')).toEqual([
+      b.withCancelled(b.result(1, 0, 0), 2),
+      'auth: 실행 중에 취소했습니다 (반영 여부를 확인하세요)',
+      'web: 취소됨',
+    ]);
   });
 
   it('브랜치 트리 세로 툴바의 일괄 대상도 같은 집합이다', async () => {

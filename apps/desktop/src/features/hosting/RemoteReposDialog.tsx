@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useDialogs } from '../../components/use-dialogs';
 import { useModal } from '../../components/use-modal';
 import { useAppStore } from '../../store';
+import { batchCloneFlow } from '../home/batch-clone';
 import { cloneFlow } from '../home/repo-flows';
 import styles from './hosting.module.css';
 
@@ -25,6 +26,10 @@ export function RemoteReposDialog() {
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [protocol, setProtocol] = useState<'https' | 'ssh'>('https');
+  // 여러 저장소 복제로 넘길 저장소 (전체 이름). 계정을 바꾸면 비운다
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const cloneRepositories = useAppStore((s) => s.cloneRepositories);
+  const notice = useAppStore((s) => s.notice);
 
   useEffect(() => {
     if (open) {
@@ -57,6 +62,7 @@ export function RemoteReposDialog() {
   useEffect(() => {
     if (open && accountId) {
       setRepos([]);
+      setPicked(new Set());
       void load(1);
     }
   }, [open, accountId]);
@@ -67,13 +73,31 @@ export function RemoteReposDialog() {
   const t = S.hosting;
   const close = () => setDialog(null);
 
+  /** 저장소의 clone URL (고른 프로토콜) */
+  const urlOf = (r: HostedRepo) => (protocol === 'ssh' ? r.sshUrl : r.cloneUrl);
+
   /** 고른 저장소를 clone 흐름으로 */
   const clone = async (r: HostedRepo) => {
-    await cloneFlow(
-      dialogs,
-      { pickDirectory, cloneRepository },
-      protocol === 'ssh' ? r.sshUrl : r.cloneUrl,
-    );
+    await cloneFlow(dialogs, { pickDirectory, cloneRepository }, urlOf(r));
+  };
+
+  /** 저장소 하나를 고르거나 푼다 (여러 저장소 복제 대상) */
+  const togglePick = (fullName: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(fullName)) {
+        next.add(fullName);
+      }
+      return next;
+    });
+
+  /** 고른 저장소들의 URL 로 여러 저장소 복제 흐름을 연다 (목록 순서) */
+  const cloneMany = async () => {
+    const text = repos
+      .filter((r) => picked.has(r.fullName))
+      .map(urlOf)
+      .join('\n');
+    await batchCloneFlow(dialogs, { pickDirectory, cloneRepositories, notice }, { text });
   };
 
   return (
@@ -122,6 +146,9 @@ export function RemoteReposDialog() {
             </select>
           </label>
           <span className={styles.spacer} />
+          <Button disabled={picked.size === 0} onClick={() => void cloneMany()}>
+            {t.cloneSelected(picked.size)}
+          </Button>
           <Button onClick={close}>{t.close}</Button>
         </header>
         {lastError ? <div className={styles.error}>{lastError}</div> : null}
@@ -133,6 +160,12 @@ export function RemoteReposDialog() {
           <ul className={styles.list}>
             {repos.map((r) => (
               <li key={r.fullName} className={styles.item}>
+                <input
+                  type="checkbox"
+                  aria-label={t.pick(r.fullName)}
+                  checked={picked.has(r.fullName)}
+                  onChange={() => togglePick(r.fullName)}
+                />
                 <span className={styles.grow} title={r.description ?? r.fullName}>
                   <span className={styles.mono}>{r.fullName}</span>
                   {r.description ? <span className={styles.muted}> · {r.description}</span> : null}

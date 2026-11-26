@@ -4,6 +4,7 @@ import type {
   AdvancedSearch,
   AppEvent,
   AuthorList,
+  BackupPrune,
   BackupRecord,
   BackupRef,
   BatchOp,
@@ -14,6 +15,7 @@ import type {
   BranchUpdate,
   ChangedFile,
   CheckoutTarget,
+  CloneBatchRequest,
   CloneRequest,
   CommandLogRecord,
   CommandRun,
@@ -41,9 +43,11 @@ import type {
   FsClipboard,
   FsDirListing,
   FsEditableFile,
+  FsEncoding,
   FsExternalInput,
   FsFile,
   FsImage,
+  FsLineEnding,
   FsOperationDecision,
   FsOperationPlan,
   FsOperationProgress,
@@ -56,6 +60,9 @@ import type {
   GraphLayoutPrefs,
   GraphQuery,
   GraphWindow,
+  GroupListItem,
+  GroupPathCheck,
+  GroupUpdate,
   HistoryEntry,
   HostingAccount,
   HostingUrls,
@@ -93,7 +100,14 @@ import type {
   RemoteProject,
   RemoteTag,
   RenameConflict,
+  ReplaceOutcome,
+  ReplacePlan,
+  ReplacePreview,
+  ReplaceQuery,
+  ReplaceUndo,
+  ReplaceUndoOutcome,
   RepoChanges,
+  RepoCommitMessage,
   RepoOpened,
   RepoPage,
   RepoSessionRelease,
@@ -113,6 +127,7 @@ import type {
   SignatureStatus,
   SigningInfo,
   SshKeyInfo,
+  StashBatch,
   StashEntry,
   SubmoduleInfo,
   SubmodulePointerLog,
@@ -126,6 +141,7 @@ import type {
   UndoOutcome,
   UndoState,
   UnresolveMode,
+  WorkspaceFileList,
   WorkspaceSearchQuery,
   WorkspaceSearchResult,
   WorktreeRemoveCheck,
@@ -214,6 +230,12 @@ export interface IpcClient {
   ): Promise<number | null>;
   listBackups(session: SessionId, limit: number): Promise<BackupRecord[]>;
   restoreBackup(session: SessionId, id: number): Promise<void>;
+  /** 고른 폐기 백업을 지운다 (사본·색인, 되돌릴 수 없음). 지운 수 */
+  deleteFileBackups(session: SessionId, ids: number[]): Promise<number>;
+  /** 이 저장소의 폐기 백업 중 `beforeMs`(epoch 밀리초)보다 먼저 만든 것을 지운다. 지운 수 */
+  deleteFileBackupsBefore(session: SessionId, beforeMs: number): Promise<number>;
+  /** 저장소 탭의 하루 한 번 백업 정리 (보관 기간이 지난 백업 ref·폐기 백업). 탭을 연 뒤 기다리지 않고 부른다 */
+  pruneBackupsDaily(session: SessionId): Promise<BackupPrune>;
   verifyStaged(session: SessionId): Promise<MarkerHit[]>;
   /** 새 HEAD 해시를 돌려준다. hook 출력은 `operationOutput` 이벤트 */
   commit(session: SessionId, spec: CommitSpec): Promise<string>;
@@ -397,8 +419,42 @@ export interface IpcClient {
    * 이미 닫힘·안 잡음·승격된 세션은 아무것도 하지 않고 같은 모양으로 답한다 (오류 아님)
    */
   folderReleaseRepoSession(session: SessionId, repoSession: SessionId): Promise<RepoSessionRelease>;
+
+  // 가상 그룹 (MR-13): 흩어진 저장소를 묶어 폴더 탭처럼 연다. 연 뒤에는 폴더 메서드(`folder*`·`fs*`)를 그대로 쓴다
+  /** 그룹 목록: 고정 먼저, 그다음 최근에 연 순. 멤버 상태(`present`·`missing`·`notRepo`)는 부를 때마다 다시 본다 */
+  groupsList(): Promise<GroupListItem[]>;
+  /**
+   * 고른 경로들을 멤버 후보로 판정한다 (저장하지 않음). `group` 을 주면 그 그룹에 더하는 것으로, null 이면 새 그룹으로
+   * 본다. 폴더는 그 아래 저장소들로 펼치고(한 줄 → 여러 줄, `input` 이 같다) 저장소 안의 폴더는 최상위로 고친다.
+   * 받아들일 줄은 `alias`, 거부할 줄은 `issue`(`missing`·`notRepo`·`duplicate`·`nested`)가 있다
+   */
+  groupCheckPaths(group: string | null, paths: readonly string[]): Promise<GroupPathCheck[]>;
+  /** 새 그룹을 만든다. 거부할 경로가 하나라도 있거나 이름이 겹치면(대소문자 무시) 실패한다 */
+  groupCreate(name: string, paths: readonly string[]): Promise<GroupListItem>;
+  /**
+   * 그룹을 고친다. 빠진 항목은 그대로다. `members` 는 바뀐 뒤의 전체 목록(추가·빼기·순서·위치 다시 지정·별칭 바꾸기).
+   * 열린 그룹은 그 자리에서 반영한다(M4): 이름·멤버가 바뀌면 그 세션 채널로 `folderRescanned` → `groupChanged` 가 온다
+   */
+  groupUpdate(id: string, update: GroupUpdate): Promise<GroupListItem>;
+  /** 그룹을 지운다. 열린 그룹은 지우지 못한다. 그 그룹의 폴더 설정(`folder:mgit-group:<id>`)도 지운다 */
+  groupDelete(id: string): Promise<void>;
+  /**
+   * 그룹을 연다. 응답은 `openFolder` 와 같은 모양이고 `path` 가 `mgit-group:<id>`, `group` 에 멤버 상태가 있다. 이벤트는
+   * 폴더와 같고 재스캔·고치기 때 `folderRescanned` 뒤에 `groupChanged` 가 더 온다. 파일 경로는 `별칭/…` 가상 공간이다(맨
+   * 위 `''` 는 별칭만 나열). 검색·⌘P 도 이 경로로 답한다
+   */
+  openGroup(id: string, onEvent: (event: SessionEvent) => void): Promise<FolderOpened>;
+
   scanRepos(root: string): Promise<FoundRepo[]>;
   cloneRepo(request: CloneRequest, onEvent: (event: SessionEvent) => void): Promise<string>;
+  /**
+   * 여러 저장소를 한 상위 폴더 아래에 clone 한다 (동시 clone 수 기본 2). 진행은 세션 0 의 operation 이벤트, 취소는
+   * `cancelOperation`. 이미 있는 폴더는 건너뛰고, 실패·취소한 clone 은 만들던 폴더를 지운다. 결과는 요청 순서다
+   */
+  cloneMany(
+    request: CloneBatchRequest,
+    onEvent: (event: SessionEvent) => void,
+  ): Promise<BatchResult>;
   initRepo(path: string, defaultBranch: string, template: string | null): Promise<string>;
   gitignoreTemplates(): Promise<GitignoreTemplate[]>;
   recentList(): Promise<RecentEntry[]>;
@@ -593,6 +649,16 @@ export interface IpcClient {
     repos: string[],
   ): Promise<IntegrationPreview[]>;
   folderBatch(session: SessionId, op: BatchOp, repos: string[]): Promise<BatchResult>;
+  /**
+   * 일괄 stash 묶음 (최근 묶음부터): 저장소마다 stash 목록에서 묶음 표시(`[mgit-batch:<id>]`)를 모은다. `repos` 가 비면
+   * 전부. 작업 기록과 상관없이 저장소에서 읽으므로 앱을 다시 켜도 꺼낼 묶음을 찾는다
+   */
+  folderStashBatches(session: SessionId, repos: string[]): Promise<StashBatch[]>;
+  /**
+   * 폴더 하위 저장소마다 하루 한 번 백업 정리 (보관 기간이 지난 백업 ref·폐기 백업). 저장소 세션 없이 낮은 동시성으로
+   * 돈다. 첫 요약을 읽은 뒤 기다리지 않고 부른다
+   */
+  folderPruneBackupsDaily(session: SessionId): Promise<BackupPrune>;
   /** 변경이 있는 저장소만 온다. `repos` 를 주면 그 저장소만 읽는다 (PF-02). 없거나 비면 전부 */
   folderChanges(session: SessionId, repos?: readonly string[]): Promise<RepoChanges[]>;
   /**
@@ -616,11 +682,17 @@ export interface IpcClient {
    * 새 경로와 옛 경로(`origPath`)를 함께 넘겨야 둘 다 풀린다
    */
   folderUnstage(session: SessionId, repo: string, target: IndexTarget): Promise<IndexWriteResult>;
+  /**
+   * 일괄 커밋 (MR-08). `repos` 가 비면 전부. `repoMessages` 에 있는 저장소는 그 메시지로, 나머지는 공통 `message` 로
+   * 커밋한다 (비었거나 공백뿐인 저장소별 메시지는 공통 메시지). 대상 중 쓸 메시지가 빈 저장소가 있으면 아무것도
+   * 커밋하지 않고 거부한다. 빠뜨리면 모두 공통 메시지다
+   */
   folderCommit(
     session: SessionId,
     repos: string[],
     message: string,
     stageAll: boolean,
+    repoMessages?: RepoCommitMessage[],
   ): Promise<BatchResult>;
   /** 통합 타임라인 (MR-12). 이벤트는 폴더 세션 id 로 `graph*` 가 온다 */
   folderTimelineOpen(session: SessionId): Promise<TimelineInfo>;
@@ -682,6 +754,37 @@ export interface IpcClient {
     options?: DiffOptions | null,
   ): Promise<DiffDocument>;
 
+  /** 여러 저장소 내용 검색 (⌘⌥F). 요청 식별자로 진행 중 검색을 취소할 수 있다 (`workspaceSearchCancel`) */
+  workspaceSearch(
+    session: SessionId,
+    request: string,
+    query: WorkspaceSearchQuery,
+  ): Promise<WorkspaceSearchResult>;
+  /** 요청 식별자로 진행 중 검색·파일 목록 읽기를 취소한다 */
+  workspaceSearchCancel(session: SessionId, request: string): Promise<void>;
+  /**
+   * 빠른 열기(⌘P)용 파일 목록: 내용 검색과 같은 후보(무시 규칙을 따르되 추적 파일은 포함, `.git`·링크 제외,
+   * 최대 10만 개)를 정렬해 돌려주고 저장소 디렉터리(루트 기준, 루트 자신은 '')를 함께 준다. 취소는
+   * `workspaceSearchCancel` 로 같은 요청 식별자를 보낸다
+   */
+  workspaceFiles(session: SessionId, request: string): Promise<WorkspaceFileList>;
+  /**
+   * 여러 파일 바꾸기 미리보기: 내용 검색과 같은 후보·같은 정규식 엔진으로 파일마다 바뀌는 줄을 모은다. 저장하지 않은
+   * 초안이 있는 파일·줄 끝이 섞인 파일·저장소 밖 파일은 사유와 함께 뺀다. 취소는 `workspaceSearchCancel`
+   */
+  workspaceReplacePreview(
+    session: SessionId,
+    request: string,
+    query: ReplaceQuery,
+  ): Promise<ReplacePreview>;
+  /**
+   * 미리보기에서 고른 파일을 바꾼다. 파일마다 revision 이 미리보기와 같을 때만 쓰고(아니면 `changed` 로 건너뜀), 쓰기
+   * 직전 원문을 폐기 백업(이유 `replace`)으로 남긴다
+   */
+  workspaceReplaceApply(session: SessionId, plan: ReplacePlan): Promise<ReplaceOutcome[]>;
+  /** 바꾼 파일을 백업 사본으로 되돌린다. 바꾼 뒤 또 바뀐 파일은 덮어쓰지 않고 건너뛴다 */
+  workspaceReplaceUndo(session: SessionId, items: ReplaceUndo[]): Promise<ReplaceUndoOutcome[]>;
+
   // 파일 트리·파일 보기 (W10, FS-01~10). 루트는 세션이 정한다 — 저장소 세션은 작업 트리, 폴더 세션은
   // 폴더 경로. 경로는 그 루트 기준 상대 경로이고 `/` 로 잇는다. 루트 밖·`..`·`.`·절대 경로·`.git`(대소문자
   // 무시)·경로 중간의 심볼릭 링크는 `internal` 오류로 거부한다. 없음·권한 없음은 오류가 아니라 결과의 `kind`
@@ -691,12 +794,6 @@ export interface IpcClient {
    * 자르고 `truncated`·`total` — "… N개 더 보기" 는 `limit` 을 올려 다시 부른다. 심볼릭 링크는 종류만 오고
    * 나열하면 거부된다. 결과: `listed` / `missing`(지워졌거나 디렉터리가 아님) / `denied`(권한 없음)
    */
-  workspaceSearch(
-    session: SessionId,
-    request: string,
-    query: WorkspaceSearchQuery,
-  ): Promise<WorkspaceSearchResult>;
-  workspaceSearchCancel(session: SessionId, request: string): Promise<void>;
   fsListDir(session: SessionId, dir: string, limit?: number | null): Promise<FsDirListing>;
   /**
    * 파일 하나를 텍스트로 읽는다 (상한 1 MiB). 결과: `text`(UTF-8, BOM·CRLF 그대로) / `binary`(앞 8,000
@@ -706,14 +803,42 @@ export interface IpcClient {
   fsReadFile(session: SessionId, path: string): Promise<FsFile>;
   /** 세션 루트의 5 MiB 이하 이미지를 data URL로 읽는다. */
   fsReadImage(session: SessionId, path: string): Promise<FsImage>;
-  /** 원문·파일 식별 키·revision을 조회한다. */
-  fsReadEditableFile(session: SessionId, path: string): Promise<FsEditableFile>;
-  /** 현재 revision과 같을 때만 작업 파일을 원자 교체한다. */
+  /**
+   * 원문·파일 식별 키·revision을 조회한다. `encoding` 을 주면 그 인코딩으로만 읽고(사용자가 고른 인코딩 — 읽을 수 없는
+   * 바이트가 있거나 다시 쓰면 바이트가 달라지면 `lossy`), 없으면 BOM·UTF-8·후보(EUC-KR·Shift_JIS) 차례로 정한다 (R2)
+   */
+  fsReadEditableFile(
+    session: SessionId,
+    path: string,
+    encoding?: FsEncoding | null,
+  ): Promise<FsEditableFile>;
+  /**
+   * 열린 편집기의 주기 검사용 표지: 원문을 읽지 않고 메타데이터만 묶은 값 (경로마다 하나, 일반 파일이 아니면 null).
+   * 표지가 지난번과 같으면 다시 읽지 않는다 (N6)
+   */
+  fsFileStamps(session: SessionId, paths: string[]): Promise<(string | null)[]>;
+  /**
+   * 현재 revision과 같을 때만 작업 파일을 원자 교체한다. 원문은 `encoding`(없으면 UTF-8)으로 다시 써서 저장하고, 그
+   * 인코딩으로 쓸 수 없는 글자가 있으면 쓰지 않고 `failed` 다 (R2)
+   */
   fsSaveFile(
     session: SessionId,
     path: string,
     expectedRevision: string,
     text: string,
+    encoding?: FsEncoding | null,
+  ): Promise<FsSaveResult>;
+  /**
+   * 줄 끝이 섞인 파일(`mixedLineEndings`)을 `lineEnding` 하나로 통일해 저장한다. 코어가 지금 원문을 다시 읽어 줄 끝만
+   * 바꾸고(BOM·마지막 줄 끝 유무 보존, 단독 CR 도 바꿈) `fsSaveFile` 과 같은 revision 검사·원자 교체를 거친다. 원문은
+   * `encoding`(없으면 UTF-8)으로 읽고 쓴다
+   */
+  fsNormalizeLineEndings(
+    session: SessionId,
+    path: string,
+    expectedRevision: string,
+    lineEnding: FsLineEnding,
+    encoding?: FsEncoding | null,
   ): Promise<FsSaveResult>;
 
   /** Project 파일 작업을 준비하고 충돌 목록을 반환한다. */
@@ -939,6 +1064,10 @@ export function createTauriClient(): IpcClient {
       ),
     listBackups: (session, limit) => call(() => commands.listBackups(session, limit)),
     restoreBackup: (session, id) => voidCall(() => commands.restoreBackup(session, id)),
+    deleteFileBackups: (session, ids) => call(() => commands.deleteFileBackups(session, ids)),
+    deleteFileBackupsBefore: (session, beforeMs) =>
+      call(() => commands.deleteFileBackupsBefore(session, beforeMs)),
+    pruneBackupsDaily: (session) => call(() => commands.pruneBackupsDaily(session)),
     verifyStaged: (session) => call(() => commands.verifyStaged(session)),
     commit: (session, spec) => call(() => commands.commit(session, spec)),
     lastCommitMessage: (session) => call(() => commands.lastCommitMessage(session)),
@@ -1029,6 +1158,24 @@ export function createTauriClient(): IpcClient {
       call(() => commands.folderSummaries(session, [...(repos ?? [])])),
     folderRescan: (session) => call(() => commands.folderRescan(session)),
     closeFolder: (session) => voidCall(() => commands.closeFolder(session)),
+    groupsList: () => call(() => commands.groupsList()),
+    groupCheckPaths: (group, paths) =>
+      call(() => commands.groupCheckPaths(group ?? null, [...paths])),
+    groupCreate: (name, paths) => call(() => commands.groupCreate(name, [...paths])),
+    groupUpdate: (id, update) =>
+      call(() =>
+        commands.groupUpdate(id, {
+          name: update.name ?? null,
+          members: update.members ?? null,
+          pinned: update.pinned ?? null,
+        }),
+      ),
+    groupDelete: (id) => voidCall(() => commands.groupDelete(id)),
+    openGroup: (id, onEvent) => {
+      const channel = new Channel<SessionEvent>();
+      channel.onmessage = onEvent;
+      return call(() => commands.openGroup(id, channel));
+    },
     folderOpenRepoSession: (session, repo, onEvent) => {
       const channel = new Channel<SessionEvent>();
       channel.onmessage = onEvent;
@@ -1041,6 +1188,20 @@ export function createTauriClient(): IpcClient {
       const channel = new Channel<SessionEvent>();
       channel.onmessage = onEvent;
       return call(() => commands.cloneRepo(request, channel));
+    },
+    cloneMany: (request, onEvent) => {
+      const channel = new Channel<SessionEvent>();
+      channel.onmessage = onEvent;
+      return call(() =>
+        commands.cloneMany(
+          {
+            ...request,
+            depth: request.depth ?? null,
+            concurrency: request.concurrency ?? null,
+          },
+          channel,
+        ),
+      );
     },
     initRepo: (path, defaultBranch, template) =>
       call(() => commands.initRepo(path, defaultBranch, template)),
@@ -1174,6 +1335,8 @@ export function createTauriClient(): IpcClient {
     folderIntegrationPreview: (session, reference, repos) =>
       call(() => commands.folderIntegrationPreview(session, reference, repos)),
     folderBatch: (session, op, repos) => call(() => commands.folderBatch(session, op, repos)),
+    folderStashBatches: (session, repos) => call(() => commands.folderStashBatches(session, repos)),
+    folderPruneBackupsDaily: (session) => call(() => commands.folderPruneBackupsDaily(session)),
     folderChanges: (session, repos) =>
       call(() => commands.folderChanges(session, [...(repos ?? [])])),
     folderBranches: (session, repos) =>
@@ -1181,8 +1344,8 @@ export function createTauriClient(): IpcClient {
     folderStage: (session, repo, target) => call(() => commands.folderStage(session, repo, target)),
     folderUnstage: (session, repo, target) =>
       call(() => commands.folderUnstage(session, repo, target)),
-    folderCommit: (session, repos, message, stageAll) =>
-      call(() => commands.folderCommit(session, repos, message, stageAll)),
+    folderCommit: (session, repos, message, stageAll, repoMessages) =>
+      call(() => commands.folderCommit(session, repos, message, stageAll, repoMessages ?? null)),
     folderTimelineOpen: (session) => call(() => commands.folderTimelineOpen(session)),
     folderTimelineInfo: (session) => call(() => commands.folderTimelineInfo(session)),
     folderTimelineReload: (session) => voidCall(() => commands.folderTimelineReload(session)),
@@ -1228,12 +1391,31 @@ export function createTauriClient(): IpcClient {
     workspaceSearch: (session, request, query) =>
       call(() => commands.workspaceSearch(session, request, query)),
     workspaceSearchCancel: (session, request) => commands.workspaceSearchCancel(session, request),
+    workspaceFiles: (session, request) => call(() => commands.workspaceFiles(session, request)),
+    workspaceReplacePreview: (session, request, query) =>
+      call(() => commands.workspaceReplacePreview(session, request, query)),
+    workspaceReplaceApply: (session, plan) =>
+      call(() => commands.workspaceReplaceApply(session, plan)),
+    workspaceReplaceUndo: (session, items) =>
+      call(() => commands.workspaceReplaceUndo(session, items)),
     fsListDir: (session, dir, limit) => call(() => commands.fsListDir(session, dir, limit ?? null)),
     fsReadFile: (session, path) => call(() => commands.fsReadFile(session, path)),
     fsReadImage: (session, path) => call(() => commands.fsReadImage(session, path)),
-    fsReadEditableFile: (session, path) => call(() => commands.fsReadEditableFile(session, path)),
-    fsSaveFile: (session, path, expectedRevision, text) =>
-      call(() => commands.fsSaveFile(session, path, expectedRevision, text)),
+    fsReadEditableFile: (session, path, encoding) =>
+      call(() => commands.fsReadEditableFile(session, path, encoding ?? null)),
+    fsFileStamps: (session, paths) => call(() => commands.fsFileStamps(session, paths)),
+    fsSaveFile: (session, path, expectedRevision, text, encoding) =>
+      call(() => commands.fsSaveFile(session, path, expectedRevision, text, encoding ?? null)),
+    fsNormalizeLineEndings: (session, path, expectedRevision, lineEnding, encoding) =>
+      call(() =>
+        commands.fsNormalizeLineEndings(
+          session,
+          path,
+          expectedRevision,
+          lineEnding,
+          encoding ?? null,
+        ),
+      ),
     submodulePointerLog: (session, path, old, newOid) =>
       call(() => commands.submodulePointerLog(session, path, old, newOid)),
     submoduleAdd: (session, url, path, branch) =>

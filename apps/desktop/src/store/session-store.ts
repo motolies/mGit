@@ -91,6 +91,7 @@ import { createFileTree, type FileTreeStore } from './file-tree';
 import type { TimelineAuthors } from './folder-store';
 import { type Notice, notifyHub } from './notify';
 import { readPref, writePref } from './prefs';
+import { dirSpace, type RootSpace } from './root-space';
 import {
   buildSquashRangePlan,
   checkSquashRange,
@@ -130,8 +131,10 @@ const OUTPUT_CAPACITY = 2000;
 const SEARCH_LIMIT = 5000;
 /** 파일 히스토리 상한 */
 const HISTORY_LIMIT = 500;
-/** 폐기 백업 목록 상한 */
-const FILE_BACKUP_LIMIT = 200;
+/** 폐기 백업 목록 상한 (대화상자가 "오래된 것 삭제" 수를 셀 때 목록이 잘렸는지 본다) */
+export const FILE_BACKUP_LIMIT = 200;
+/** 백업 보관 일수. 코어 `CoreConfig::backup_keep_days` 기본값과 같다 (자동 정리 안내·오래된 것 삭제의 처음 값) */
+export const BACKUP_KEEP_DAYS = 30;
 /** 이보다 오래 걸린 작업은 끝났을 때 알린다 (UX-09) */
 const LONG_OP_MS = 1500;
 /** 사용자 설정 키 */
@@ -417,6 +420,8 @@ export interface RewordEditorState {
 export interface SessionState {
   id: SessionId;
   path: string;
+  /** 파일 경로 공간 (MR-13): 저장소 세션은 작업 트리 디렉터리 하나다 (`dirSpace(path)`) */
+  space: RootSpace;
   name: string;
   /**
    * 세션 프로필 (W13): `full` = 저장소 탭의 세션, `light` = 폴더 탭이 연 숨은 세션(그래프를 읽지 않고 생성 때 읽기도
@@ -961,6 +966,11 @@ export interface SessionState {
   openFileBackups(): Promise<void>;
   closeFileBackups(): void;
   restoreFileBackup(id: number): Promise<boolean>;
+  /**
+   * 폐기 백업을 지운다 (#26, 되돌릴 수 없음 — 확인은 화면이 받는다): 고른 것(`ids`) 또는 `beforeMs`(epoch 밀리초)보다
+   * 먼저 만든 것 전부. 지운 뒤 목록을 다시 읽고 지운 수를 알린다. 지웠는지 돌려준다
+   */
+  deleteFileBackups(target: { ids: readonly number[] } | { beforeMs: number }): Promise<boolean>;
   backupRestore(backup: string, newBranch: string | null): Promise<void>;
   backupDelete(backup: string): Promise<void>;
   setReflogOpen(open: boolean): void;
@@ -1703,6 +1713,7 @@ export function createSessionStore(
     return {
       id,
       path: opened.info.workTree,
+      space: dirSpace(opened.info.workTree),
       profile,
       fileTree,
       reloadFiles,
@@ -3547,9 +3558,12 @@ export function createSessionStore(
       async submoduleBatch(op, paths) {
         const r = await run(() => client.submoduleBatch(id, op, paths));
         if (r) {
+          // 취소된 서브모듈은 건너뜀·실패와 따로 센다 (폴더 일괄과 같은 요약)
+          const counts = S.folder.batch.result(r.succeeded, r.skipped, r.failed);
+          const cancelled = r.cancelled ?? 0;
           notifyHub.notify({
-            kind: r.failed > 0 ? 'error' : 'success',
-            title: `${r.label}: ${S.folder.batch.result(r.succeeded, r.skipped, r.failed)}`,
+            kind: r.failed > 0 ? 'error' : cancelled > 0 ? 'info' : 'success',
+            title: `${r.label}: ${cancelled > 0 ? S.folder.batch.withCancelled(counts, cancelled) : counts}`,
           });
         }
         await get().loadSubmodules();
@@ -4079,9 +4093,15 @@ export function createSessionStore(
 
       async pushSubmodulesThenPush(spec) {
         const r = await get().submoduleBatch({ kind: 'push' }, []);
-        if (r && r.failed === 0) {
-          await get().push(spec, { skipSubmoduleCheck: true });
+        if (!r || r.failed > 0) {
+          return;
         }
+        // 사용자가 서브모듈 push 를 취소했으면 상위 저장소 push 로 이어 가지 않는다 (취소는 실패와 따로 센다)
+        if ((r.cancelled ?? 0) > 0) {
+          notifyHub.notify({ kind: 'info', title: S.dialog.submoduleUnpushedCancelled });
+          return;
+        }
+        await get().push(spec, { skipSubmoduleCheck: true });
       },
 
       async submoduleUpdate(recursive) {
@@ -4238,6 +4258,23 @@ export function createSessionStore(
         }
         const path = get().fileBackups?.find((b) => b.id === backupId)?.relPath ?? '';
         notifyHub.notify({ kind: 'success', title: S.safety.fileBackupRestored(path) });
+        return true;
+      },
+
+      async deleteFileBackups(target) {
+        const deleted = await run(() =>
+          'ids' in target
+            ? client.deleteFileBackups(id, [...target.ids])
+            : client.deleteFileBackupsBefore(id, target.beforeMs),
+        );
+        if (deleted === undefined) {
+          return false;
+        }
+        notifyHub.notify({ kind: 'success', title: S.safety.fileBackupsDeleted(deleted) });
+        // 대화상자가 열려 있으면 남은 목록으로 바꾼다
+        if (get().fileBackups !== null) {
+          await get().openFileBackups();
+        }
         return true;
       },
 

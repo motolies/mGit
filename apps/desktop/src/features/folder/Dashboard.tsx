@@ -1,14 +1,24 @@
-import { Button, formatTime, S } from '@mgit/ui';
+import { Button, formatNumber, formatTime, S } from '@mgit/ui';
 import { type KeyboardEvent, useMemo, useState } from 'react';
 import { hasModifier, rovingIndex } from '../../components/roving';
 import { type FolderFilter, useAppStore, useFolder, visibleSummaries } from '../../store';
 import type { FolderSort } from '../../store/folder-store';
+import { GroupMissingMembers } from '../group/GroupMissingMembers';
 import { opBadgeText } from '../project/project-rows';
 import styles from './Dashboard.module.css';
 import { FolderBatchBar } from './FolderBatchBar';
 import { useSelectedRepos } from './use-selected-repos';
 
-const FILTERS: FolderFilter[] = ['all', 'changed', 'behind', 'inProgress'];
+/** 대시보드 필터 단추의 순서 (하나만 고른다) */
+const FILTERS: FolderFilter[] = [
+  'all',
+  'changed',
+  'behind',
+  'ahead',
+  'noUpstream',
+  'stashed',
+  'inProgress',
+];
 
 /**
  * 폴더 워크스페이스의 개요 문서 (ED-07): 하위 저장소 상태 표(MR-02)와 일괄 작업.
@@ -32,6 +42,7 @@ export function Dashboard() {
     toggleSelect: st.toggleSelect,
     setSelected: st.setSelected,
     setSettingsOpen: st.setSettingsOpen,
+    group: st.group,
   }));
   const selected = useSelectedRepos();
   const openRepositoryAt = useAppStore((s) => s.openRepositoryAt);
@@ -105,6 +116,7 @@ export function Dashboard() {
         <Button onClick={() => f.setSettingsOpen(true)}>{S.folder.settings.open}</Button>
       </div>
       {f.error ? <div className={styles.error}>{f.error}</div> : null}
+      {f.group ? <GroupMissingMembers group={f.group} /> : null}
       <FolderBatchBar />
       {rows.length === 0 ? (
         <div className={styles.empty}>{S.folder.empty}</div>
@@ -142,6 +154,16 @@ export function Dashboard() {
                 <th aria-sort={sortOf('behind')}>
                   <button type="button" className={styles.th} onClick={() => f.setSort('behind')}>
                     {S.folder.columns.sync}
+                  </button>
+                </th>
+                <th aria-sort={sortOf('stash')}>
+                  <button
+                    type="button"
+                    className={styles.th}
+                    title={S.folder.columns.stashTip}
+                    onClick={() => f.setSort('stash')}
+                  >
+                    {S.folder.columns.stash}
                   </button>
                 </th>
                 <th>{S.folder.columns.op}</th>
@@ -187,6 +209,9 @@ export function Dashboard() {
                     {r.ahead === null || r.ahead === undefined
                       ? ''
                       : `${S.status.ahead(r.ahead)} ${S.status.behind(r.behind ?? 0)}`}
+                  </td>
+                  <td className={styles.num}>
+                    {(r.stashCount ?? 0) > 0 ? formatNumber(r.stashCount ?? 0) : ''}
                   </td>
                   <td className={styles.op}>{opBadgeText(r.op)}</td>
                   <td className={styles.muted}>

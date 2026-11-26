@@ -1,0 +1,48 @@
+/* 편집기 공간 (R3): 그룹 하나 또는 경계로 나눈 두 그룹 */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.group {
+  height: 100%;
+  width: 100%;
+}
+
+/* 그룹 하나 (탭 막대 + 문서) */
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 분할했을 때 지금 그룹은 탭 막대 위에 강조색 선이 붙는다 */
+.frame[data-split="true"] {
+  box-shadow: inset 0 2px 0 transparent;
+}
+
+.frame[data-editor-current="true"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* 두 그룹 사이 경계: 이음매 한 줄. 끄는 범위는 라이브러리가 좌우로 넓혀 잡는다 */
+.separator {
+  width: 1px;
+  background: var(--panel-seam);
+  outline: none;
+}
+
+.separator[data-separator="hover"],
+.separator[data-separator="active"],
+.separator:focus-visible {
+  background: var(--accent);
+}
+
+.separator:focus-visible {
+  box-shadow: 0 0 0 1px var(--accent);
+}

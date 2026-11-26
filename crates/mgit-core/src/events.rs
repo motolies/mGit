@@ -74,7 +74,7 @@ pub enum CoreEvent {
         session: SessionId,
         refs: RepoRefs,
     },
-    /// 자동 fetch 로 원격 추적 ref 가 바뀌었다 (UX-09). 이름은 `origin/main` 꼴
+    /// 자동 fetch 로 원격 추적 ref 가 바뀌었다 (UX-09). 이름은 `origin/main` 꼴. 심볼릭 `<원격>/HEAD` 는 싣지 않는다
     AutoFetched {
         session: SessionId,
         refs: Vec<String>,
@@ -145,6 +145,12 @@ pub enum CoreEvent {
         repo: std::path::PathBuf,
         record: CommandLogRecord,
     },
+    /// 그룹 세션의 멤버 상태가 바뀌었다 (MR-13, 재스캔 = 멤버 재확인). 같은 재스캔의 `FolderRescanned` 바로 뒤에 온다.
+    /// 프런트는 이것으로 파일 경로 공간(별칭 → 멤버 루트)과 누락 멤버 표시를 바꾼다
+    GroupChanged {
+        session: SessionId,
+        group: crate::group::GroupView,
+    },
 }
 
 impl CoreEvent {
@@ -170,7 +176,8 @@ impl CoreEvent {
             | CoreEvent::FolderAutoFetched { session, .. }
             | CoreEvent::FolderRescanned { session, .. }
             | CoreEvent::CommandLogged { session, .. }
-            | CoreEvent::FolderCommandLogged { session, .. } => *session,
+            | CoreEvent::FolderCommandLogged { session, .. }
+            | CoreEvent::GroupChanged { session, .. } => *session,
         }
     }
 }

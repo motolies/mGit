@@ -1,6 +1,11 @@
 import { redo, undo } from '@codemirror/commands';
 import type { EditorState, Transaction } from '@codemirror/state';
-import { createNullClient, type FsEditableFile, type FsSaveResult } from '@mgit/ipc';
+import {
+  createNullClient,
+  type FsEditableFile,
+  type FsEncoding,
+  type FsSaveResult,
+} from '@mgit/ipc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type EditorFile, FileEditorStore, fileText } from '../store/file-editor-store';
 
@@ -320,5 +325,86 @@ describe('파일 구조 변경과 편집 상태', () => {
     expect(doc.fileKey).toBe('moved-file');
     expect(undo(commandTarget(f.store, doc))).toBe(true);
     expect(doc.state.doc.toString()).toBe('start\n');
+  });
+});
+
+describe('파일 인코딩 (R2)', () => {
+  /** 인코딩을 고르면 그 인코딩으로 답하는 가짜 디스크 (고르지 않으면 EUC-KR 로 추정) */
+  function encoded() {
+    const store = new FileEditorStore();
+    let revision = 1;
+    const read = vi.fn(
+      async (
+        _session: number,
+        _path: string,
+        encoding?: FsEncoding | null,
+      ): Promise<FsEditableFile> =>
+        encoding === 'shiftJis'
+          ? { kind: 'lossy', text: 'x', size: 4, encoding, guessed: false, malformed: false }
+          : {
+              kind: 'text',
+              text: '한글\r\n',
+              size: 6,
+              fileKey: 'kr',
+              revision: String(revision),
+              bom: false,
+              lineEnding: 'crlf',
+              encoding: encoding ?? 'eucKr',
+              guessed: encoding == null,
+            },
+    );
+    const save = vi.fn(async (): Promise<FsSaveResult> => {
+      revision += 1;
+      return { kind: 'saved', revision: String(revision) };
+    });
+    const client = { ...createNullClient(), fsReadEditableFile: read, fsSaveFile: save };
+    return { store, client, read, save };
+  }
+
+  it('추정한 인코딩을 문서에 담고, 저장은 같은 인코딩으로 보낸다 (UTF-8 은 예전처럼 인자 넷)', async () => {
+    const f = encoded();
+    const doc = (await f.store.open(f.client, 1, 'kr.txt')) as EditorFile;
+    expect(f.read).toHaveBeenCalledWith(1, 'kr.txt');
+    expect([doc.encoding, doc.guessed, doc.readAs]).toEqual(['eucKr', true, null]);
+    edit(f.store, doc, '고침\n');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.save).toHaveBeenCalledWith(1, 'kr.txt', '1', '고침\r\n', 'eucKr');
+
+    const utf8 = fixture();
+    const plain = await utf8.open();
+    expect(plain.encoding).toBe('utf8');
+    edit(utf8.store, plain, 'next\n');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(utf8.save.mock.calls[0]).toHaveLength(4);
+  });
+
+  it('고른 인코딩으로 다시 열고 그 뒤 읽기도 그 인코딩이다. 초안이 있으면 바꾸지 않는다', async () => {
+    const f = encoded();
+    const doc = (await f.store.open(f.client, 1, 'kr.txt')) as EditorFile;
+    edit(f.store, doc, '초안\n');
+    expect(f.store.chooseEncoding(1, 'kr.txt', 'utf16Le')).toBe(false);
+    expect(f.store.encodingChoice(1, 'kr.txt')).toBeNull();
+    await f.store.discard(1);
+
+    expect(f.store.chooseEncoding(1, 'kr.txt', 'utf16Le')).toBe(true);
+    expect(f.store.get(1, 'kr.txt')).toBeUndefined();
+    const again = (await f.store.open(f.client, 1, 'kr.txt')) as EditorFile;
+    expect(f.read).toHaveBeenLastCalledWith(1, 'kr.txt', 'utf16Le');
+    expect([again.encoding, again.guessed, again.readAs]).toEqual(['utf16Le', false, 'utf16Le']);
+    await f.store.refresh(again);
+    expect(f.read).toHaveBeenLastCalledWith(1, 'kr.txt', 'utf16Le');
+
+    // 다시 쓸 수 없는 인코딩은 편집기 문서가 아니라 읽기 전용 결과다
+    expect(f.store.chooseEncoding(1, 'kr.txt', 'shiftJis')).toBe(true);
+    const lossy = await f.store.open(f.client, 1, 'kr.txt');
+    expect('fileKey' in lossy ? null : lossy.kind).toBe('lossy');
+
+    // 자동으로 되돌리면 인자 둘로 읽는다. 세션이 끝나면 고른 것도 지운다
+    expect(f.store.chooseEncoding(1, 'kr.txt', null)).toBe(true);
+    await f.store.open(f.client, 1, 'kr.txt');
+    expect(f.read).toHaveBeenLastCalledWith(1, 'kr.txt');
+    f.store.chooseEncoding(1, 'kr.txt', 'big5');
+    f.store.releaseSession(1);
+    expect(f.store.encodingChoice(1, 'kr.txt')).toBeNull();
   });
 });

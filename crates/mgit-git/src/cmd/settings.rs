@@ -99,7 +99,8 @@ pub async fn staged_diff(
     Ok(parse_diff(&out))
 }
 
-/// 원격 추적 ref 스냅샷 (`refs/remotes/*` → oid). 자동 fetch 전후 비교용 (UX-09)
+/// 원격 추적 ref 스냅샷 (`refs/remotes/*` → oid). 자동 fetch 전후 비교용 (UX-09).
+/// 심볼릭 ref(`<원격>/HEAD` — 원격의 기본 branch 표시)는 뺀다 (`parse_remote_refs`)
 pub async fn remote_refs(
     runner: &dyn GitRunner,
     work_tree: &Path,
@@ -108,20 +109,33 @@ pub async fn remote_refs(
         work_tree,
         [
             "for-each-ref",
-            "--format=%(refname)%00%(objectname)",
+            "--format=%(refname)%00%(objectname)%00%(symref)",
             "refs/remotes/",
         ],
     )
     .with_env(EnvProfile::ReadInteractive);
     let display = req.display_args();
     let out = runner.run(req).await?.ok(&display)?;
-    Ok(String::from_utf8_lossy(&out)
+    Ok(parse_remote_refs(&out))
+}
+
+/// `remote_refs` 의 `for-each-ref` 출력(`refname\0objectname\0symref` 줄)을 (이름, oid) 목록으로 바꾼다 (순수).
+/// 심볼릭 ref 는 원격 branch 가 아니라 기본 branch 를 가리키는 표시라 뺀다 — git 2.48+ 의 fetch 는 없던
+/// `<원격>/HEAD` 를 처음 fetch 에서 만들므로, 넣으면 새 커밋이 없어도 원격 변경으로 알리게 된다. 가리키는 branch 는
+/// 따로 실리므로 빠지는 변경은 없다
+fn parse_remote_refs(out: &[u8]) -> Vec<(String, String)> {
+    String::from_utf8_lossy(out)
         .lines()
         .filter_map(|l| {
-            let (name, oid) = l.split_once('\0')?;
-            Some((name.to_string(), oid.trim().to_string()))
+            let mut fields = l.split('\0');
+            let name = fields.next()?;
+            let oid = fields.next()?.trim();
+            let symref = fields.next().unwrap_or("").trim();
+            symref
+                .is_empty()
+                .then(|| (name.to_string(), oid.to_string()))
         })
-        .collect())
+        .collect()
 }
 
 /// 두 스냅샷에서 새로 생기거나 바뀐 ref 이름 (`refs/remotes/` 접두 제거)
@@ -160,6 +174,29 @@ mod tests {
         assert_eq!(
             changed_remote_refs(&before, &after),
             vec!["origin/main".to_string(), "origin/new".to_string()]
+        );
+    }
+
+    /// 스냅샷은 심볼릭 `<원격>/HEAD` 를 빼고, 심볼릭이 아닌 ref(옛 방식의 실제 `HEAD` 이름 ref 포함)는 그대로 둔다.
+    /// 그래서 `<원격>/HEAD` 가 새로 생겨도 변경으로 나오지 않는다
+    #[test]
+    fn snapshot_skips_symbolic_remote_head() {
+        let before = parse_remote_refs(b"refs/remotes/origin/main\0a\0\n");
+        let after = parse_remote_refs(
+            b"refs/remotes/origin/HEAD\0a\0refs/remotes/origin/main\n\
+              refs/remotes/origin/main\0a\0\n\
+              refs/remotes/up/HEAD\0b\0\n",
+        );
+        assert_eq!(
+            after,
+            vec![
+                ("refs/remotes/origin/main".to_string(), "a".to_string()),
+                ("refs/remotes/up/HEAD".to_string(), "b".to_string()),
+            ]
+        );
+        assert_eq!(
+            changed_remote_refs(&before, &after),
+            vec!["up/HEAD".to_string()]
         );
     }
 }

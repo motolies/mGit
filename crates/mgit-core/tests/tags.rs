@@ -73,8 +73,10 @@ async fn g15_auto_fetch_keeps_unpushed_tags_under_prune_tags() {
     // 원격이 바뀐 뒤 자동 fetch 가 그것을 받아 올 때까지 기다린다 (그 fetch 는 반드시 한 번 이상 돌았다)
     let pushed = b.commit("from b");
     b.git_ok(["push", "-q", "origin", "main"]);
+    // push 보다 먼저 돈 자동 fetch 도 AutoFetched 를 보낼 수 있다: git 2.48+ 는 첫 fetch 에서 origin/HEAD 를 만든다.
+    // 그 이벤트에서 풀리지 않도록 origin/main 을 받아 온 바퀴까지 기다린다
     wait_for(&mut rx, Duration::from_secs(10), |e| {
-        matches!(e, CoreEvent::AutoFetched { .. })
+        matches!(e, CoreEvent::AutoFetched { refs, .. } if refs.iter().any(|r| r == "origin/main"))
     })
     .await;
     assert_eq!(

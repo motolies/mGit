@@ -175,6 +175,12 @@ function SettingsForm({
       initial: editorPrefs.formatOnSave,
     },
     {
+      key: 'autoCloseBrackets',
+      label: S.fileEditor.autoCloseBrackets,
+      type: 'checkbox',
+      initial: editorPrefs.autoCloseBrackets,
+    },
+    {
       key: 'currentBlame',
       label: S.fileEditor.currentBlame,
       type: 'checkbox',
@@ -270,6 +276,7 @@ function SettingsForm({
       setEditorPreferences({
         printWidth: width,
         formatOnSave: bool(values, 'formatOnSave'),
+        autoCloseBrackets: bool(values, 'autoCloseBrackets'),
         currentBlame: bool(values, 'currentBlame'),
         allBlame: bool(values, 'allBlame'),
         changeMarkers: bool(values, 'changeMarkers'),

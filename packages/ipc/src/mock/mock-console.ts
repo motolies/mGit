@@ -30,6 +30,12 @@ import type {
 } from '../types';
 import { applyMockBranchDeletion, mockDeleteBranches } from './mock-branch-delete';
 import { mockReason, pick } from './mock-l10n';
+import {
+  mockStashFind,
+  mockStashMessage,
+  mockStashPopLabel,
+  mockStashPushSkip,
+} from './mock-stash';
 import { type MockFolderData, mockFolderEntries } from './mock-workspace';
 
 /** 목이 돌린 것으로 치는 git 명령 하나 (작업 디렉터리는 기록을 만들 때 준다) */
@@ -151,7 +157,122 @@ export function mockBatchLabel(op: BatchOp): string {
       return pick(`로컬 브랜치 일괄 삭제: ${op.name}`, `Delete local branch: ${op.name}`);
     case 'renameBranch':
       return pick(`일괄 이름 바꾸기: ${op.from} → ${op.to}`, `Batch rename: ${op.from} → ${op.to}`);
+    case 'stashPush': {
+      const message = (op.message ?? '').trim();
+      return message === ''
+        ? pick('스태시 일괄 저장', 'Batch stash')
+        : pick(`스태시 일괄 저장: ${message}`, `Batch stash: ${message}`);
+    }
+    case 'stashPop':
+      return pick(`스태시 일괄 꺼내기 (${op.batch})`, `Batch stash pop (${op.batch})`);
+    case 'runCommand': {
+      const command = op.args.map((a) => (/[\s'"]/.test(a) ? `'${a}'` : a)).join(' ');
+      return pick(`명령 실행: git ${command}`, `Run: git ${command}`);
+    }
   }
+}
+
+/** 상태 항목의 짧은 상태 글자 (`git status --short` 의 한 칸) */
+function shortStatusLetter(state: string): string {
+  const letters: Record<string, string> = {
+    modified: 'M',
+    added: 'A',
+    deleted: 'D',
+    renamed: 'R',
+    copied: 'C',
+    typeChanged: 'T',
+    unmerged: 'U',
+  };
+  return letters[state] ?? ' ';
+}
+
+/**
+ * 일괄 명령 흉내 (`BatchOp::RunCommand`, MR-14): 몇 가지 읽기 명령만 장면에서 그럴듯한 출력을 만든다 — `status`(짧은
+ * 꼴), `branch`(현재 branch), `rev-parse --abbrev-ref HEAD`, `rev-parse --verify <branch>`(그 로컬 branch 가 없으면 종료 코드
+ * 128). 그 밖의 명령은 출력 없이 성공한다. 장면 상태는 바꾸지 않는다
+ */
+function mockGitCommand(
+  data: MockFolderData,
+  path: string,
+  summary: RepoSummary,
+  args: readonly string[],
+): { status: number; stdout: string; stderr: string } {
+  const words = args.filter((a) => !a.startsWith('-'));
+  const [sub, ...rest] = words;
+  const branch = summary.branch ?? null;
+  if (sub === 'status') {
+    const lines = mockFolderEntries(data, path).map((e) =>
+      e.index === 'untracked'
+        ? `?? ${e.path}`
+        : `${shortStatusLetter(e.index)}${shortStatusLetter(e.worktree)} ${e.path}`,
+    );
+    return {
+      status: 0,
+      stdout: [`## ${branch ?? 'HEAD (no branch)'}`, ...lines].join('\n').concat('\n'),
+      stderr: '',
+    };
+  }
+  if (sub === 'branch' && rest.length === 0) {
+    return { status: 0, stdout: branch === null ? '' : `* ${branch}\n`, stderr: '' };
+  }
+  if (sub === 'rev-parse' && args.includes('--abbrev-ref')) {
+    return { status: 0, stdout: `${branch ?? 'HEAD'}\n`, stderr: '' };
+  }
+  if (sub === 'rev-parse' && args.includes('--verify')) {
+    const name = rest[0] ?? '';
+    return hasBranch(data, path, name, false)
+      ? { status: 0, stdout: `${'0'.repeat(40)}\n`, stderr: '' }
+      : { status: 128, stdout: '', stderr: 'fatal: Needed a single revision\n' };
+  }
+  return { status: 0, stdout: '', stderr: '' };
+}
+
+/** 일괄 명령 흉내의 저장소별 결과와 돌린 명령 (`mockFolderBatch` 의 일괄 명령 갈래) */
+function mockRunCommand(
+  data: MockFolderData,
+  op: Extract<BatchOp, { kind: 'runCommand' }>,
+  targets: readonly string[],
+): MockBatchRun {
+  const commands: MockBatchRun['commands'] = [];
+  const results: RepoResult[] = targets.map((path) => {
+    const summary = data.folderSummaries.find((s) => s.path === path);
+    const name = summary?.name ?? path.split('/').pop() ?? path;
+    if (!summary) {
+      return { path, name, ok: false, skipped: null, message: `not a git repository: ${path}` };
+    }
+    const out = mockGitCommand(data, path, summary, op.args);
+    commands.push({
+      cwd: path,
+      command: { args: [...op.args], status: out.status, stderr: out.stderr, elapsedMs: 12 },
+    });
+    const ok = out.status === 0;
+    return {
+      path,
+      name,
+      ok,
+      skipped: null,
+      message: ok ? '' : (out.stderr.trim().split('\n').pop() ?? ''),
+      command: {
+        status: out.status,
+        elapsedMs: 12,
+        stdout: out.stdout,
+        stdoutTruncated: false,
+        stderr: out.stderr,
+        stderrTruncated: false,
+      },
+    };
+  });
+  const failed = results.filter((r) => !r.ok).length;
+  return {
+    commands,
+    result: {
+      label: mockBatchLabel(op),
+      results,
+      succeeded: results.length - failed,
+      skipped: 0,
+      failed,
+    },
+  };
 }
 
 /** 원 저장소 경로 (워크트리는 원 저장소의 브랜치를 본다 — 브랜치 목록 기준) */
@@ -197,10 +318,50 @@ function movedOf(repo: string, branch: string, commits: number): RefMove {
  * 업데이트 — 결과의 `moved`)
  */
 type BatchStep =
-  | { skip: string }
+  | { skip: string; dirty?: true }
   | { failed: string }
-  | { command: MockCommand }
-  | { run: MockCommand[]; moved: RefMove };
+  | { command: MockCommand; upstreamSet?: string }
+  | { run: MockCommand[]; moved?: RefMove };
+
+/** 커밋하지 않은 변경으로 건너뜀 (코어 `RepoResult::skip_dirty` — 결과 알림이 stash 후 다시 실행을 안내한다) */
+function dirtySkip(): BatchStep {
+  return { skip: mockReason.dirty(), dirty: true };
+}
+
+/**
+ * 업스트림이 없는 branch 를 새 업스트림으로 게시하는 push (코어 `publish_args` 흉내): 분리 HEAD·원격 없음은 건너뛰고,
+ * 원격은 저장소별로 고른 것(목록에 있을 때만), 없으면 origin, origin 도 없으면 건너뛴다 (코어 `upstream_remote`)
+ */
+function publishStep(
+  summary: RepoSummary,
+  chosen: string | null,
+  key: string,
+  url: string,
+): BatchStep {
+  const branch = summary.branch ?? null;
+  if (branch === null) {
+    return { skip: mockReason.detached() };
+  }
+  const remotes = summary.remotes ?? [];
+  if (remotes.length === 0) {
+    return { skip: mockReason.noRemotes() };
+  }
+  if (chosen !== null && !remotes.includes(chosen)) {
+    return { skip: mockReason.unknownRemote(chosen) };
+  }
+  const remote = chosen ?? (remotes.includes('origin') ? 'origin' : null);
+  if (remote === null) {
+    return { skip: mockReason.remoteNotChosen() };
+  }
+  return {
+    command: ran(
+      ['push', '-u', '--end-of-options', remote, `refs/heads/${branch}:refs/heads/${branch}`],
+      elapsedOf(key, 700, 900),
+      `To ${url}\n * [new branch]      ${branch} -> ${branch}\nbranch '${branch}' set up to track '${remote}/${branch}'.`,
+    ),
+    upstreamSet: `${remote}/${branch}`,
+  };
+}
 
 /**
  * 저장소 하나의 일괄 작업 (코어 `run_batch_one` 의 건너뜀 규칙 흉내). 요약에 실패한 저장소는 상태를 못 읽어 명령 없이
@@ -233,6 +394,8 @@ function batchStep(
     case 'deleteRemoteBranch':
     case 'deleteLocalBranches':
       return { skip: 'Handled by deletion flow' };
+    case 'runCommand':
+      return { skip: 'Handled by command flow' };
     case 'fetch': {
       const args = ['fetch', '--all', ...(op.prune ? ['--prune'] : [])];
       const stderr =
@@ -246,7 +409,7 @@ function batchStep(
         return { skip: mockReason.inProgress() };
       }
       if (dirty) {
-        return { skip: mockReason.dirty() };
+        return dirtySkip();
       }
       if (!upstream) {
         return { skip: mockReason.noUpstream() };
@@ -276,7 +439,12 @@ function batchStep(
     }
     case 'push': {
       if (!upstream) {
-        return { skip: mockReason.noUpstream() };
+        const plan = op.newUpstream ?? null;
+        if (plan === null) {
+          return { skip: mockReason.noUpstream() };
+        }
+        const chosen = (plan.remotes ?? []).find((choice) => choice.path === repo)?.remote ?? null;
+        return publishStep(summary, chosen, key, url);
       }
       if (ahead === 0) {
         return { skip: mockReason.nothingToPush() };
@@ -337,7 +505,7 @@ function batchStep(
         return { skip: mockReason.inProgress() };
       }
       if (dirty) {
-        return { skip: mockReason.dirty() };
+        return dirtySkip();
       }
       if (branch === op.name) {
         return { skip: mockReason.alreadyOnBranch() };
@@ -360,7 +528,7 @@ function batchStep(
         return { skip: mockReason.inProgress() };
       }
       if (dirty) {
-        return { skip: mockReason.dirty() };
+        return dirtySkip();
       }
       const tracking = `${op.remote}/${op.branch}`;
       if (!hasBranch(data, repo, tracking, true)) {
@@ -409,7 +577,7 @@ function batchStep(
         return { skip: mockReason.inProgress() };
       }
       if (current && dirty) {
-        return { skip: mockReason.dirty() };
+        return dirtySkip();
       }
       const remoteBranch = upstreamName.replace(/^origin\//, '');
       if (local.gone) {
@@ -474,6 +642,43 @@ function batchStep(
         ? ['worktree', 'add', '-b', op.branch, dest]
         : ['worktree', 'add', dest, op.branch];
       return { command: ran(args, elapsedOf(key, 90, 300), `Preparing worktree (${op.branch})`) };
+    }
+    case 'stashPush': {
+      // 코어 `folder_stash::push_one` 흉내: 진행 중·충돌 → 변경 없음(미추적 파일만이면 그 사유) → `stash push`
+      const skip = mockStashPushSkip(entries, inOp, op.includeUntracked);
+      if (skip !== null) {
+        return { skip };
+      }
+      const args = [
+        'stash',
+        'push',
+        ...(op.includeUntracked ? ['--include-untracked'] : []),
+        '-m',
+        mockStashMessage(op.batch, op.message),
+      ];
+      return { command: ran(args, elapsedOf(key, 40, 120)) };
+    }
+    case 'stashPop': {
+      // 코어 `pop_one` 흉내: 진행 중·충돌 → 묶음 항목 없음 → oid 로 apply, 인덱스로 drop (목은 충돌을 흉내 내지 않는다)
+      if (inOp || entries.some((e) => e.conflict)) {
+        return { skip: mockReason.inProgress() };
+      }
+      const found = mockStashFind(data, repo, op.batch);
+      if (!found) {
+        return { skip: mockReason.noBatchStash() };
+      }
+      return {
+        run: [
+          ran(
+            ['stash', 'apply', '--quiet', oidOf(`${repo}:stash:${op.batch}`)],
+            elapsedOf(key, 40, 120),
+          ),
+          ran(
+            ['stash', 'drop', '--quiet', `stash@{${found.index}}`],
+            elapsedOf(`${key}:drop`, 8, 20),
+          ),
+        ],
+      };
     }
   }
 }
@@ -578,6 +783,15 @@ export function mockFolderBatch(
       message: pick('대상 저장소가 없습니다', 'No target repositories'),
     });
   }
+  if (op.kind === 'runCommand') {
+    if (op.args.length === 0) {
+      throw new IpcClientError({
+        kind: 'internal',
+        message: pick('실행할 git 명령을 입력하세요.', 'Enter a git command to run'),
+      });
+    }
+    return mockRunCommand(data, op, targets);
+  }
   const commands: MockBatchRun['commands'] = [];
   const results: RepoResult[] = targets.map((path) => {
     const summary = data.folderSummaries.find((s) => s.path === path);
@@ -602,7 +816,14 @@ export function mockFolderBatch(
     }
     const step = batchStep(data, op, path, summary);
     if ('skip' in step) {
-      return { path, name, ok: true, skipped: step.skip, message: '' };
+      return {
+        path,
+        name,
+        ok: true,
+        skipped: step.skip,
+        message: '',
+        ...(step.dirty ? { skippedDirty: true } : {}),
+      };
     }
     if ('failed' in step) {
       return { path, name, ok: false, skipped: null, message: step.failed };
@@ -611,17 +832,32 @@ export function mockFolderBatch(
       for (const command of step.run) {
         commands.push({ cwd: path, command });
       }
-      return { path, name, ok: true, skipped: null, message: '', moved: step.moved };
+      return {
+        path,
+        name,
+        ok: true,
+        skipped: null,
+        message: '',
+        ...(step.moved ? { moved: step.moved } : {}),
+      };
     }
     commands.push({ cwd: path, command: step.command });
     const ok = step.command.status === 0;
-    return { path, name, ok, skipped: null, message: ok ? '' : step.command.stderr.trim() };
+    return {
+      path,
+      name,
+      ok,
+      skipped: null,
+      message: ok ? '' : step.command.stderr.trim(),
+      ...(ok && step.upstreamSet ? { upstreamSet: step.upstreamSet } : {}),
+    };
   });
   const skipped = results.filter((r) => r.skipped).length;
   const failed = results.filter((r) => !r.ok).length;
   return {
     result: {
-      label: mockBatchLabel(op),
+      label:
+        op.kind === 'stashPop' ? mockStashPopLabel(data, op.batch, targets) : mockBatchLabel(op),
       results,
       succeeded: results.length - skipped - failed,
       skipped,

@@ -13,6 +13,7 @@ import {
   isHeadRevs,
   remoteBranchParts,
   revsAfterActivate,
+  revsAfterDelete,
   revsAfterRename,
   revsOfBranchNames,
   sameRevs,
@@ -440,5 +441,21 @@ describe('revsAfterRename', () => {
     expect(revsAfterRename(all, 'a', 'b', false)).toBe(all);
     const other = { kind: 'solo', name: 'x' } as const;
     expect(revsAfterRename(other, 'a', 'b', false)).toBe(other);
+  });
+});
+
+describe('revsAfterDelete', () => {
+  it('지운 이름(refs/heads/ 꼴 포함)을 범위에서 빼고, 그 이름만 걸려 있었으면 HEAD 범위로. 없으면 그대로', () => {
+    expect(revsAfterDelete({ kind: 'solo', name: 'a' }, 'a')).toEqual({ kind: 'head' });
+    expect(revsAfterDelete({ kind: 'solo', name: 'refs/heads/a' }, 'a')).toEqual({ kind: 'head' });
+    expect(revsAfterDelete({ kind: 'branches', names: ['x', 'a', 'refs/heads/a'] }, 'a')).toEqual({
+      kind: 'branches',
+      names: ['x'],
+    });
+    expect(revsAfterDelete({ kind: 'branches', names: ['a'] }, 'a')).toEqual({ kind: 'head' });
+    const other = { kind: 'solo', name: 'x' } as const;
+    expect(revsAfterDelete(other, 'a')).toBe(other);
+    const all = { kind: 'all' } as const;
+    expect(revsAfterDelete(all, 'a')).toBe(all);
   });
 });

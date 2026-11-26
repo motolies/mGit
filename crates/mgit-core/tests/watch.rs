@@ -162,3 +162,77 @@ async fn folder_changed_names_the_changed_repo() {
     assert!(ran.iter().all(|r| r.cwd.starts_with(&path_b)), "{ran:?}");
     core.close_folder(fid).unwrap();
 }
+
+/// 앱 밖에서 stash 를 만들거나 지워도 감시가 `folderChanged`(refs)를 낸다 (셋째 묶음 K). `refs/stash` 는 공용 `refs/`
+/// 아래라 목록을 함께 쓰는 연결된 워크트리 줄도 함께 알린다 — 프런트가 그 저장소들만 다시 읽으면 stash 수가 바뀐다
+#[tokio::test]
+async fn stash_changes_reload_main_tree_and_linked_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let path_m = root.join("m");
+    let path_w = root.join("w");
+    let mut m = repo_at(&path_m);
+    m.git_ok([
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "wt",
+        path_w.to_str().unwrap(),
+    ]);
+    let core = core_watching().await;
+    let (sink, mut rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    while rx.try_recv().is_ok() {}
+
+    // 주 작업 트리에서 stash 를 만들면 두 줄 모두 알린다
+    m.write_file("f1.txt", "edited\n");
+    m.stash_push("밖에서", false);
+    let mut seen = std::collections::HashSet::new();
+    wait_for(&mut rx, Duration::from_secs(5), |e| {
+        if let CoreEvent::FolderChanged {
+            session,
+            refs: true,
+            repo: Some(repo),
+        } = e
+            && *session == fid
+        {
+            seen.insert(repo.clone());
+        }
+        seen.contains(&path_m) && seen.contains(&path_w)
+    })
+    .await;
+    let counts = |list: &[mgit_core::RepoSummary]| {
+        let mut v: Vec<(String, u32)> = list
+            .iter()
+            .map(|s| (s.name.clone(), s.stash_count))
+            .collect();
+        v.sort();
+        v
+    };
+    let list = core
+        .folder_summaries(fid, &[path_m.clone(), path_w.clone()])
+        .await
+        .unwrap();
+    assert_eq!(counts(&list), [("m".into(), 1), ("w".into(), 1)]);
+
+    // 지워도(drop) 다시 알린다
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    while rx.try_recv().is_ok() {}
+    m.git_ok(["stash", "drop", "-q"]);
+    wait_for(&mut rx, Duration::from_secs(5), |e| {
+        matches!(
+            e,
+            CoreEvent::FolderChanged { session, refs: true, repo: Some(repo) }
+                if *session == fid && repo == &path_w
+        )
+    })
+    .await;
+    let list = core
+        .folder_summaries(fid, &[path_m.clone(), path_w.clone()])
+        .await
+        .unwrap();
+    assert_eq!(counts(&list), [("m".into(), 0), ("w".into(), 0)]);
+    core.close_folder(fid).unwrap();
+}

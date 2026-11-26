@@ -24,7 +24,6 @@ function pickHint(st: SessionState) {
     pushSubmodulesThenPush: st.pushSubmodulesThenPush,
     removeIndexLock: st.removeIndexLock,
     createBranch: st.createBranch,
-    setCommitNoVerify: st.setCommitNoVerify,
     commit: st.commit,
     opContinue: st.opContinue,
     replaceRemoteTags: st.replaceRemoteTags,
@@ -41,8 +40,9 @@ export function HintDialogs() {
 
 /**
  * 정해 준 세션의 힌트 대화상자 (폴더 탭, W15): 폴더 탭에서 켠 종류(`folderHintMode`)만 보이고, 제목 앞에 어느 저장소의
- * 것인지 밝힌다. `act` 는 저장소 탭과 같은 동작을 그 세션에 대고 하고, `info` 는 확인 단추 하나로 알리기만 한다. `off`
- * 인 힌트는 보이지 않는다 (바쁨에도 세지 않는다 — `sessionDialogOpen`)
+ * 것인지 밝힌다. `act` 는 저장소 탭과 같은 동작을 그 세션에 대고 하고, `info`(hook 거부)는 저장소 탭에서도 확인 단추
+ * 하나로 알리기만 하는 대화상자라 같은 몸통을 쓴다. `off` 인 힌트는 보이지 않는다 (바쁨에도 세지 않는다 —
+ * `sessionDialogOpen`)
  */
 export function SessionHintDialogs({
   sessionId,
@@ -53,28 +53,10 @@ export function SessionHintDialogs({
 }) {
   const s = useSessionOf(sessionId, pickHint);
   const h = s.hint;
-  if (!h) {
+  if (!h || folderHintMode(h) === 'off') {
     return null;
   }
-  const title = (t: string) => S.repoSession.hintTitle(repoName, t);
-  switch (folderHintMode(h)) {
-    case 'off':
-      return null;
-    case 'info':
-      // 알리기만 하는 종류는 지금 hook 거부 하나다 (`folderHintMode`)
-      return (
-        <ConfirmDialog
-          open
-          title={title(S.dialog.hookFailed)}
-          message={S.repoSession.hookFailedInfo}
-          confirmLabel={S.confirm.ok}
-          onConfirm={s.dismiss}
-          onCancel={s.dismiss}
-        />
-      );
-    case 'act':
-      return <HintDialogsBody s={s} title={title} />;
-  }
+  return <HintDialogsBody s={s} title={(t) => S.repoSession.hintTitle(repoName, t)} />;
 }
 
 /**
@@ -304,18 +286,16 @@ function HintDialogsBody({
         />
       );
     case 'hookFailed':
+      // 커밋이 아닌 쓰기(merge·rebase·continue·checkout 등)의 hook 거부다 — 커밋 폼의 커밋은 이 힌트로 오지 않고 폼 아래
+      // 오류 줄로 보인다(`commit`). 그래서 "hook 건너뛰고 다시 commit" 은 뜻이 없다: 커밋 폼의 메시지로 엉뚱한 commit 을
+      // 만들거나(메시지가 비면 아무것도 안 하고) --no-verify 체크만 몰래 켠다. 알리기만 한다
       return (
         <ConfirmDialog
           open
           title={title(S.dialog.hookFailed)}
           message={S.dialog.hookFailedMessage}
-          confirmLabel={S.dialog.retryNoVerify}
-          danger
-          onConfirm={() => {
-            s.dismiss();
-            s.setCommitNoVerify(true);
-            void s.commit();
-          }}
+          confirmLabel={S.confirm.ok}
+          onConfirm={s.dismiss}
           onCancel={s.dismiss}
         />
       );

@@ -8,7 +8,7 @@ import type { StatusEntry } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import type { MenuItem } from '../../components/ContextMenu';
 import { parseNoteRowId, type SelectionSet } from '../../store/file-tree';
-import { joinRoot } from '../../store/fs-path';
+import type { RootSpace } from '../../store/root-space';
 import {
   changeItems,
   type FileActions,
@@ -61,8 +61,11 @@ export interface FolderTreeMenuInput {
   row: RootRow | EntryRow;
   /** 대상 행 id (`menuTargets`) */
   targets: readonly string[];
-  /** 폴더(트리 루트)의 절대 경로 */
-  root: string;
+  /**
+   * 트리의 경로 공간 (MR-13): 행의 루트 기준 상대 경로를 절대 경로로 바꾼다 (Finder·터미널·경로 복사). 절대 경로가 없는
+   * 행(그룹 맨 위)에는 그 항목들을 두지 않는다
+   */
+  space: RootSpace;
   /** 루트 기준 상대 경로가 저장소 디렉터리면 그 저장소, 아니면 null */
   repoAt(rel: string): { path: string; name: string } | null;
   /** 파일 보기로 열 수 있는 파일 행인지 */
@@ -110,7 +113,7 @@ function counted(label: string, n: number): string {
 /** 일반 폴더·파일 행의 메뉴가 쓰는 입력 (폴더 탭·저장소 탭 공용, W21) */
 export type EntryMenuInput = Pick<
   FolderTreeMenuInput,
-  'targets' | 'root' | 'isOpenable' | 'fileRepo' | 'files'
+  'targets' | 'space' | 'isOpenable' | 'fileRepo' | 'files'
 > & { row: EntryRow };
 
 /** 일반 폴더·파일 행의 메뉴가 거는 동작 (폴더 탭·저장소 탭 공용, W21) */
@@ -124,7 +127,7 @@ export type EntryMenuActions = Pick<
  * 묶음(우클릭한 행의 Finder·터미널). 동작이 없으면 둘 다 빈 배열, 재료가 없으면 변경 묶음만 빈 배열
  */
 export function fileGroups(
-  input: Pick<FolderTreeMenuInput, 'targets' | 'root' | 'files'>,
+  input: Pick<FolderTreeMenuInput, 'targets' | 'space' | 'files'>,
   clicked: { path: string; dir: boolean },
   act: Pick<FolderTreeMenuActions, 'files'>,
 ): { changes: MenuItem[]; openIn: MenuItem[] } {
@@ -132,7 +135,8 @@ export function fileGroups(
   if (!files) {
     return { changes: [], openIn: [] };
   }
-  const openIn = openInItems(joinRoot(input.root, clicked.path), files);
+  const clickedAbs = input.space.toAbs(clicked.path);
+  const openIn = clickedAbs === null ? [] : openInItems(clickedAbs, files);
   const source = input.files;
   if (!source) {
     return { changes: [], openIn };
@@ -152,21 +156,26 @@ export function fileGroups(
   return { changes, openIn };
 }
 
+/** 대상 행들의 절대 경로를 줄마다 하나씩 (절대 경로가 없는 행은 뺀다, 경로 복사) */
+function absoluteLines(space: RootSpace, targets: readonly string[]): string {
+  return targets.flatMap((t) => space.toAbs(t) ?? []).join('\n');
+}
+
 /**
  * 경로 복사 두 항목 (일반 폴더·파일). 루트 기준 상대 경로와 절대 경로, 여러 대상이면 줄마다 하나. 앞 구분선은 묶는 쪽
  * (`joinGroups`)이 정한다
  */
 function copyItems(
-  input: Pick<FolderTreeMenuInput, 'targets' | 'root'>,
+  input: Pick<FolderTreeMenuInput, 'targets' | 'space'>,
   act: Pick<FolderTreeMenuActions, 'copy'>,
 ) {
-  const { targets, root } = input;
+  const { targets, space } = input;
   const m = S.project.menu;
   return [
     {
       label: counted(m.copyPath, targets.length),
       separator: false,
-      onSelect: () => act.copy(targets.map((t) => joinRoot(root, t)).join('\n')),
+      onSelect: () => act.copy(absoluteLines(space, targets)),
     },
     {
       label: counted(m.copyRelative, targets.length),
@@ -177,7 +186,7 @@ function copyItems(
 
 /** 프로젝트 트리 행의 우클릭 메뉴 */
 export function folderTreeMenu(input: FolderTreeMenuInput, act: FolderTreeMenuActions): MenuItem[] {
-  const { row, targets, root, busy } = input;
+  const { row, targets, space, busy } = input;
   const m = S.project.menu;
   if (row.kind === 'root') {
     const head: MenuItem[] = [
@@ -191,12 +200,13 @@ export function folderTreeMenu(input: FolderTreeMenuInput, act: FolderTreeMenuAc
         onSelect: () => act.fetch([]),
       },
     ];
-    const openIn = act.files ? openInItems(joinRoot(root, ''), act.files) : [];
-    return joinGroups([
-      head,
-      openIn,
-      [{ label: m.copyPath, onSelect: () => act.copy(joinRoot(root, '')) }],
-    ]);
+    // 루트에 실제 디렉터리가 없으면(그룹) Finder·터미널·경로 복사를 두지 않는다
+    const rootAbs = space.toAbs('');
+    if (rootAbs === null) {
+      return head;
+    }
+    const openIn = act.files ? openInItems(rootAbs, act.files) : [];
+    return joinGroups([head, openIn, [{ label: m.copyPath, onSelect: () => act.copy(rootAbs) }]]);
   }
   if (input.repoAt(row.path) !== null) {
     const repos = targets.flatMap((t) => {
@@ -244,7 +254,7 @@ export function folderTreeMenu(input: FolderTreeMenuInput, act: FolderTreeMenuAc
       [
         {
           label: counted(m.copyPath, targets.length),
-          onSelect: () => act.copy(targets.map((t) => joinRoot(root, t)).join('\n')),
+          onSelect: () => act.copy(absoluteLines(space, targets)),
         },
       ],
     ]);

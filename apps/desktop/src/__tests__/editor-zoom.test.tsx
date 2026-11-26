@@ -70,6 +70,13 @@ describe('공통 본문 배율', () => {
     expect(normalizeEditorPreferences(legacy).zoomPercent).toBe(100);
     expect(normalizeEditorPreferences({ ...legacy, zoomPercent: 999 }).zoomPercent).toBe(100);
   });
+  it('자동 닫기 항목이 없던 예전 설정은 켜짐으로 읽고, 끈 값은 그대로 둔다', () => {
+    const { autoCloseBrackets: _auto, ...legacy } = original;
+    expect(normalizeEditorPreferences(legacy).autoCloseBrackets).toBe(true);
+    expect(
+      normalizeEditorPreferences({ ...legacy, autoCloseBrackets: false }).autoCloseBrackets,
+    ).toBe(false);
+  });
   it('단계를 이동하고 양 끝에서 멈추며 초기화한다', () => {
     changeEditorZoom(0);
     changeEditorZoom(1);

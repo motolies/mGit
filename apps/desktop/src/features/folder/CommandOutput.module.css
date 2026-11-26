@@ -1,0 +1,119 @@
+/* 작업 기록의 일괄 명령 결과: 작업 기록 줄 아래 전체 폭. 목록이 길면 작업 기록 목록이 함께 스크롤한다 */
+.results {
+  grid-column: 1 / -1;
+  margin: 2px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.repo {
+  padding: 2px 8px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.repo:last-child {
+  border-bottom: none;
+}
+
+/* 이름 | 종료 상태 | 출력 보기·복사 단추 */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.name {
+  flex: 0 1 160px;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo[data-state="failed"] .state {
+  color: var(--danger);
+}
+
+.repo[data-state="ok"] .state {
+  color: var(--success);
+}
+
+.repo[data-state="skipped"] .state,
+.repo[data-state="cancelled"] .state {
+  color: var(--fg-muted);
+}
+
+.message,
+.note {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-small);
+}
+
+.message {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.streamHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: var(--font-size-small);
+}
+
+.streamTitle {
+  font-weight: 600;
+}
+
+.cut {
+  color: var(--status-conflict);
+}
+
+/* 출력 내용: 글자 그대로, 긴 출력은 칸 안에서 스크롤한다 */
+.pre {
+  margin: 2px 0 0;
+  padding: 4px 6px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  white-space: pre;
+  user-select: text;
+}

@@ -306,4 +306,30 @@ describe('folder 장면의 stage·unstage·일괄 commit (W14, WS-23)', () => {
     const g = globalThis as { __mgitMockCalls?: Record<string, number> };
     expect(g.__mgitMockCalls?.folderCommit).toBe(3);
   });
+
+  it('저장소별 메시지: 공통 메시지가 비어도 대상 모두에 자기 메시지가 있으면 커밋하고, 하나라도 없으면 아무것도 바꾸지 않고 거부한다', async () => {
+    const { client, folder, repo } = await folderScene();
+    const auth = repo('auth-service');
+    const web = repo('web-console');
+    const own = [{ path: auth, message: 'docs: auth' }];
+    // web 은 자기 메시지가 없고 공통 메시지가 비었다 → 거부, stage 된 것은 그대로
+    expect(
+      toIpcError(await client.folderCommit(folder, [auth, web], ' ', false, own).catch((e) => e))
+        .kind,
+    ).toBe('internal');
+    const [authBefore] = await client.folderChanges(folder, [auth]);
+    expect(authBefore?.summary.staged).toBeGreaterThan(0);
+    // 공백뿐인 자기 메시지는 공통 메시지로 본다 → 공통 메시지가 있으면 커밋된다
+    const result = await client.folderCommit(folder, [auth, web], 'feat: 공통', false, [
+      ...own,
+      { path: web, message: '  ' },
+    ]);
+    expect(result.succeeded).toBe(2);
+    const g = globalThis as { __mgitMockBatches?: unknown[] };
+    expect(g.__mgitMockBatches?.at(-1)).toMatchObject({
+      method: 'folderCommit',
+      message: 'feat: 공통',
+      repoMessages: [own[0], { path: web, message: '  ' }],
+    });
+  });
 });

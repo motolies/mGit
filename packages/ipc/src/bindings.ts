@@ -65,6 +65,12 @@ export const commands = {
 	listBackups: (session: number, limit: number) => __TAURI_INVOKE<BackupRecord[]>("list_backups", { session, limit }),
 	/**  백업 사본을 작업 트리로 되돌린다 */
 	restoreBackup: (session: number, id: number) => __TAURI_INVOKE<null>("restore_backup", { session, id }),
+	/**  고른 폐기 백업을 지운다 (#26). 사본과 색인을 함께 지우며 되돌릴 수 없다. 지운 수를 돌려준다 */
+	deleteFileBackups: (session: number, ids: number[]) => __TAURI_INVOKE<number>("delete_file_backups", { session, ids }),
+	/**  이 저장소의 폐기 백업 중 `before_ms`(epoch 밀리초)보다 먼저 만든 것을 지운다 (#26). 지운 수를 돌려준다 */
+	deleteFileBackupsBefore: (session: number, beforeMs: number | null) => __TAURI_INVOKE<number>("delete_file_backups_before", { session, beforeMs }),
+	/**  저장소 탭의 하루 한 번 백업 정리 (#18·#26). 보관 기간이 지난 백업 ref·폐기 백업을 지운다 */
+	pruneBackupsDaily: (session: number) => __TAURI_INVOKE<BackupPruneDto>("prune_backups_daily", { session }),
 	/**  stage 된 내용의 충돌 마커 (CF-24) */
 	verifyStaged: (session: number) => __TAURI_INVOKE<MarkerHit[]>("verify_staged", { session }),
 	/**  커밋한다. hook 출력은 `operationOutput` 이벤트로 온다. 새 HEAD 해시를 돌려준다 */
@@ -208,7 +214,7 @@ export const commands = {
 	/**  사라진 워크트리 정리 */
 	worktreePrune: (session: number) => __TAURI_INVOKE<null>("worktree_prune", { session }),
 	/**  멀티 저장소 폴더를 연다 (MR-01). 이벤트는 `FolderChanged` 만 온다 */
-	openFolder: (path: string, onEvent: Channel<SessionEvent_Deserialize>) => __TAURI_INVOKE<FolderOpened>("open_folder", { path, onEvent }),
+	openFolder: (path: string, onEvent: Channel<SessionEvent_Deserialize>) => __TAURI_INVOKE<FolderOpened_Serialize>("open_folder", { path, onEvent }),
 	/**  대시보드 요약 (MR-02). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다 (PF-02) */
 	folderSummaries: (session: number, repos: string[]) => __TAURI_INVOKE<RepoSummary_Serialize[]>("folder_summaries", { session, repos }),
 	/**  하위 저장소 재스캔 */
@@ -227,10 +233,36 @@ export const commands = {
 	 *  아무것도 하지 않고 같은 모양으로 답한다 (오류 아님)
 	 */
 	folderReleaseRepoSession: (session: number, repoSession: number) => __TAURI_INVOKE<RepoSessionRelease_Serialize>("folder_release_repo_session", { session, repoSession }),
+	/**  그룹 목록 (고정 먼저, 그다음 최근에 연 순). 멤버 상태는 디스크로 다시 본다 */
+	groupsList: () => __TAURI_INVOKE<GroupListItem_Serialize[]>("groups_list"),
+	/**
+	 *  고른 경로들을 멤버 후보로 판정한다 (저장하지 않음). `group` 을 주면 그 그룹에 더하는 것으로, 없으면 새 그룹으로 본다.
+	 *  폴더는 그 아래 저장소들로 펼치고, 저장소 안의 폴더는 그 최상위로 고친다
+	 */
+	groupCheckPaths: (group: string | null, paths: string[]) => __TAURI_INVOKE<GroupPathCheck_Serialize[]>("group_check_paths", { group, paths }),
+	/**  새 그룹을 만든다. 거부할 경로가 하나라도 있으면 만들지 않는다 */
+	groupCreate: (name: string, paths: string[]) => __TAURI_INVOKE<GroupListItem_Serialize>("group_create", { name, paths }),
+	/**
+	 *  그룹을 고친다. 열린 그룹이면 그 세션에 그 자리에서 반영하고(탭을 닫지 않는다) 그 채널로 `folderRescanned` →
+	 *  `groupChanged` 가 온다. 디스크를 보는 멤버 검사는 코어가 블로킹 스레드에서 한다
+	 */
+	groupUpdate: (id: string, update: GroupUpdateDto_Deserialize) => __TAURI_INVOKE<GroupListItem_Serialize>("group_update", { id, update }),
+	/**  그룹을 지운다. 열린 그룹은 지우지 않는다. 그 그룹의 폴더 설정(`folder:mgit-group:<id>`)도 지운다 */
+	groupDelete: (id: string) => __TAURI_INVOKE<null>("group_delete", { id }),
+	/**
+	 *  그룹을 연다. 응답은 `open_folder` 와 같은 모양이고 `path` 가 `mgit-group:<id>`, `group` 에 멤버 상태가 있다. 이벤트는
+	 *  폴더 세션과 같고 재스캔 때 `groupChanged` 가 더 온다. 이미 열린 그룹이면 그 세션이다
+	 */
+	openGroup: (id: string, onEvent: Channel<SessionEvent_Deserialize>) => __TAURI_INVOKE<FolderOpened_Serialize>("open_group", { id, onEvent }),
 	/**  폴더를 스캔해 최근 목록에 넣는다 (REPO-06) */
 	scanRepos: (root: string) => __TAURI_INVOKE<FoundRepo[]>("scan_repos", { root }),
 	/**  clone (REPO-02). 진행률은 세션 0 의 operation 이벤트로 온다 */
 	cloneRepo: (request: CloneRequest_Deserialize, onEvent: Channel<SessionEvent_Deserialize>) => __TAURI_INVOKE<string>("clone_repo", { request, onEvent }),
+	/**
+	 *  여러 저장소를 한 상위 폴더 아래에 clone 한다. 진행률은 세션 0 의 operation 이벤트(저장소 하나가 끝날 때마다)로
+	 *  오고 `cancel_operation` 으로 취소한다. 이미 있는 폴더는 건너뛰고, 실패·취소한 clone 은 만들던 폴더를 지운다
+	 */
+	cloneMany: (request: CloneBatchRequest_Deserialize, onEvent: Channel<SessionEvent_Deserialize>) => __TAURI_INVOKE<BatchResult_Serialize>("clone_many", { request, onEvent }),
 	/**  새 저장소 초기화 (REPO-04) */
 	initRepo: (path: string, defaultBranch: string, template: string | null) => __TAURI_INVOKE<string>("init_repo", { path, defaultBranch, template }),
 	/**  `.gitignore` 템플릿 목록 */
@@ -484,6 +516,10 @@ export const commands = {
 	folderSettingsSet: (session: number, settings: FolderSettingsDto_Deserialize) => __TAURI_INVOKE<null>("folder_settings_set", { session, settings }),
 	/**  일괄 작업 (MR-05·06·07). `repos` 가 비어 있으면 전부 */
 	folderBatch: (session: number, op: BatchOpDto_Deserialize, repos: string[]) => __TAURI_INVOKE<BatchResult_Serialize>("folder_batch", { session, op, repos }),
+	/**  일괄 stash 묶음 목록 (최근 묶음부터). 저장소마다 stash 목록에서 묶음 표시를 모은다. `repos` 가 비어 있으면 전부 */
+	folderStashBatches: (session: number, repos: string[]) => __TAURI_INVOKE<StashBatchDto_Serialize[]>("folder_stash_batches", { session, repos }),
+	/**  폴더 하위 저장소마다 하루 한 번 백업 정리 (#18·#26). 저장소 세션 없이 낮은 동시성으로 돈다 */
+	folderPruneBackupsDaily: (session: number) => __TAURI_INVOKE<BackupPruneDto>("folder_prune_backups_daily", { session }),
 	/**  쓰기 전 현재 브랜치와 대상 커밋 및 실행 불가 사유를 읽는다. */
 	folderIntegrationPreview: (session: number, reference: string, repos: string[]) => __TAURI_INVOKE<IntegrationPreview_Serialize[]>("folder_integration_preview", { session, reference, repos }),
 	/**  변경이 있는 저장소의 상태 (MR-08). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다 (PF-02) */
@@ -501,8 +537,11 @@ export const commands = {
 	folderStage: (session: number, repo: string, target: IndexTargetDto) => __TAURI_INVOKE<IndexWriteResultDto>("folder_stage", { session, repo, target }),
 	/**  폴더 저장소의 경로들(또는 전부)을 unstage 한다 (`folder_stage` 와 같은 규칙) */
 	folderUnstage: (session: number, repo: string, target: IndexTargetDto) => __TAURI_INVOKE<IndexWriteResultDto>("folder_unstage", { session, repo, target }),
-	/**  일괄 commit (MR-08) */
-	folderCommit: (session: number, repos: string[], message: string, stageAll: boolean) => __TAURI_INVOKE<BatchResult_Serialize>("folder_commit", { session, repos, message, stageAll }),
+	/**
+	 *  일괄 commit (MR-08). `repoMessages` 의 저장소는 자기 메시지로, 나머지는 공통 `message` 로 커밋한다. 빠뜨리면
+	 *  (옛 호출) 모두 공통 메시지다
+	 */
+	folderCommit: (session: number, repos: string[], message: string, stageAll: boolean, repoMessages: RepoCommitMessageDto[] | null) => __TAURI_INVOKE<BatchResult_Serialize>("folder_commit", { session, repos, message, stageAll, repoMessages }),
 	/**  타임라인을 연다 (처음이면 로드 시작). 이벤트는 폴더 세션 id 로 `graph*` 가 온다 */
 	folderTimelineOpen: (session: number) => __TAURI_INVOKE<TimelineInfoDto_Serialize>("folder_timeline_open", { session }),
 	/**  타임라인 정보 (저장소 목록, 행 수) */
@@ -563,8 +602,16 @@ export const commands = {
 	fsRecoveryWarnings: () => __TAURI_INVOKE<string[]>("fs_recovery_warnings"),
 	/**  코어 검색 종료 후 토큰을 정리한다. */
 	workspaceSearch: (session: number, request: string, query: WorkspaceSearchQuery) => __TAURI_INVOKE<WorkspaceSearchResult_Serialize>("workspace_search", { session, request, query }),
-	/**  요청 식별자로 진행 중 검색을 취소한다. */
+	/**  요청 식별자로 진행 중 검색·파일 목록 읽기를 취소한다. */
 	workspaceSearchCancel: (session: number, request: string) => __TAURI_INVOKE<void>("workspace_search_cancel", { session, request }),
+	/**  빠른 열기용 파일 목록을 읽는다. 취소는 검색과 같은 `workspace_search_cancel` 로 한다. */
+	workspaceFiles: (session: number, request: string) => __TAURI_INVOKE<WorkspaceFileList>("workspace_files", { session, request }),
+	/**  여러 파일 바꾸기 미리보기. 취소는 검색과 같은 `workspace_search_cancel` 로 한다. */
+	workspaceReplacePreview: (session: number, request: string, query: ReplaceQuery) => __TAURI_INVOKE<ReplacePreview_Serialize>("workspace_replace_preview", { session, request, query }),
+	/**  미리보기에서 고른 파일을 바꾼다. 파일마다 결과(바꿈·건너뜀·실패)를 돌려준다. */
+	workspaceReplaceApply: (session: number, plan: ReplacePlan) => __TAURI_INVOKE<ReplaceOutcome[]>("workspace_replace_apply", { session, plan }),
+	/**  바꾼 파일을 폐기 백업 사본으로 되돌린다. 바꾼 뒤 또 바뀐 파일은 건너뛴다. */
+	workspaceReplaceUndo: (session: number, items: ReplaceUndo[]) => __TAURI_INVOKE<ReplaceUndoOutcome[]>("workspace_replace_undo", { session, items }),
 	/**
 	 *  세션 루트 기준 상대 디렉터리 하나의 항목 (FS-01~05·09). `dir` 이 빈 문자열이면 루트, `limit` 이 없으면
 	 *  2,000 (1~50,000 으로 맞춘다). 루트 밖·`..`·절대 경로·`.git`·링크 나열·경로 중간의 링크는 거부한다
@@ -574,10 +621,23 @@ export const commands = {
 	fsReadFile: (session: number, path: string) => __TAURI_INVOKE<FsFileDto>("fs_read_file", { session, path }),
 	/**  세션 루트의 이미지를 정규 파일과 5 MiB 상한 안에서 읽는다. */
 	fsReadImage: (session: number, path: string) => __TAURI_INVOKE<FsImageDto>("fs_read_image", { session, path }),
-	/**  안전한 원문 편집 조회를 세션 루트에 한정한다. */
-	fsReadEditableFile: (session: number, path: string) => __TAURI_INVOKE<FsEditableFileDto>("fs_read_editable_file", { session, path }),
-	/**  expected revision과 현재 파일이 같을 때만 원문을 저장한다. */
-	fsSaveFile: (session: number, path: string, expectedRevision: string, text: string) => __TAURI_INVOKE<FsSaveResultDto>("fs_save_file", { session, path, expectedRevision, text }),
+	/**
+	 *  안전한 원문 편집 조회를 세션 루트에 한정한다. `encoding` 을 주면 그 인코딩으로만 읽는다 (사용자가 고른 인코딩, R2).
+	 *  없으면 BOM·UTF-8·후보 차례로 정한다
+	 */
+	fsReadEditableFile: (session: number, path: string, encoding: FsEncodingDto | null) => __TAURI_INVOKE<FsEditableFileDto_Serialize>("fs_read_editable_file", { session, path, encoding }),
+	/**  열린 편집기의 주기 검사용 표지 (원문을 읽지 않는 메타데이터 묶음). 경로마다 하나, 일반 파일이 아니면 null */
+	fsFileStamps: (session: number, paths: string[]) => __TAURI_INVOKE<(string | null)[]>("fs_file_stamps", { session, paths }),
+	/**
+	 *  expected revision과 현재 파일이 같을 때만 원문을 저장한다. 원문은 `encoding`(없으면 UTF-8)으로 다시 써서 저장하고,
+	 *  revision 은 같은 인코딩으로 읽은 조회의 것이어야 한다 (R2)
+	 */
+	fsSaveFile: (session: number, path: string, expectedRevision: string, text: string, encoding: FsEncodingDto | null) => __TAURI_INVOKE<FsSaveResultDto>("fs_save_file", { session, path, expectedRevision, text, encoding }),
+	/**
+	 *  줄 끝이 섞인 파일을 `line_ending` 하나로 통일해 저장한다. expected revision 과 현재 파일이 같을 때만 쓴다. 원문은
+	 *  `encoding`(없으면 UTF-8)으로 읽고 같은 인코딩으로 다시 쓴다 (R2)
+	 */
+	fsNormalizeLineEndings: (session: number, path: string, expectedRevision: string, lineEnding: FsLineEndingDto, encoding: FsEncodingDto | null) => __TAURI_INVOKE<FsSaveResultDto>("fs_normalize_line_endings", { session, path, expectedRevision, lineEnding, encoding }),
 	/**  포인터 변경 사이의 commit (SUB-04) */
 	submodulePointerLog: (session: number, path: string, old: string | null, newOid: string) => __TAURI_INVOKE<SubmodulePointerLogDto>("submodule_pointer_log", { session, path, old, newOid }),
 	/**  서브모듈 추가 (SUB-05) */
@@ -764,6 +824,16 @@ export type AutoSuggestionDto_Serialize = {
 	resolution: AutoResolutionDto | null,
 };
 
+/**  하루 한 번 자동 백업 정리의 결과 */
+export type BackupPruneDto = {
+	/**  정리를 실제로 돌렸다 (하루 안에 이미 했으면 false) */
+	ran: boolean,
+	/**  지운 백업 ref 수 */
+	refs: number,
+	/**  지운 폐기 백업 수 */
+	files: number,
+};
+
 /**  discard 백업 항목 */
 export type BackupRecord = {
 	id: number,
@@ -786,7 +856,9 @@ export type BatchMergeMode = "default" | "noFf" | "ffOnly" | "squash";
 export type BatchOpDto = BatchOpDto_Serialize | BatchOpDto_Deserialize;
 
 /**  일괄 작업 */
-export type BatchOpDto_Deserialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Deserialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | 
+/**  업스트림으로 push. `newUpstream` 이 있으면 업스트림이 없는 branch 를 새 업스트림으로 게시한다 (없으면 건너뜀) */
+{ kind: "push"; newUpstream?: NewUpstreamDto_Deserialize | null } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint?: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
@@ -794,10 +866,24 @@ startPoint?: string | null } | { kind: "checkout"; name: string } |
 /**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
 { kind: "updateBranch"; name: string } | 
 /**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
-{ kind: "renameBranch"; from: string; to: string };
+{ kind: "renameBranch"; from: string; to: string } | 
+/**
+ *  변경이 있는 저장소마다 stash 저장. 메시지 끝에 묶음 표시 `[mgit-batch:<batch>]` 를 붙인다. 미추적 파일은
+ *  `includeUntracked` 일 때만
+ */
+{ kind: "stashPush"; batch: string; message?: string | null; includeUntracked: boolean } | 
+/**  묶음 `batch` 의 stash 항목을 저장소마다 찾아 적용 후 지운다. 충돌이면 항목을 남긴다 */
+{ kind: "stashPop"; batch: string } | 
+/**
+ *  저장소마다 그 작업 트리에서 git 명령 하나를 실행한다 (MR-14). `args` 는 `git` 뒤의 인자 배열이고 셸을 거치지
+ *  않는다. 종료 코드가 0 이 아니면 실패다
+ */
+{ kind: "runCommand"; args: string[] };
 
 /**  일괄 작업 */
-export type BatchOpDto_Serialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Serialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | 
+/**  업스트림으로 push. `newUpstream` 이 있으면 업스트림이 없는 branch 를 새 업스트림으로 게시한다 (없으면 건너뜀) */
+{ kind: "push"; newUpstream: NewUpstreamDto_Serialize | null } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
@@ -805,7 +891,19 @@ startPoint: string | null } | { kind: "checkout"; name: string } |
 /**  로컬 branch 를 업스트림으로 fast-forward (BR-09). checkout 하지 않은 branch 도 갱신한다 */
 { kind: "updateBranch"; name: string } | 
 /**  로컬 branch `from` 의 이름을 `to` 로 (`git branch -m`). branch 가 없거나 새 이름이 이미 있는 저장소는 건너뛴다 */
-{ kind: "renameBranch"; from: string; to: string };
+{ kind: "renameBranch"; from: string; to: string } | 
+/**
+ *  변경이 있는 저장소마다 stash 저장. 메시지 끝에 묶음 표시 `[mgit-batch:<batch>]` 를 붙인다. 미추적 파일은
+ *  `includeUntracked` 일 때만
+ */
+{ kind: "stashPush"; batch: string; message: string | null; includeUntracked: boolean } | 
+/**  묶음 `batch` 의 stash 항목을 저장소마다 찾아 적용 후 지운다. 충돌이면 항목을 남긴다 */
+{ kind: "stashPop"; batch: string } | 
+/**
+ *  저장소마다 그 작업 트리에서 git 명령 하나를 실행한다 (MR-14). `args` 는 `git` 뒤의 인자 배열이고 셸을 거치지
+ *  않는다. 종료 코드가 0 이 아니면 실패다
+ */
+{ kind: "runCommand"; args: string[] };
 
 /**  일괄 pull 방식 */
 export type BatchPullModeDto = "ffOnly" | "rebase" | "merge";
@@ -818,8 +916,11 @@ export type BatchResult_Deserialize = {
 	label: string,
 	results: RepoResult_Deserialize[],
 	succeeded: number,
+	/**  건너뛴 저장소 (취소된 것은 빼고 `cancelled` 로 센다) */
 	skipped: number,
 	failed: number,
+	/**  취소돼 끝내지 못한 저장소 수 (0 이면 빠진다). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이 만들기 때문이다 */
+	cancelled?: number | null,
 };
 
 /**  일괄 작업 결과 */
@@ -827,8 +928,11 @@ export type BatchResult_Serialize = {
 	label: string,
 	results: RepoResult_Serialize[],
 	succeeded: number,
+	/**  건너뛴 저장소 (취소된 것은 빼고 `cancelled` 로 센다) */
 	skipped: number,
 	failed: number,
+	/**  취소돼 끝내지 못한 저장소 수 (0 이면 빠진다). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이 만들기 때문이다 */
+	cancelled?: number,
 };
 
 /**  바이너리 크기 변화 */
@@ -1008,6 +1112,35 @@ export type CheckoutTargetDto_Serialize = { kind: "branch"; name: string } |
 /**  `local` 은 만들 로컬 브랜치 이름. 없으면 원격 브랜치 이름을 쓴다 */
 { kind: "remoteBranch"; remote: string; name: string; local: string | null } | { kind: "commit"; oid: string } | { kind: "newBranch"; name: string; start: string | null };
 
+/**  여러 저장소 clone 요청. 서브모듈·경량 복제 옵션은 모든 대상에 같게 건다 */
+export type CloneBatchRequest = CloneBatchRequest_Serialize | CloneBatchRequest_Deserialize;
+
+/**  여러 저장소 clone 요청. 서브모듈·경량 복제 옵션은 모든 대상에 같게 건다 */
+export type CloneBatchRequest_Deserialize = {
+	/**  대상 폴더들을 만들 상위 폴더 (있어야 한다) */
+	parent: string,
+	targets: CloneTargetDto[],
+	recurseSubmodules: boolean,
+	depth?: number | null,
+	blobless: boolean,
+	singleBranch: boolean,
+	/**  동시 clone 수 (1~4). 빠뜨리면 2 */
+	concurrency?: number | null,
+};
+
+/**  여러 저장소 clone 요청. 서브모듈·경량 복제 옵션은 모든 대상에 같게 건다 */
+export type CloneBatchRequest_Serialize = {
+	/**  대상 폴더들을 만들 상위 폴더 (있어야 한다) */
+	parent: string,
+	targets: CloneTargetDto[],
+	recurseSubmodules: boolean,
+	depth: number | null,
+	blobless: boolean,
+	singleBranch: boolean,
+	/**  동시 clone 수 (1~4). 빠뜨리면 2 */
+	concurrency: number | null,
+};
+
 /**  clone 요청 */
 export type CloneRequest = CloneRequest_Serialize | CloneRequest_Deserialize;
 
@@ -1033,6 +1166,12 @@ export type CloneRequest_Serialize = {
 	depth: number | null,
 	blobless: boolean,
 	singleBranch: boolean,
+};
+
+/**  여러 저장소 clone 의 대상 하나: URL 과 상위 폴더 아래에 만들 폴더 이름 */
+export type CloneTargetDto = {
+	url: string,
+	name: string,
 };
 
 /**  명령 로그 한 줄 (SF-01) */
@@ -1062,6 +1201,39 @@ export type CommandLogRecord_Serialize = {
 	stderrTail: string,
 	isWrite: boolean,
 	cancelled: boolean,
+};
+
+/**  일괄 명령(MR-14)을 실행한 저장소 하나의 종료 코드·소요 시간·출력 */
+export type CommandOutputDto = CommandOutputDto_Serialize | CommandOutputDto_Deserialize;
+
+/**  일괄 명령(MR-14)을 실행한 저장소 하나의 종료 코드·소요 시간·출력 */
+export type CommandOutputDto_Deserialize = {
+	/**  종료 코드. 시그널로 끝났거나 취소했으면 null */
+	status?: number | null,
+	elapsedMs: number,
+	/**  stdout 앞부분 (저장소마다 1 MiB 까지, URL 자격 증명 가림) */
+	stdout: string,
+	/**  stdout 이 상한을 넘어 뒷부분을 버렸다 */
+	stdoutTruncated: boolean,
+	/**  stderr 끝부분 (64 KiB 까지, URL 자격 증명 가림) */
+	stderr: string,
+	/**  stderr 앞부분이 잘렸을 수 있다 */
+	stderrTruncated: boolean,
+};
+
+/**  일괄 명령(MR-14)을 실행한 저장소 하나의 종료 코드·소요 시간·출력 */
+export type CommandOutputDto_Serialize = {
+	/**  종료 코드. 시그널로 끝났거나 취소했으면 null */
+	status: number | null,
+	elapsedMs: number,
+	/**  stdout 앞부분 (저장소마다 1 MiB 까지, URL 자격 증명 가림) */
+	stdout: string,
+	/**  stdout 이 상한을 넘어 뒷부분을 버렸다 */
+	stdoutTruncated: boolean,
+	/**  stderr 끝부분 (64 KiB 까지, URL 자격 증명 가림) */
+	stderr: string,
+	/**  stderr 앞부분이 잘렸을 수 있다 */
+	stderrTruncated: boolean,
 };
 
 /**  명령 실행 결과 */
@@ -1544,11 +1716,32 @@ export type FolderBranchesDto_Serialize = {
 	branches: FolderBranchDto_Serialize[],
 };
 
-/**  폴더 세션 열기 결과 */
-export type FolderOpened = {
+/**
+ *  폴더 세션 열기 결과 (`open_folder`·`open_group`). 그룹이면 `path` 가 세션 키 `mgit-group:<id>` 이고 `group` 에 멤버
+ *  상태가 있다. 폴더면 `group` 이 빠진다 (TS 선택 필드)
+ */
+export type FolderOpened = FolderOpened_Serialize | FolderOpened_Deserialize;
+
+/**
+ *  폴더 세션 열기 결과 (`open_folder`·`open_group`). 그룹이면 `path` 가 세션 키 `mgit-group:<id>` 이고 `group` 에 멤버
+ *  상태가 있다. 폴더면 `group` 이 빠진다 (TS 선택 필드)
+ */
+export type FolderOpened_Deserialize = {
 	session: number,
 	path: string,
 	repos: FoundRepo[],
+	group?: GroupInfo_Deserialize | null,
+};
+
+/**
+ *  폴더 세션 열기 결과 (`open_folder`·`open_group`). 그룹이면 `path` 가 세션 키 `mgit-group:<id>` 이고 `group` 에 멤버
+ *  상태가 있다. 폴더면 `group` 이 빠진다 (TS 선택 필드)
+ */
+export type FolderOpened_Serialize = {
+	session: number,
+	path: string,
+	repos: FoundRepo[],
+	group?: GroupInfo_Serialize,
 };
 
 /**  폴더 설정 */
@@ -1616,8 +1809,51 @@ export type FsDirListingDto_Serialize =
 /**  권한이 없어 읽지 못했다 */
 { kind: "denied" };
 
-/**  원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. */
-export type FsEditableFileDto = { kind: "text"; text: string; size: number; fileKey: string; revision: string; lineEnding: FsLineEndingDto; bom: boolean } | { kind: "binary"; size: number } | { kind: "notUtf8"; size: number } | { kind: "tooLarge"; size: number; limit: number } | { kind: "unsupported"; fileKind: FsEntryKindDto } | { kind: "missing" } | { kind: "denied" } | { kind: "mixedLineEndings" };
+/**
+ *  원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. 원문은 `encoding` 으로 디코드한
+ *  글자열이고(BOM 은 맨 앞 U+FEFF), `guessed` 는 BOM 없이 UTF-8 이 아니어서 후보 중에서 고른 인코딩이라는 뜻이다 (R2 —
+ *  예전 응답과 맞게 둘 다 선택 필드다: 없으면 UTF-8)
+ */
+export type FsEditableFileDto = FsEditableFileDto_Serialize | FsEditableFileDto_Deserialize;
+
+/**
+ *  원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. 원문은 `encoding` 으로 디코드한
+ *  글자열이고(BOM 은 맨 앞 U+FEFF), `guessed` 는 BOM 없이 UTF-8 이 아니어서 후보 중에서 고른 인코딩이라는 뜻이다 (R2 —
+ *  예전 응답과 맞게 둘 다 선택 필드다: 없으면 UTF-8)
+ */
+export type FsEditableFileDto_Deserialize = { kind: "text"; text: string; size: number; fileKey: string; revision: string; lineEnding: FsLineEndingDto; bom: boolean; encoding?: FsEncodingDto | null; guessed?: boolean | null } | { kind: "binary"; size: number } | { kind: "notUtf8"; size: number } | { kind: "tooLarge"; size: number; limit: number } | { kind: "unsupported"; fileKind: FsEntryKindDto } | { kind: "missing" } | { kind: "denied" } | 
+/**
+ *  줄 끝이 섞였거나 단독 CR 이 있어 편집할 수 없다. 원문은 읽기 전용으로 보이고, revision 은 줄 끝 통일
+ *  저장(`fs_normalize_line_endings`)의 비교 기준이다. `lf`·`crlf`·`cr` 은 줄 끝 종류별 개수다
+ */
+{ kind: "mixedLineEndings"; text: string; size: number; revision: string; lf: number; crlf: number; cr: number; encoding?: FsEncodingDto | null; guessed?: boolean | null } | 
+/**
+ *  같은 인코딩으로 다시 쓰면 원래 바이트와 달라져 편집할 수 없다 (R2). 원문은 읽기 전용으로 보인다. `malformed` 면
+ *  그 인코딩으로 읽을 수 없는 바이트가 U+FFFD 로 보이고, 아니면 같은 글자를 다른 바이트로 쓰게 된다
+ */
+{ kind: "lossy"; text: string; size: number; encoding: FsEncodingDto; guessed: boolean; malformed: boolean };
+
+/**
+ *  원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. 원문은 `encoding` 으로 디코드한
+ *  글자열이고(BOM 은 맨 앞 U+FEFF), `guessed` 는 BOM 없이 UTF-8 이 아니어서 후보 중에서 고른 인코딩이라는 뜻이다 (R2 —
+ *  예전 응답과 맞게 둘 다 선택 필드다: 없으면 UTF-8)
+ */
+export type FsEditableFileDto_Serialize = { kind: "text"; text: string; size: number; fileKey: string; revision: string; lineEnding: FsLineEndingDto; bom: boolean; encoding?: FsEncodingDto; guessed?: boolean } | { kind: "binary"; size: number } | { kind: "notUtf8"; size: number } | { kind: "tooLarge"; size: number; limit: number } | { kind: "unsupported"; fileKind: FsEntryKindDto } | { kind: "missing" } | { kind: "denied" } | 
+/**
+ *  줄 끝이 섞였거나 단독 CR 이 있어 편집할 수 없다. 원문은 읽기 전용으로 보이고, revision 은 줄 끝 통일
+ *  저장(`fs_normalize_line_endings`)의 비교 기준이다. `lf`·`crlf`·`cr` 은 줄 끝 종류별 개수다
+ */
+{ kind: "mixedLineEndings"; text: string; size: number; revision: string; lf: number; crlf: number; cr: number; encoding?: FsEncodingDto; guessed?: boolean } | 
+/**
+ *  같은 인코딩으로 다시 쓰면 원래 바이트와 달라져 편집할 수 없다 (R2). 원문은 읽기 전용으로 보인다. `malformed` 면
+ *  그 인코딩으로 읽을 수 없는 바이트가 U+FFFD 로 보이고, 아니면 같은 글자를 다른 바이트로 쓰게 된다
+ */
+{ kind: "lossy"; text: string; size: number; encoding: FsEncodingDto; guessed: boolean; malformed: boolean };
+
+/**  텍스트 파일 인코딩 (R2). 편집 조회 결과가 알리고, 사용자가 골라 다시 읽거나 저장할 때 보낸다 */
+export type FsEncodingDto = "utf8" | "utf16Le" | "utf16Be" | 
+/**  표준 EUC-KR 표 (CP949 를 품는다) */
+"eucKr" | "shiftJis" | "eucJp" | "gb18030" | "big5" | "windows1252";
 
 /**  디렉터리 항목 하나 */
 export type FsEntryDto = FsEntryDto_Serialize | FsEntryDto_Deserialize;
@@ -1934,6 +2170,129 @@ export type GraphWindow_Serialize = {
 	segments: WindowSegment[],
 	edges: WindowEdge[],
 	stubs: WindowStub_Serialize[],
+};
+
+/**  열린 그룹의 모습 (`FolderOpened.group`, `groupChanged`) */
+export type GroupInfo = GroupInfo_Serialize | GroupInfo_Deserialize;
+
+/**  열린 그룹의 모습 (`FolderOpened.group`, `groupChanged`) */
+export type GroupInfo_Deserialize = {
+	id: string,
+	name: string,
+	members: GroupMemberInfo_Deserialize[],
+};
+
+/**  열린 그룹의 모습 (`FolderOpened.group`, `groupChanged`) */
+export type GroupInfo_Serialize = {
+	id: string,
+	name: string,
+	members: GroupMemberInfo_Serialize[],
+};
+
+/**  그룹 목록 한 줄 (홈 화면·편집 대화상자). 목록은 고정 먼저, 그다음 최근에 연 순이다 */
+export type GroupListItem = GroupListItem_Serialize | GroupListItem_Deserialize;
+
+/**  그룹 목록 한 줄 (홈 화면·편집 대화상자). 목록은 고정 먼저, 그다음 최근에 연 순이다 */
+export type GroupListItem_Deserialize = {
+	id: string,
+	name: string,
+	members: GroupMemberInfo_Deserialize[],
+	pinned: boolean,
+	/**  마지막으로 연 시각 (epoch 밀리초, 연 적 없으면 0) */
+	lastOpenedAt: number | null,
+};
+
+/**  그룹 목록 한 줄 (홈 화면·편집 대화상자). 목록은 고정 먼저, 그다음 최근에 연 순이다 */
+export type GroupListItem_Serialize = {
+	id: string,
+	name: string,
+	members: GroupMemberInfo_Serialize[],
+	pinned: boolean,
+	/**  마지막으로 연 시각 (epoch 밀리초, 연 적 없으면 0) */
+	lastOpenedAt: number | null,
+};
+
+/**  고치기의 멤버 하나 (별칭·경로) */
+export type GroupMemberEdit = {
+	alias: string,
+	path: string,
+};
+
+/**  그룹 멤버 하나 (별칭·경로·상태). `kind` 는 있는 멤버만 */
+export type GroupMemberInfo = GroupMemberInfo_Serialize | GroupMemberInfo_Deserialize;
+
+/**  그룹 멤버 하나 (별칭·경로·상태). `kind` 는 있는 멤버만 */
+export type GroupMemberInfo_Deserialize = {
+	alias: string,
+	path: string,
+	state: GroupMemberState,
+	kind?: RepoKind | null,
+};
+
+/**  그룹 멤버 하나 (별칭·경로·상태). `kind` 는 있는 멤버만 */
+export type GroupMemberInfo_Serialize = {
+	alias: string,
+	path: string,
+	state: GroupMemberState,
+	kind: RepoKind | null,
+};
+
+/**  멤버의 지금 상태 */
+export type GroupMemberState = 
+/**  저장소가 그 자리에 있다 */
+"present" | 
+/**  경로가 없다 (정의는 남고 로스터에서 빠진다) */
+"missing" | 
+/**  경로는 있으나 저장소가 아니다 */
+"notRepo";
+
+/**  경로 확인 한 줄. 고른 폴더 하나가 저장소 여럿으로 펼쳐지면 줄도 여럿이다 (`input` 이 같다) */
+export type GroupPathCheck = GroupPathCheck_Serialize | GroupPathCheck_Deserialize;
+
+/**  경로 확인 한 줄. 고른 폴더 하나가 저장소 여럿으로 펼쳐지면 줄도 여럿이다 (`input` 이 같다) */
+export type GroupPathCheck_Deserialize = {
+	/**  사용자가 고른 경로 */
+	input: string,
+	/**  멤버가 될 저장소 최상위 (못 찾았으면 `input`) */
+	path: string,
+	kind?: RepoKind | null,
+	/**  받아들이면 붙을 별칭 */
+	alias?: string | null,
+	/**  거부 이유 */
+	issue?: GroupPathIssue | null,
+};
+
+/**  경로 확인 한 줄. 고른 폴더 하나가 저장소 여럿으로 펼쳐지면 줄도 여럿이다 (`input` 이 같다) */
+export type GroupPathCheck_Serialize = {
+	/**  사용자가 고른 경로 */
+	input: string,
+	/**  멤버가 될 저장소 최상위 (못 찾았으면 `input`) */
+	path: string,
+	kind: RepoKind | null,
+	/**  받아들이면 붙을 별칭 */
+	alias: string | null,
+	/**  거부 이유 */
+	issue: GroupPathIssue | null,
+};
+
+/**  멤버 후보를 받아들이지 않은 이유 */
+export type GroupPathIssue = "missing" | "notRepo" | "duplicate" | "nested";
+
+/**  그룹 고치기. null 인 항목은 그대로 둔다. `members` 는 바뀐 뒤의 전체 목록이다 (추가·빼기·순서·위치 다시 지정) */
+export type GroupUpdateDto = GroupUpdateDto_Serialize | GroupUpdateDto_Deserialize;
+
+/**  그룹 고치기. null 인 항목은 그대로 둔다. `members` 는 바뀐 뒤의 전체 목록이다 (추가·빼기·순서·위치 다시 지정) */
+export type GroupUpdateDto_Deserialize = {
+	name?: string | null,
+	members?: GroupMemberEdit[] | null,
+	pinned?: boolean | null,
+};
+
+/**  그룹 고치기. null 인 항목은 그대로 둔다. `members` 는 바뀐 뒤의 전체 목록이다 (추가·빼기·순서·위치 다시 지정) */
+export type GroupUpdateDto_Serialize = {
+	name: string | null,
+	members: GroupMemberEdit[] | null,
+	pinned: boolean | null,
 };
 
 /**  HEAD 상태. `branch` 는 `refs/heads/` 를 뗀 짧은 이름이다 */
@@ -2312,6 +2671,21 @@ export type ModuleOverridesDto = {
 	hidden: string[],
 };
 
+/**  일괄 push 의 새 업스트림 게시 규칙. 고르지 않은 저장소는 `origin` 이 있으면 그것으로 보낸다 */
+export type NewUpstreamDto = NewUpstreamDto_Serialize | NewUpstreamDto_Deserialize;
+
+/**  일괄 push 의 새 업스트림 게시 규칙. 고르지 않은 저장소는 `origin` 이 있으면 그것으로 보낸다 */
+export type NewUpstreamDto_Deserialize = {
+	/**  저장소별로 고른 원격 (`origin` 이 없는 저장소의 예외 선택) */
+	remotes?: PushRemoteDto[],
+};
+
+/**  일괄 push 의 새 업스트림 게시 규칙. 고르지 않은 저장소는 `origin` 이 있으면 그것으로 보낸다 */
+export type NewUpstreamDto_Serialize = {
+	/**  저장소별로 고른 원격 (`origin` 이 없는 저장소의 예외 선택) */
+	remotes: PushRemoteDto[],
+};
+
 /**  OAuth App 설정 */
 export type OauthConfigDto = OauthConfigDto_Serialize | OauthConfigDto_Deserialize;
 
@@ -2449,6 +2823,12 @@ export type PullRequestDto_Serialize = {
 	checks: string | null,
 	mergeable: boolean | null,
 	labels: string[],
+};
+
+/**  저장소 하나에 새 업스트림으로 쓸 원격 */
+export type PushRemoteDto = {
+	path: string,
+	remote: string,
 };
 
 /**  push 옵션 */
@@ -2678,6 +3058,158 @@ export type RenameConflictDto = {
 	theirsPath: string,
 };
 
+/**  적용할 파일 하나: 미리보기의 revision 과 뺄 일치 순번 */
+export type ReplaceChoice = {
+	path: string,
+	revision: string,
+	excluded: number[],
+};
+
+/**  일치가 있지만 미리보기에서 뺀 파일 */
+export type ReplaceExcluded = {
+	path: string,
+	reason: ReplaceSkipReason,
+};
+
+/**  바꿀 파일 하나의 미리보기 */
+export type ReplaceFilePreview = ReplaceFilePreview_Serialize | ReplaceFilePreview_Deserialize;
+
+/**  바꿀 파일 하나의 미리보기 */
+export type ReplaceFilePreview_Deserialize = {
+	/**  공간 경로 (루트 기준, 그룹은 `별칭/…`) — 적용·되돌리기에 그대로 보낸다 */
+	path: string,
+	/**  파일을 품은 저장소 디렉터리 (루트 기준, 루트 자신은 "", 그룹 멤버 루트는 별칭) */
+	repo?: string | null,
+	/**  적용 때 다시 비교할 revision (편집 조회와 같은 값) */
+	revision: string,
+	/**  파일 안 일치 수 (보이지 않는 것 포함) */
+	matches: number,
+	lines: ReplaceLine[],
+	/**  `REPLACE_PREVIEW_LINES` 를 넘어 보이지 않는 바뀌는 줄 수 */
+	hiddenLines: number,
+};
+
+/**  바꿀 파일 하나의 미리보기 */
+export type ReplaceFilePreview_Serialize = {
+	/**  공간 경로 (루트 기준, 그룹은 `별칭/…`) — 적용·되돌리기에 그대로 보낸다 */
+	path: string,
+	/**  파일을 품은 저장소 디렉터리 (루트 기준, 루트 자신은 "", 그룹 멤버 루트는 별칭) */
+	repo: string | null,
+	/**  적용 때 다시 비교할 revision (편집 조회와 같은 값) */
+	revision: string,
+	/**  파일 안 일치 수 (보이지 않는 것 포함) */
+	matches: number,
+	lines: ReplaceLine[],
+	/**  `REPLACE_PREVIEW_LINES` 를 넘어 보이지 않는 바뀌는 줄 수 */
+	hiddenLines: number,
+};
+
+/**  바뀌는 줄 하나 (줄 끝 제외) */
+export type ReplaceLine = {
+	/**  1부터 */
+	line: number,
+	text: string,
+	/**  긴 줄이라 앞을 잘랐다 */
+	cutStart: boolean,
+	/**  긴 줄이라 뒤를 잘랐다 */
+	cutEnd: boolean,
+	matches: ReplaceMatch[],
+	/**  잘린 부분에 있어 보이지 않는 일치 수 (파일 체크를 따른다) */
+	hidden: number,
+};
+
+/**  미리보기 줄의 일치 하나. 위치는 줄 `text` 안의 UTF-16 단위다 */
+export type ReplaceMatch = {
+	/**  파일 안 일치 순번 (0부터, 줄 순서). 적용에서 뺄 일치를 이 값으로 고른다 */
+	index: number,
+	start: number,
+	end: number,
+	/**  이 일치 자리에 들어갈 글자 (묶음을 펼친 것) */
+	replacement: string,
+};
+
+/**  파일 하나의 적용 결과 */
+export type ReplaceOutcome = 
+/**  바꿨다. `backup` 은 원문을 담은 폐기 백업, `revision` 은 바꾼 뒤 파일의 것 (되돌리기의 비교 기준) */
+{ kind: "applied"; path: string; replaced: number; backup: number; revision: string } | { kind: "skipped"; path: string; reason: ReplaceSkipReason } | { kind: "failed"; path: string; message: string };
+
+/**  찾을 것과 바꿀 것. 미리보기와 적용이 같은 값을 보낸다 */
+export type ReplacePattern = {
+	text: string,
+	regex: boolean,
+	caseSensitive: boolean,
+	/**  정규식이면 `$1`·`${name}` 을 묶음으로 펼친다 (일치 전체는 `$0`, 글자 `$` 는 `$$`). 아니면 글자 그대로 */
+	replacement: string,
+};
+
+/**  적용 요청. `pattern` 은 미리보기와 같아야 순번이 같은 일치를 가리킨다 (revision 이 같으면 원문도 같다) */
+export type ReplacePlan = {
+	pattern: ReplacePattern,
+	files: ReplaceChoice[],
+};
+
+/**  미리보기 결과 */
+export type ReplacePreview = ReplacePreview_Serialize | ReplacePreview_Deserialize;
+
+/**  미리보기 결과 */
+export type ReplacePreview_Deserialize = {
+	files: ReplaceFilePreview_Deserialize[],
+	excluded: ReplaceExcluded[],
+	/**  텍스트로 읽지 못해 찾아보지 않은 파일 수 (1 MiB 초과·바이너리·UTF-8 아님·권한 없음) */
+	unreadable: number,
+	/**  파일 수 상한(`REPLACE_FILE_LIMIT`)이나 후보 상한에 걸렸다 */
+	truncated: boolean,
+	cancelled: boolean,
+};
+
+/**  미리보기 결과 */
+export type ReplacePreview_Serialize = {
+	files: ReplaceFilePreview_Serialize[],
+	excluded: ReplaceExcluded[],
+	/**  텍스트로 읽지 못해 찾아보지 않은 파일 수 (1 MiB 초과·바이너리·UTF-8 아님·권한 없음) */
+	unreadable: number,
+	/**  파일 수 상한(`REPLACE_FILE_LIMIT`)이나 후보 상한에 걸렸다 */
+	truncated: boolean,
+	cancelled: boolean,
+};
+
+/**  미리보기 요청: 찾고 바꿀 것과 내용 검색의 범위·경로 필터 */
+export type ReplaceQuery = {
+	pattern: ReplacePattern,
+	pathFilter: string,
+	scope: string,
+	/**
+	 *  편집기에 저장하지 않은 초안이 있는 파일 (공간 경로 — 루트 기준, 그룹은 `별칭/…`). 디스크 원문에 일치가 있으면
+	 *  바꾸지 않고 사유를 남긴다
+	 */
+	drafts: string[],
+};
+
+/**  파일을 바꾸지 않은 사유 */
+export type ReplaceSkipReason = 
+/**  편집기에 저장하지 않은 초안이 있다 */
+"draft" | 
+/**  줄 끝이 섞였거나 단독 CR 이 있다 */
+"mixedLineEndings" | 
+/**  Git 저장소 밖 파일이다 (되돌릴 사본을 맡길 저장소가 없다) */
+"outsideRepository" | 
+/**  미리보기 뒤에 파일이 바뀌었다 (revision 불일치·지워짐) */
+"changed" | 
+/**  고른 일치가 없거나 바꿔도 원문과 같다 */
+"unchanged";
+
+/**  되돌릴 파일 하나: 적용 결과의 백업과 바꾼 뒤 revision */
+export type ReplaceUndo = {
+	path: string,
+	backup: number,
+	revision: string,
+};
+
+/**  파일 하나의 되돌리기 결과 */
+export type ReplaceUndoOutcome = { kind: "restored"; path: string } | 
+/**  바꾼 뒤 파일이 또 바뀌어 덮어쓰지 않았다 (사본은 폐기 백업에 남아 있다) */
+{ kind: "skipped"; path: string; reason: ReplaceSkipReason } | { kind: "failed"; path: string; message: string };
+
 /**  저장소 하나의 변경 */
 export type RepoChanges = RepoChanges_Serialize | RepoChanges_Deserialize;
 
@@ -2697,6 +3229,12 @@ export type RepoChanges_Serialize = {
 	branch: string | null,
 	entries: StatusEntry_Serialize[],
 	summary: StatusSummary_Serialize,
+};
+
+/**  일괄 commit 에서 공통 메시지 대신 쓸 저장소 하나의 메시지. 비었거나 공백뿐이면 공통 메시지를 쓴다 */
+export type RepoCommitMessageDto = {
+	path: string,
+	message: string,
 };
 
 /**  열린 저장소 정보. 경로는 표시용 문자열이다 */
@@ -2816,6 +3354,14 @@ export type RepoResult_Deserialize = {
 	moved?: RefMove | null,
 	branchDeletion?: BranchDeletionResult | null,
 	integration?: IntegrationOutcome | null,
+	/**  일괄 push 가 새로 지정한 업스트림 (`<원격>/<branch>`). 업스트림이 없던 branch 를 게시했을 때만 */
+	upstreamSet?: string | null,
+	/**  일괄 작업을 취소해 끝내지 못한 저장소 (시작 전 취소, 또는 실행 중 멈춤)면 true. 건너뜀·실패와 따로 센다 */
+	cancelled?: boolean | null,
+	/**  커밋하지 않은 변경이 있어 건너뛰었으면 true (pull·checkout·branch 업데이트). 결과 알림이 stash 후 다시 실행을 안내한다 */
+	skippedDirty?: boolean | null,
+	/**  일괄 명령(MR-14)의 종료 코드·소요 시간·출력. 명령을 실행했을 때만 */
+	command?: CommandOutputDto_Deserialize | null,
 };
 
 /**  저장소 하나의 결과 */
@@ -2832,6 +3378,14 @@ export type RepoResult_Serialize = {
 	moved?: RefMove,
 	branchDeletion?: BranchDeletionResult,
 	integration?: IntegrationOutcome,
+	/**  일괄 push 가 새로 지정한 업스트림 (`<원격>/<branch>`). 업스트림이 없던 branch 를 게시했을 때만 */
+	upstreamSet?: string,
+	/**  일괄 작업을 취소해 끝내지 못한 저장소 (시작 전 취소, 또는 실행 중 멈춤)면 true. 건너뜀·실패와 따로 센다 */
+	cancelled?: boolean,
+	/**  커밋하지 않은 변경이 있어 건너뛰었으면 true (pull·checkout·branch 업데이트). 결과 알림이 stash 후 다시 실행을 안내한다 */
+	skippedDirty?: boolean,
+	/**  일괄 명령(MR-14)의 종료 코드·소요 시간·출력. 명령을 실행했을 때만 */
+	command?: CommandOutputDto_Serialize,
 };
 
 /**  `folder_release_repo_session` 응답. 이미 닫혔거나 잡지 않은 세션도 오류가 아니라 이 모양이다 */
@@ -2953,6 +3507,16 @@ export type RepoSummary_Deserialize = {
 	op?: OpKind | null,
 	lastFetch?: number | null,
 	error?: string | null,
+	/**
+	 *  등록된 원격 이름. 업스트림이 없는 branch 에서만 읽는다 (일괄 push 의 새 업스트림 후보). TS 선택 필드인 것은
+	 *  기존 프런트 코드·목이 이 필드 없이 `RepoSummary` 를 만들기 때문이다
+	 */
+	remotes?: string[] | null,
+	/**
+	 *  stash 항목 수 (0 이면 빠진다). 워크트리는 주 저장소와 같은 수다. TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드
+	 *  없이 `RepoSummary` 를 만들기 때문이다
+	 */
+	stashCount?: number | null,
 };
 
 /**  대시보드 한 줄 */
@@ -2971,6 +3535,16 @@ export type RepoSummary_Serialize = {
 	op: OpKind | null,
 	lastFetch: number | null,
 	error: string | null,
+	/**
+	 *  등록된 원격 이름. 업스트림이 없는 branch 에서만 읽는다 (일괄 push 의 새 업스트림 후보). TS 선택 필드인 것은
+	 *  기존 프런트 코드·목이 이 필드 없이 `RepoSummary` 를 만들기 때문이다
+	 */
+	remotes?: string[],
+	/**
+	 *  stash 항목 수 (0 이면 빠진다). 워크트리는 주 저장소와 같은 수다. TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드
+	 *  없이 `RepoSummary` 를 만들기 때문이다
+	 */
+	stashCount?: number,
 };
 
 /**  rerere 상태 */
@@ -3078,7 +3652,12 @@ export type SessionEvent_Deserialize = { type: "graphLoadStarted"; session: numb
  *  목록의 대표 경로(워크트리에서 돈 명령이면 원 저장소 — 요약의 `path` 와 같은 꼴), 실제 작업 디렉터리는
  *  `record.cwd`. 상태를 읽는 명령은 오지 않는다
  */
-{ type: "folderCommandLogged"; session: number; repo: string; record: CommandLogRecord_Deserialize };
+{ type: "folderCommandLogged"; session: number; repo: string; record: CommandLogRecord_Deserialize } | 
+/**
+ *  그룹 세션의 멤버 상태가 바뀌었다 (MR-13, 재스캔 = 멤버 재확인). 같은 재스캔의 `folderRescanned` 바로 뒤에 온다.
+ *  폴더 세션 채널로만, 그룹일 때만 온다
+ */
+{ type: "groupChanged"; session: number; group: GroupInfo_Deserialize };
 
 /**
  *  세션 이벤트. 그래프 이벤트의 `generation` 이 현재 값보다 작으면 프런트는 무시한다.
@@ -3106,7 +3685,12 @@ export type SessionEvent_Serialize = { type: "graphLoadStarted"; session: number
  *  목록의 대표 경로(워크트리에서 돈 명령이면 원 저장소 — 요약의 `path` 와 같은 꼴), 실제 작업 디렉터리는
  *  `record.cwd`. 상태를 읽는 명령은 오지 않는다
  */
-{ type: "folderCommandLogged"; session: number; repo: string; record: CommandLogRecord_Serialize };
+{ type: "folderCommandLogged"; session: number; repo: string; record: CommandLogRecord_Serialize } | 
+/**
+ *  그룹 세션의 멤버 상태가 바뀌었다 (MR-13, 재스캔 = 멤버 재확인). 같은 재스캔의 `folderRescanned` 바로 뒤에 온다.
+ *  폴더 세션 채널로만, 그룹일 때만 온다
+ */
+{ type: "groupChanged"; session: number; group: GroupInfo_Serialize };
 
 /**  저장소 세션 프로필 (계획 5.1절). 탭 = `full`, 폴더 화면의 가벼운 세션 = `light`(그래프·자동 fetch 없음) */
 export type SessionProfile = "full" | "light";
@@ -3161,6 +3745,56 @@ export type SshKeyInfoDto = {
 	publicKey: string,
 	kind: string,
 	comment: string,
+};
+
+/**  저장소들의 stash 목록에서 모은 일괄 stash 묶음 */
+export type StashBatchDto = StashBatchDto_Serialize | StashBatchDto_Deserialize;
+
+/**  저장소들의 stash 목록에서 모은 일괄 stash 묶음 */
+export type StashBatchDto_Deserialize = {
+	id: string,
+	/**  사용자 메시지 (묶음 표시를 뺀 것, 없으면 빈 문자열) */
+	message: string,
+	/**  가장 최근 항목의 시각 (epoch 초) */
+	time: number,
+	repos: StashBatchRepoDto_Deserialize[],
+};
+
+/**  저장소들의 stash 목록에서 모은 일괄 stash 묶음 */
+export type StashBatchDto_Serialize = {
+	id: string,
+	/**  사용자 메시지 (묶음 표시를 뺀 것, 없으면 빈 문자열) */
+	message: string,
+	/**  가장 최근 항목의 시각 (epoch 초) */
+	time: number,
+	repos: StashBatchRepoDto_Serialize[],
+};
+
+/**  일괄 stash 묶음에서 저장소 하나의 항목 */
+export type StashBatchRepoDto = StashBatchRepoDto_Serialize | StashBatchRepoDto_Deserialize;
+
+/**  일괄 stash 묶음에서 저장소 하나의 항목 */
+export type StashBatchRepoDto_Deserialize = {
+	path: string,
+	name: string,
+	/**  지금 `stash@{n}` 의 n (꺼낼 때는 묶음 표시로 다시 찾는다) */
+	index: number,
+	/**  저장할 때의 branch (분리 HEAD 면 null) */
+	branch?: string | null,
+	/**  만든 시각 (epoch 초) */
+	time: number,
+};
+
+/**  일괄 stash 묶음에서 저장소 하나의 항목 */
+export type StashBatchRepoDto_Serialize = {
+	path: string,
+	name: string,
+	/**  지금 `stash@{n}` 의 n (꺼낼 때는 묶음 표시로 다시 찾는다) */
+	index: number,
+	/**  저장할 때의 branch (분리 HEAD 면 null) */
+	branch: string | null,
+	/**  만든 시각 (epoch 초) */
+	time: number,
 };
 
 /**  스태시 + 출처 워크트리 */
@@ -3656,6 +4290,20 @@ export type WorkTreeStatus_Serialize = {
 	stashCount: number,
 	entries: StatusEntry_Serialize[],
 	summary: StatusSummary_Serialize,
+};
+
+/**  빠른 열기(⌘P)가 프런트에서 거르고 순위를 매길 파일 목록. 후보는 내용 검색과 같은 순회로 고른다 */
+export type WorkspaceFileList = {
+	/**  루트 기준 상대 경로(`/` 구분, 그룹은 `별칭/…`). 바이트 순으로 정렬돼 있다 */
+	files: string[],
+	/**
+	 *  `.git` 이 있는 디렉터리의 루트 기준 상대 경로(루트 자신은 `""`, 그룹 멤버 루트는 별칭). 파일의 저장소는 그
+	 *  파일을 품은 가장 긴 디렉터리다 (내용 검색 결과의 `repo` 와 같은 규칙)
+	 */
+	repos: string[],
+	skipped: number,
+	truncated: boolean,
+	cancelled: boolean,
 };
 
 export type WorkspaceSearchHit = WorkspaceSearchHit_Serialize | WorkspaceSearchHit_Deserialize;

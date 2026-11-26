@@ -44,6 +44,32 @@ describe('visibleSummaries', () => {
       'b',
     ]);
   });
+
+  it('보낼 것 있음·업스트림 없음·stash 있음 필터와 stash 수 정렬 (셋째 묶음 K)', () => {
+    const list = [
+      summary({ name: 'push', ahead: 2, behind: 0, stashCount: 1 }),
+      summary({ name: 'synced', ahead: 0, behind: 4 }),
+      // 업스트림이 없는 branch (ahead 가 비어 있다)
+      summary({ name: 'fresh', stashCount: 3 }),
+      // 분리 HEAD·상태를 못 읽은 줄은 업스트림 없음에 들지 않는다
+      summary({ name: 'detached', branch: null, detached: true }),
+      summary({ name: 'broken', branch: null, error: 'x' }),
+      summary({ name: 'unborn-error', branch: 'main', error: 'x' }),
+    ];
+    const names = (filter: Parameters<typeof visibleSummaries>[1], sort: 'name' | 'stash') =>
+      visibleSummaries([...list], filter, sort).map((r) => r.name);
+    expect(names('ahead', 'name')).toEqual(['push']);
+    expect(names('noUpstream', 'name')).toEqual(['fresh']);
+    expect(names('stashed', 'name')).toEqual(['fresh', 'push']);
+    expect(names('all', 'stash')).toEqual([
+      'fresh',
+      'push',
+      'broken',
+      'detached',
+      'synced',
+      'unborn-error',
+    ]);
+  });
 });
 
 describe('FolderStore', () => {

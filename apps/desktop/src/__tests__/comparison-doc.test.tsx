@@ -224,7 +224,7 @@ it.each(['keyboard', 'button'])(
     document.addEventListener('keydown', handler);
     try {
       const target = doc();
-      render(<ComparisonDoc doc={target} />);
+      const { rerender } = render(<ComparisonDoc doc={target} />);
       /** 갱신의 로딩 구간을 확정해 준비 전 화면을 준비 완료로 오인하지 않는다. */
       const refresh = async () => {
         let release = () => {};
@@ -282,6 +282,11 @@ it.each(['keyboard', 'button'])(
       await waitFor(() =>
         expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
       );
+      // 파일 도착 효과(DiffView 의 첫 변경 이동·포커스)는 렌더 뒤 효과라, 위 waitFor 는 같은 커밋의 레이아웃 효과가 준
+      // 포커스로 먼저 끝날 수 있다. 남은 효과가 아래 바깥 포커스 뒤에 돌면 포커스를 되가져간다 (waitFor 끝의
+      // setTimeout(0) 과 React 효과의 차례가 부하에 따라 바뀐다). 같은 화면을 다시 그려 React 가 새 렌더 전에 남은
+      // 효과를 먼저 비우게 한다
+      rerender(<ComparisonDoc doc={target} />);
       const outside = document.createElement('input');
       document.body.append(outside);
       act(() => outside.focus());

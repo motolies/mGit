@@ -557,12 +557,172 @@ export function sameSessionDocs(a: readonly EditorDoc[], b: readonly EditorDoc[]
   return a.length === b.length && a.every((doc, i) => JSON.stringify(doc) === JSON.stringify(b[i]));
 }
 
+/**
+ * 저장해 둔 문서를 다시 연다 (재시작 뒤 편집기 탭 복원): 이미 열린 것은 그대로 두고 나머지를 차례로 끝에 고정 탭으로
+ * 더한다. `activeId` 가 열려 있으면 그것을 보이고, 없으면 지금 보던 문서를, 그것도 없으면 마지막으로 더한 문서를 보인다.
+ * 본 순서에는 더한 차례대로 넣어 탭을 닫았을 때 돌아갈 곳이 생기게 한다
+ */
+export function docsRestored(
+  tabs: EditorTabs,
+  docs: readonly DocRequest[],
+  activeId: string | null,
+): EditorTabs {
+  const added = docs
+    .filter(
+      (doc, index) => !hasDoc(tabs, doc.id) && docs.findIndex((d) => d.id === doc.id) === index,
+    )
+    .map((doc): EditorDoc => ({ ...doc, pinned: true }));
+  const next: EditorTabs = {
+    ...tabs,
+    docs: [...tabs.docs, ...added],
+    recentDocIds: [...tabs.recentDocIds, ...added.map((doc) => doc.id)],
+  };
+  const target =
+    activeId !== null && hasDoc(next, activeId)
+      ? activeId
+      : (tabs.activeDocId ?? added.at(-1)?.id ?? null);
+  return target === null ? next : docActivated(next, target);
+}
+
 /** 미리보기 탭을 고정 탭으로 바꾼다 */
 export function docPinned(tabs: EditorTabs, id: string): EditorTabs {
   if (!tabs.docs.some((d) => d.id === id && !d.pinned)) {
     return tabs;
   }
   return { ...tabs, docs: tabs.docs.map((d) => (d.id === id ? { ...d, pinned: true } : d)) };
+}
+
+// ── 편집기 분할 (R3) ─────────────────────────────────────────────────────────────────
+// 편집기 공간은 왼쪽(기본) 그룹 하나 또는 왼쪽·오른쪽 두 그룹이다. 왼쪽 그룹은 지금까지의 탭 상태(`docs`·`sessionDocs`·
+// `activeDocId`·`recentDocIds`) 그대로이고, 오른쪽 그룹(`split`)은 파일 문서만 담는다 — diff·충돌·개요·비교·태그 문서는
+// 세션 슬롯·저장소마다 하나라 왼쪽에만 둔다. 같은 파일을 두 그룹에 열어도 편집 상태(초안)는 `fileEditors` 의 문서 하나를
+// 함께 쓴다. 한 그룹의 마지막 탭이 닫히면 그 그룹이 사라져 분할이 풀린다
+
+/** 편집기 그룹: 왼쪽(기본) / 오른쪽 */
+export type EditorGroupId = 'main' | 'side';
+
+/** 오른쪽 그룹의 탭 상태 (파일 문서만, 세션 문서 없음) */
+export interface EditorSplit {
+  docs: EditorDoc[];
+  activeDocId: string | null;
+  recentDocIds: string[];
+}
+
+/** 왼쪽 그룹 폭의 기본값과 범위 (퍼센트) */
+export const SPLIT_RATIO_DEFAULT = 50;
+export const SPLIT_RATIO_MIN = 20;
+export const SPLIT_RATIO_MAX = 80;
+
+/** 왼쪽 그룹 폭을 범위 안으로 맞춘다 (숫자가 아니면 기본값) */
+export function clampSplitRatio(ratio: number): number {
+  return Number.isFinite(ratio)
+    ? Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, ratio))
+    : SPLIT_RATIO_DEFAULT;
+}
+
+/** 오른쪽 그룹을 탭 전이 함수가 다루는 모양으로 (없으면 빈 그룹) */
+export function splitTabs(split: EditorSplit | null): EditorTabs {
+  return split
+    ? {
+        docs: split.docs,
+        sessionDocs: [],
+        activeDocId: split.activeDocId,
+        recentDocIds: split.recentDocIds,
+      }
+    : { docs: [], sessionDocs: [], activeDocId: null, recentDocIds: [] };
+}
+
+/** 탭 상태에서 오른쪽 그룹으로 (세션 문서는 없다) */
+function asSplit(tabs: EditorTabs): EditorSplit {
+  return { docs: tabs.docs, activeDocId: tabs.activeDocId, recentDocIds: tabs.recentDocIds };
+}
+
+/** 두 그룹의 탭 상태와 지금 그룹 */
+export interface GroupedTabs {
+  main: EditorTabs;
+  split: EditorSplit | null;
+  focusedGroup: EditorGroupId;
+}
+
+/**
+ * 그룹 규칙을 맞춘다: 오른쪽 그룹이 비면 분할을 풀고, 왼쪽 그룹이 비었는데 오른쪽에 탭이 있으면 오른쪽 탭들이 왼쪽으로
+ * 옮겨 분할이 풀린다. 분할이 없으면 지금 그룹은 왼쪽이다
+ */
+export function normalizeGroups(grouped: GroupedTabs): GroupedTabs {
+  const { main, split } = grouped;
+  if (!split || split.docs.length === 0) {
+    return { main, split: null, focusedGroup: 'main' };
+  }
+  if (allDocs(main).length === 0) {
+    return {
+      main: {
+        ...main,
+        docs: split.docs,
+        activeDocId: split.activeDocId,
+        recentDocIds: split.recentDocIds,
+      },
+      split: null,
+      focusedGroup: 'main',
+    };
+  }
+  return grouped;
+}
+
+/** 지금 그룹의 보고 있는 문서 (트리에서 찾기·⌘W·Esc 가 보는 문서). 없으면 undefined */
+export function focusedEditorDoc(
+  state: Pick<WorkspaceState, 'docs' | 'sessionDocs' | 'activeDocId' | 'split' | 'focusedGroup'>,
+): EditorDoc | undefined {
+  if (state.split && state.focusedGroup === 'side') {
+    return state.split.docs.find((d) => d.id === state.split?.activeDocId);
+  }
+  return allDocs(state).find((d) => d.id === state.activeDocId);
+}
+
+/** 그 그룹에서 문서를 다른 쪽 그룹에도 연다 (오른쪽으로 분할 — 고정 탭). 파일 문서가 아니면 그대로다 */
+export function docSplit(grouped: GroupedTabs, id: string, from: EditorGroupId): GroupedTabs {
+  const source = from === 'main' ? grouped.main.docs : (grouped.split?.docs ?? []);
+  const doc = source.find((d) => d.id === id);
+  if (doc?.kind !== 'file') {
+    return grouped;
+  }
+  const { pinned: _pinned, ...request } = doc;
+  if (from === 'main') {
+    const side = docOpened(splitTabs(grouped.split), request, 'pinned');
+    return normalizeGroups({ ...grouped, split: asSplit(side), focusedGroup: 'side' });
+  }
+  const main = docOpened(grouped.main, request, 'pinned');
+  return normalizeGroups({ ...grouped, main, focusedGroup: 'main' });
+}
+
+/** 그 그룹의 문서를 다른 쪽 그룹으로 옮긴다 (다른 쪽에 연 뒤 이쪽에서 닫는다). 파일 문서가 아니면 그대로다 */
+export function docMoved(grouped: GroupedTabs, id: string, from: EditorGroupId): GroupedTabs {
+  const opened = docSplit(grouped, id, from);
+  if (opened === grouped) {
+    return grouped;
+  }
+  if (from === 'main') {
+    return normalizeGroups({ ...opened, main: docClosed(opened.main, id) });
+  }
+  const side = docClosed(splitTabs(opened.split), id);
+  return normalizeGroups({ ...opened, split: asSplit(side) });
+}
+
+/** 분할을 푼다: 오른쪽 탭들을 왼쪽 끝에 (이미 있으면 그대로) 고정 탭으로 합치고 오른쪽에서 보던 문서를 보인다 */
+export function groupsMerged(grouped: GroupedTabs): GroupedTabs {
+  if (!grouped.split) {
+    return grouped;
+  }
+  let main = grouped.main;
+  for (const doc of grouped.split.docs) {
+    const { pinned: _pinned, ...request } = doc;
+    main = docOpened(main, request, 'pinned');
+  }
+  const active = grouped.split.activeDocId;
+  return {
+    main: active === null ? main : docActivated(main, active),
+    split: null,
+    focusedGroup: 'main',
+  };
 }
 
 /**
@@ -637,6 +797,11 @@ export interface WorkspaceState extends EditorTabs {
    * 사라진다 (저장하지 않는다)
    */
   commitMessage: string;
+  /**
+   * Commit 도구 창(폴더 모드)의 저장소별 커밋 메시지 초안 (저장소 경로 → 메시지). 없거나 비면 그 저장소는 공통
+   * 메시지(`commitMessage`)로 커밋한다. 공통 메시지처럼 탭을 닫으면 사라진다
+   */
+  commitRepoMessages: Readonly<Record<string, string>>;
   /** Commit 도구 창 변경 트리에서 접은 행 id (저장소·디렉터리). 기본은 모두 펼침 */
   commitCollapsed: readonly string[];
   /**
@@ -658,8 +823,23 @@ export interface WorkspaceState extends EditorTabs {
   branchTree: BranchTreeViewState;
   /** 저장소 탭 태그 문서의 원격·필터·검색·정렬·선택 (C3a). 폴더 탭은 쓰지 않는다 */
   tagsView: TagsViewState;
+  /** 오른쪽 편집기 그룹 (R3). null 이면 분할하지 않았다 */
+  split: EditorSplit | null;
+  /** 지금 그룹 (마지막으로 포커스가 들어간 그룹). 파일을 열면 이 그룹에 열린다 */
+  focusedGroup: EditorGroupId;
+  /** 분할했을 때 왼쪽 그룹의 폭 (퍼센트). 분할을 풀었다 다시 해도 탭 안에서는 남는다 */
+  splitRatio: number;
 
+  /**
+   * 문서를 연다. 분할 중이고 지금 그룹이 오른쪽이면 파일 문서는 오른쪽 그룹에 연다. 그 밖의 문서(diff·개요 등)는 늘
+   * 왼쪽에 열고 왼쪽이 지금 그룹이 된다
+   */
   openDoc(doc: DocRequest, mode: OpenMode): void;
+  /**
+   * 재시작 뒤 저장해 둔 문서를 한 번에 고정 탭으로 다시 연다 (`docsRestored`). 사용자가 연 것이 아니라서 "문서가
+   * 열렸다"고 알리지 않는다 (아래 도구 창 최대화를 풀지 않는다)
+   */
+  restoreDocs(docs: readonly DocRequest[], activeId: string | null): void;
   activateDoc(id: string): void;
   navigateDiffDoc(id: string, next: DocRequest): void;
   /**
@@ -675,6 +855,10 @@ export interface WorkspaceState extends EditorTabs {
   /** 세션에서 파생한 문서 목록을 바꾼다 (앱 스토어가 장부·세션 슬롯이 바뀔 때 부른다). 같으면 아무것도 하지 않는다 */
   setSessionDocs(docs: readonly DocRequest[]): void;
   setCommitMessage(message: string): void;
+  /** 저장소 하나의 커밋 메시지 초안을 바꾼다. 빈 글자면 지운다 (공통 메시지로 돌아간다) */
+  setCommitRepoMessage(repoPath: string, message: string): void;
+  /** 저장소들의 커밋 메시지 초안을 지운다 (그 저장소가 커밋된 뒤) */
+  clearCommitRepoMessages(repoPaths: readonly string[]): void;
   setCommitCollapsed(ids: readonly string[]): void;
   /** Commit 도구 창 변경 트리를 그 저장소 줄까지 스크롤하게 한다 (펼치는 것은 부르는 쪽이 `setCommitCollapsed` 로) */
   revealCommitRepo(repoPath: string): void;
@@ -711,6 +895,29 @@ export interface WorkspaceState extends EditorTabs {
   setBranchTree(patch: Partial<BranchTreeViewState>): void;
   /** 태그 문서 화면 상태의 일부를 바꾼다 (C3a) */
   setTagsView(patch: Partial<TagsViewState>): void;
+  /** 지금 그룹을 바꾼다 (그룹에 포커스가 들어갔을 때). 분할하지 않았으면 왼쪽뿐이다 */
+  focusGroup(group: EditorGroupId): void;
+  /** 그 그룹의 파일 문서를 다른 쪽 그룹에도 연다 (오른쪽으로 분할). 다른 쪽이 지금 그룹이 된다 */
+  splitDoc(id: string, from: EditorGroupId): void;
+  /** 그 그룹의 파일 문서를 다른 쪽 그룹으로 옮긴다. 비는 그룹은 사라진다 */
+  moveDoc(id: string, from: EditorGroupId): void;
+  /** 분할을 푼다 (오른쪽 탭을 왼쪽에 합친다) */
+  unsplit(): void;
+  /** 오른쪽 그룹의 문서를 보인다. 오른쪽이 지금 그룹이 된다 */
+  activateSideDoc(id: string): void;
+  /** 오른쪽 그룹의 문서를 닫는다 (왼쪽에도 열려 있지 않은 파일이면 저장·확인을 먼저 거친다) */
+  closeSideDoc(id: string): void;
+  /** 오른쪽 그룹의 문서 여럿을 순서대로 닫는다 (`closeDocs` 와 같은 규칙) */
+  closeSideDocs(ids: readonly string[]): Promise<boolean>;
+  /** 지금 그룹의 보고 있는 문서를 닫는다 (⌘W·Esc). 닫을 문서가 없으면 false */
+  closeFocusedDoc(): boolean;
+  /** 분할했을 때 왼쪽 그룹의 폭을 정한다 (범위 밖이면 맞춘다) */
+  setSplitRatio(ratio: number): void;
+  /**
+   * 재시작 뒤 오른쪽 그룹을 되살린다 (R3, `restoreDocs` 의 오른쪽 판): 고정 탭으로 열고 `activeId` 를 보이며, 폭(`ratio`)이
+   * 있으면 그 폭으로. 지금 그룹은 그대로다 (사용자가 연 것이 아니다). 왼쪽이 비었으면 오른쪽 탭이 왼쪽으로 온다
+   */
+  restoreSplit(docs: readonly DocRequest[], activeId: string | null, ratio: number | null): void;
 }
 
 export type WorkspaceStore = StoreApi<WorkspaceState>;
@@ -780,15 +987,42 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
   let commitRevealSeq = 0;
   // 저장소 탭 로그의 스크롤 기준 (다시 그릴 값이 아니라 구독 상태 밖에 둔다)
   let logAnchor: GraphScrollAnchor | null = null;
-  /** 탭 상태를 싣는다. 열린 문서에 없는 스크롤 기억은 버린다 */
-  const applyTabs = (tabs: EditorTabs, activeRepo: string | null) => {
+  /** 탭 상태를 싣는다. 두 그룹 어디에도 없는 스크롤 기억은 버린다 */
+  const applyTabs = (tabs: EditorTabs, activeRepo: string | null, split: EditorSplit | null) => {
     for (const id of [...scrolls.keys()]) {
-      if (!hasDoc(tabs, id)) {
+      if (!hasDoc(tabs, id) && !split?.docs.some((d) => d.id === id)) {
         scrolls.delete(id);
       }
     }
     return { ...tabs, sessionDocs: tabs.sessionDocs ?? [], activeRepo };
   };
+  /** 두 그룹의 탭 상태와 지금 그룹을 싣는다 (R3) */
+  const applyGroups = (grouped: GroupedTabs, activeRepo: string | null) => ({
+    ...applyTabs(grouped.main, activeRepo, grouped.split),
+    split: grouped.split,
+    focusedGroup: grouped.focusedGroup,
+  });
+  /** 지금 두 그룹의 상태 */
+  const groupsOf = (state: WorkspaceState): GroupedTabs => ({
+    main: tabsOf(state),
+    split: state.split,
+    focusedGroup: state.focusedGroup,
+  });
+  /** 그룹이 바뀐 뒤의 활성 저장소: 지금 그룹에서 보는 문서의 저장소를 따른다 (잠겨 있으면 지금 값) */
+  const followFocused = (grouped: GroupedTabs, current: string | null) => {
+    const doc = focusedEditorDoc({
+      ...grouped.main,
+      sessionDocs: grouped.main.sessionDocs ?? [],
+      split: grouped.split,
+      focusedGroup: grouped.focusedGroup,
+    });
+    return settle(current, (doc ? docRepoPath(doc) : null) ?? current);
+  };
+  /** 그 파일 문서가 다른 쪽 그룹에도 열려 있는지 (닫아도 편집 문서가 남는다 — 저장·확인을 거치지 않는다) */
+  const openElsewhere = (state: WorkspaceState, id: string, from: EditorGroupId) =>
+    from === 'main'
+      ? (state.split?.docs.some((d) => d.id === id) ?? false)
+      : state.docs.some((d) => d.id === id);
   /** 활성 저장소 후보를 잠금에 비춰 본 결과 (잠겨 있으면 지금 값을 지킨다) */
   const settle = (current: string | null, candidate: string | null) =>
     nextActiveRepo(current, candidate, deps.activeRepoLocked?.() ?? false);
@@ -805,16 +1039,42 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     diffMode: readDiffMode(),
     diffOptions: readDiffOptions(),
     commitMessage: '',
+    commitRepoMessages: {},
     commitCollapsed: [],
     commitReveal: null,
     branchTree: INITIAL_BRANCH_TREE_VIEW,
     tagsView: INITIAL_TAGS_VIEW,
+    split: null,
+    focusedGroup: 'main',
+    splitRatio: SPLIT_RATIO_DEFAULT,
 
     openDoc(doc, mode) {
-      const current = get().activeRepo;
-      const tabs = docOpened(tabsOf(get()), doc, mode);
-      set(applyTabs(tabs, settle(current, activeRepoAfter(tabs, current))));
+      const before = get();
+      const current = before.activeRepo;
+      if (doc.kind === 'file' && before.split && before.focusedGroup === 'side') {
+        // 오른쪽이 지금 그룹이면 파일은 오른쪽에 연다 (R3)
+        const grouped: GroupedTabs = {
+          main: tabsOf(before),
+          split: asSplit(docOpened(splitTabs(before.split), doc, mode)),
+          focusedGroup: 'side',
+        };
+        set(applyGroups(grouped, followFocused(grouped, current)));
+        deps.onDocOpened?.();
+        return;
+      }
+      const tabs = docOpened(tabsOf(before), doc, mode);
+      set({
+        ...applyTabs(tabs, settle(current, activeRepoAfter(tabs, current)), before.split),
+        focusedGroup: 'main',
+      });
       deps.onDocOpened?.();
+    },
+
+    restoreDocs(docs, activeId) {
+      const before = get();
+      const current = before.activeRepo;
+      const tabs = docsRestored(tabsOf(before), docs, activeId);
+      set(applyTabs(tabs, settle(current, activeRepoAfter(tabs, current)), before.split));
     },
 
     navigateDiffDoc(id, next) {
@@ -833,14 +1093,25 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
         },
         next.id,
       );
-      set(applyTabs(tabs, settle(before.activeRepo, activeRepoAfter(tabs, before.activeRepo))));
+      set(
+        applyTabs(
+          tabs,
+          settle(before.activeRepo, activeRepoAfter(tabs, before.activeRepo)),
+          before.split,
+        ),
+      );
       deps.onDocOpened?.();
     },
 
     activateDoc(id) {
-      const current = get().activeRepo;
-      const tabs = docActivated(tabsOf(get()), id);
-      set(applyTabs(tabs, settle(current, activeRepoAfter(tabs, current))));
+      const before = get();
+      const current = before.activeRepo;
+      const tabs = docActivated(tabsOf(before), id);
+      // 왼쪽 그룹의 문서를 보이면 왼쪽이 지금 그룹이다 (R3)
+      set({
+        ...applyTabs(tabs, settle(current, activeRepoAfter(tabs, current)), before.split),
+        focusedGroup: hasDoc(tabs, id) ? 'main' : before.focusedGroup,
+      });
     },
 
     revealDoc(id) {
@@ -853,17 +1124,24 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     closeDoc(id) {
       if (closingBatch) return;
       const before = get();
+      /** 왼쪽 그룹에서 닫고 그룹 규칙을 맞춘다 (왼쪽이 비면 오른쪽 탭이 왼쪽으로 온다) */
+      const finish = () => {
+        const current = get();
+        const grouped = normalizeGroups({
+          ...groupsOf(current),
+          main: docClosed(tabsOf(current), id),
+        });
+        set(applyGroups(grouped, followActive(current, grouped.main)));
+      };
       const file = before.docs.find((doc) => doc.id === id && doc.kind === 'file');
-      if (file?.kind === 'file' && deps.beforeCloseFile) {
+      // 오른쪽에도 열린 파일은 편집 문서가 남으므로 저장·확인 없이 이쪽 탭만 닫는다 (R3)
+      if (file?.kind === 'file' && deps.beforeCloseFile && !openElsewhere(before, id, 'main')) {
         if (closingFiles.has(id)) return;
         closingFiles.add(id);
         void deps
           .beforeCloseFile(file.path)
           .then((allowed) => {
-            if (!allowed) return;
-            const current = get();
-            const tabs = docClosed(tabsOf(current), id);
-            set(applyTabs(tabs, followActive(current, tabs)));
+            if (allowed) finish();
           })
           .finally(() => closingFiles.delete(id));
         return;
@@ -876,8 +1154,7 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
         }
         return;
       }
-      const tabs = docClosed(tabsOf(before), id);
-      set(applyTabs(tabs, followActive(before, tabs)));
+      finish();
     },
 
     async closeDocs(ids) {
@@ -891,7 +1168,11 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
       try {
         for (const target of targets) {
           if (!allDocs(get()).includes(target)) continue;
-          if (target.kind === 'file' && deps.beforeCloseFile) {
+          if (
+            target.kind === 'file' &&
+            deps.beforeCloseFile &&
+            !openElsewhere(get(), target.id, 'main')
+          ) {
             closingFiles.add(target.id);
             try {
               if (!(await deps.beforeCloseFile(target.path))) return false;
@@ -905,8 +1186,11 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
             if (result === false || hasDoc(get(), target.id)) return false;
           } else {
             const before = get();
-            const tabs = docClosed(tabsOf(before), target.id);
-            set(applyTabs(tabs, followActive(before, tabs)));
+            const grouped = normalizeGroups({
+              ...groupsOf(before),
+              main: docClosed(tabsOf(before), target.id),
+            });
+            set(applyGroups(grouped, followActive(before, grouped.main)));
           }
         }
         return true;
@@ -916,7 +1200,19 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
     },
 
     pinDoc(id) {
-      set(docPinned(tabsOf(get()), id));
+      // 두 그룹 모두에서 고정한다 (같은 파일을 양쪽에 열었으면 첫 수정이 양쪽 탭을 고정한다, R3)
+      // 입력마다 불리므로 바뀐 것이 없으면 상태를 새로 만들지 않는다
+      const before = get();
+      const main = docPinned(tabsOf(before), id);
+      const side = before.split ? docPinned(splitTabs(before.split), id) : null;
+      const sideChanged = before.split !== null && side !== null && side.docs !== before.split.docs;
+      if (main.docs === before.docs && !sideChanged) return;
+      set({
+        docs: main.docs,
+        ...(sideChanged && before.split && side
+          ? { split: { ...before.split, docs: side.docs } }
+          : {}),
+      });
     },
 
     setSessionDocs(docs) {
@@ -930,12 +1226,33 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
       if (sameSessionDocs(before.sessionDocs, next)) {
         return;
       }
-      const tabs = sessionDocsReplaced(tabsOf(before), next);
-      set(applyTabs(tabs, followActive(before, tabs)));
+      const grouped = normalizeGroups({
+        ...groupsOf(before),
+        main: sessionDocsReplaced(tabsOf(before), next),
+      });
+      set(applyGroups(grouped, followActive(before, grouped.main)));
     },
 
     setCommitMessage(message) {
       set({ commitMessage: message });
+    },
+
+    setCommitRepoMessage(repoPath, message) {
+      const { [repoPath]: _old, ...rest } = get().commitRepoMessages;
+      set({ commitRepoMessages: message === '' ? rest : { ...rest, [repoPath]: message } });
+    },
+
+    clearCommitRepoMessages(repoPaths) {
+      const before = get().commitRepoMessages;
+      const drop = new Set(repoPaths);
+      if (!Object.keys(before).some((path) => drop.has(path))) {
+        return;
+      }
+      set({
+        commitRepoMessages: Object.fromEntries(
+          Object.entries(before).filter(([path]) => !drop.has(path)),
+        ),
+      });
     },
 
     setCommitCollapsed(ids) {
@@ -1008,6 +1325,139 @@ export function createWorkspaceStore(rootKind: RootKind, deps: WorkspaceDeps = {
 
     setBranchTree(patch) {
       set({ branchTree: { ...get().branchTree, ...patch } });
+    },
+
+    focusGroup(group) {
+      const before = get();
+      if ((group === 'side' && !before.split) || group === before.focusedGroup) return;
+      const grouped: GroupedTabs = { ...groupsOf(before), focusedGroup: group };
+      set({ focusedGroup: group, activeRepo: followFocused(grouped, before.activeRepo) });
+    },
+
+    splitDoc(id, from) {
+      const before = get();
+      const grouped = docSplit(groupsOf(before), id, from);
+      if (grouped.split === before.split && grouped.main.docs === before.docs) return;
+      set(applyGroups(grouped, followFocused(grouped, before.activeRepo)));
+      deps.onDocOpened?.();
+    },
+
+    moveDoc(id, from) {
+      const before = get();
+      const grouped = docMoved(groupsOf(before), id, from);
+      if (grouped.split === before.split && grouped.main.docs === before.docs) return;
+      set(applyGroups(grouped, followFocused(grouped, before.activeRepo)));
+      deps.onDocOpened?.();
+    },
+
+    unsplit() {
+      const before = get();
+      if (!before.split) return;
+      const grouped = groupsMerged(groupsOf(before));
+      set(applyGroups(grouped, followFocused(grouped, before.activeRepo)));
+    },
+
+    activateSideDoc(id) {
+      const before = get();
+      if (!before.split?.docs.some((d) => d.id === id)) return;
+      const grouped: GroupedTabs = {
+        main: tabsOf(before),
+        split: asSplit(docActivated(splitTabs(before.split), id)),
+        focusedGroup: 'side',
+      };
+      set(applyGroups(grouped, followFocused(grouped, before.activeRepo)));
+    },
+
+    closeSideDoc(id) {
+      if (closingBatch) return;
+      const before = get();
+      const doc = before.split?.docs.find((d) => d.id === id);
+      if (!doc) return;
+      /** 오른쪽 그룹에서 닫고 그룹 규칙을 맞춘다 (오른쪽이 비면 분할이 풀린다) */
+      const finish = () => {
+        const current = get();
+        if (!current.split) return;
+        const grouped = normalizeGroups({
+          ...groupsOf(current),
+          split: asSplit(docClosed(splitTabs(current.split), id)),
+        });
+        set(applyGroups(grouped, followFocused(grouped, current.activeRepo)));
+      };
+      const key = `side:${id}`;
+      if (doc.kind === 'file' && deps.beforeCloseFile && !openElsewhere(before, id, 'side')) {
+        if (closingFiles.has(key)) return;
+        closingFiles.add(key);
+        void deps
+          .beforeCloseFile(doc.path)
+          .then((allowed) => {
+            if (allowed) finish();
+          })
+          .finally(() => closingFiles.delete(key));
+        return;
+      }
+      finish();
+    },
+
+    async closeSideDocs(ids) {
+      if (closingBatch || closingFiles.size > 0) return false;
+      closingBatch = true;
+      const targets = [...new Set(ids)].flatMap((id) => {
+        const doc = get().split?.docs.find((item) => item.id === id);
+        return doc ? [doc] : [];
+      });
+      try {
+        for (const target of targets) {
+          if (!get().split?.docs.includes(target)) continue;
+          if (
+            target.kind === 'file' &&
+            deps.beforeCloseFile &&
+            !openElsewhere(get(), target.id, 'side')
+          ) {
+            const key = `side:${target.id}`;
+            closingFiles.add(key);
+            try {
+              if (!(await deps.beforeCloseFile(target.path))) return false;
+            } finally {
+              closingFiles.delete(key);
+            }
+            if (!get().split?.docs.includes(target)) continue;
+          }
+          const current = get();
+          if (!current.split) continue;
+          const grouped = normalizeGroups({
+            ...groupsOf(current),
+            split: asSplit(docClosed(splitTabs(current.split), target.id)),
+          });
+          set(applyGroups(grouped, followFocused(grouped, current.activeRepo)));
+        }
+        return true;
+      } finally {
+        closingBatch = false;
+      }
+    },
+
+    closeFocusedDoc() {
+      const state = get();
+      const doc = focusedEditorDoc(state);
+      if (!doc) return false;
+      if (state.split && state.focusedGroup === 'side') state.closeSideDoc(doc.id);
+      else state.closeDoc(doc.id);
+      return true;
+    },
+
+    setSplitRatio(ratio) {
+      const next = clampSplitRatio(ratio);
+      if (next !== get().splitRatio) set({ splitRatio: next });
+    },
+
+    restoreSplit(docs, activeId, ratio) {
+      const before = get();
+      const side = docsRestored(splitTabs(before.split), docs, activeId);
+      const grouped = normalizeGroups({ ...groupsOf(before), split: asSplit(side) });
+      set({
+        ...applyGroups(grouped, before.activeRepo),
+        ...(ratio === null ? {} : { splitRatio: clampSplitRatio(ratio) }),
+      });
     },
   }));
 }

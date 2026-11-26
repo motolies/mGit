@@ -101,6 +101,7 @@ describe('설정 대화상자 (⌘,)', () => {
       currentBlame: true,
       allBlame: false,
       changeMarkers: true,
+      autoCloseBrackets: true,
     });
     try {
       openSettings('ko');
@@ -116,13 +117,17 @@ describe('설정 대화상자 (⌘,)', () => {
       const markers = screen.getByRole('checkbox', {
         name: S.fileEditor.changeMarkers,
       }) as HTMLInputElement;
-      expect([format.checked, current.checked, all.checked, markers.checked]).toEqual([
-        false,
-        true,
-        false,
-        true,
-      ]);
-      for (const control of [format, current, all, markers]) fireEvent.click(control);
+      const autoClose = screen.getByRole('checkbox', {
+        name: S.fileEditor.autoCloseBrackets,
+      }) as HTMLInputElement;
+      expect([
+        format.checked,
+        current.checked,
+        all.checked,
+        markers.checked,
+        autoClose.checked,
+      ]).toEqual([false, true, false, true, true]);
+      for (const control of [format, current, all, markers, autoClose]) fireEvent.click(control);
       fireEvent.change(screen.getByRole('spinbutton', { name: S.fileEditor.printWidth }), {
         target: { value: '180' },
       });
@@ -135,6 +140,7 @@ describe('설정 대화상자 (⌘,)', () => {
         currentBlame: false,
         allBlame: true,
         changeMarkers: false,
+        autoCloseBrackets: false,
       });
       openSettings('ko');
       await tick();

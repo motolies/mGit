@@ -13,15 +13,9 @@ import {
 } from '../../store';
 import { fileEditors } from '../../store/file-editor-store';
 import { parseNoteRowId } from '../../store/file-tree';
-import {
-  baseName,
-  childPath,
-  innermostRepo,
-  joinRoot,
-  relativeTo,
-  rootToRepo,
-} from '../../store/fs-path';
-import { allDocs, fileViewDoc } from '../../store/workspace-store';
+import { baseName, childPath, innermostRepo, relativeTo, rootToRepoIn } from '../../store/fs-path';
+import { dirSpace, type RootSpace } from '../../store/root-space';
+import { fileViewDoc, focusedEditorDoc } from '../../store/workspace-store';
 import { FolderCommitTool } from '../commit/FolderCommitTool';
 import { useBatchReport } from '../folder/batch-report';
 import { Dashboard } from '../folder/Dashboard';
@@ -31,19 +25,21 @@ import { FolderSettingsDialog } from '../folder/FolderSettingsDialog';
 import { ComparisonDoc } from '../history/ComparisonDoc';
 import { openFileComparison } from '../history/comparison';
 import { ownEntries } from '../project/file-actions-menu';
-import { buildStatusLookup } from '../project/file-status';
+import { buildStatusLookupIn } from '../project/file-status';
 import { ManagedProjectTree } from '../project/ManagedProjectTree';
 import type { ProjectOpenMode } from '../project/ProjectTree';
 import { type RowDecoration, repoDecorations } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
 import { useFileActions } from '../project/use-file-actions';
+import { useProjectFilter } from '../project/use-project-filter';
 import { ConflictDoc } from './ConflictDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
-import { EditorArea, EditorEmptyState } from './EditorArea';
+import { EditorEmptyState } from './EditorArea';
 import { editorHints } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, folderTreeMenu, menuTargets } from './folder-tree-menu';
 import { useRepoSessionActions } from './repo-session-actions';
+import { SplitEditorArea } from './SplitEditorArea';
 import { useEditorFileMenu } from './use-current-file';
 import { WorktreeDiffDoc } from './WorktreeDiffDoc';
 
@@ -77,7 +73,7 @@ function renderDoc(doc: EditorDoc, repoTools: (doc: EditorDoc) => FileViewRepoTo
 }
 
 /** 에디터 문서가 가리키는 작업 트리 파일의 루트 기준 상대 경로 (트리에서 찾기). 없으면 null */
-function docTreePath(doc: EditorDoc | undefined, root: string): string | null {
+function docTreePath(doc: EditorDoc | undefined, space: RootSpace): string | null {
   if (doc?.kind === 'file') {
     return doc.path;
   }
@@ -87,11 +83,14 @@ function docTreePath(doc: EditorDoc | undefined, root: string): string | null {
     doc?.kind === 'worktreeDiff' ||
     doc?.kind === 'conflict'
   ) {
-    const repo = relativeTo(root, doc.repoPath);
+    const repo = space.toRel(doc.repoPath);
     return repo === null ? null : childPath(repo, doc.path);
   }
   return null;
 }
+
+/** 폴더 스토어가 아직 없을 때의 빈 공간 (화면은 그리지 않는다 — 훅 순서를 지키려고 값만 채운다) */
+const NO_SPACE = dirSpace('');
 
 export interface FolderWorkspaceProps {
   /** 동작 목록. 빈 상태의 단축키 안내가 사용자 재지정을 반영한 단축키를 여기서 읽는다 */
@@ -114,6 +113,8 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
   const f = useFolder((st) => ({
     id: st.id,
     path: st.path,
+    space: st.space,
+    group: st.group,
     name: st.name,
     repos: st.repos,
     summaries: st.summaries,
@@ -145,14 +146,9 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
   }));
   const flows = useFolderBatchFlows(useBatchReport());
   const ws = useWorkspace((w) => ({
-    docs: w.docs,
-    sessionDocs: w.sessionDocs,
-    activeDocId: w.activeDocId,
+    // 트리에서 찾기는 지금 편집기 그룹의 보고 있는 문서를 본다 (R3)
+    focusedDoc: focusedEditorDoc(w),
     openDoc: w.openDoc,
-    activateDoc: w.activateDoc,
-    closeDoc: w.closeDoc,
-    closeDocs: w.closeDocs,
-    pinDoc: w.pinDoc,
     setActiveRepo: w.setActiveRepo,
     retainActiveRepo: w.retainActiveRepo,
   }));
@@ -173,18 +169,12 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
   const ensureChanges = f?.ensureChanges;
   useEffect(() => ensureChanges?.(), [ensureChanges]);
 
-  const root = f?.path ?? '';
+  const space = f?.space ?? NO_SPACE;
   const dirs = tree?.dirs;
   const expanded = tree?.expanded;
-  const rows = useMemo(
+  const treeRows = useMemo(
     () => (dirs && expanded ? flattenProjectTree(dirs, expanded) : []),
     [dirs, expanded],
-  );
-  const order = useMemo(() => rows.map((r) => r.id), [rows]);
-  // 메뉴의 "새 탭으로 열기" 대상 판정 (보이는 행 중 파일 보기로 열 수 있는 파일)
-  const openableFiles = useMemo(
-    () => new Set(rows.flatMap((r) => (r.kind === 'entry' && r.openable ? [r.path] : []))),
-    [rows],
   );
   // 파일 날짜의 기준 시각 (PT-10): 나열이 바뀔 때만 새로 잡는다 — 시계 때문에 행을 다시 그리지 않는다
   // biome-ignore lint/correctness/useExhaustiveDependencies: dirs 는 기준 시각을 새로 잡으라는 신호다
@@ -205,23 +195,44 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     [repos, summaries],
   );
   const statuses = useMemo(
-    () => buildStatusLookup(root, repoPaths, changes ?? []),
-    [root, repoPaths, changes],
+    () => buildStatusLookupIn(space, repoPaths, changes ?? []),
+    [space, repoPaths, changes],
+  );
+  // 보기 거르기 (R1): 이름 필터·변경된 파일만. 범위 선택·메뉴 대상·"새 탭으로 열기" 는 보이는(거른) 행 기준이다
+  const { rows, filter } = useProjectFilter({
+    session: f?.id ?? null,
+    rows: treeRows,
+    dirs,
+    statuses,
+  });
+  const order = useMemo(() => rows.map((r) => r.id), [rows]);
+  // 메뉴의 "새 탭으로 열기" 대상 판정 (보이는 행 중 파일 보기로 열 수 있는 파일)
+  const openableFiles = useMemo(
+    () => new Set(rows.flatMap((r) => (r.kind === 'entry' && r.openable ? [r.path] : []))),
+    [rows],
+  );
+  // 그룹 맨 위의 별칭 행 중 지금 저장소가 없는 멤버 (MR-13): 별칭 → 상태 ("찾을 수 없음"·"저장소 아님")
+  const lostMembers = useMemo(
+    () =>
+      new Map(
+        (f?.group?.members ?? []).flatMap((m) =>
+          m.state === 'present' ? [] : [[m.alias, m.state] as const],
+        ),
+      ),
+    [f?.group],
   );
   const decorate = useCallback(
     (path: string): RowDecoration | null => {
-      const repo = decorations.get(joinRoot(root, path));
+      const lost = lostMembers.get(path);
+      if (lost) {
+        return { detail: S.group.state[lost] };
+      }
+      const abs = space.toAbs(path);
+      const repo = abs === null ? undefined : decorations.get(abs);
       const status = statuses.get(path);
       return repo || status ? { ...repo, status } : null;
     },
-    [decorations, statuses, root],
-  );
-  // 탭 막대: 저장한 문서 뒤에 세션에서 파생한 문서(작업 트리 diff 탭)
-  const storedDocs = ws?.docs;
-  const sessionDocs = ws?.sessionDocs;
-  const docs = useMemo(
-    () => allDocs({ docs: storedDocs ?? [], sessionDocs: sessionDocs ?? [] }),
-    [storedDocs, sessionDocs],
+    [decorations, statuses, space, lostMembers],
   );
   const hints = useMemo(() => editorHints(actions), [actions]);
   // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 그 저장소의 가벼운 세션에 대고, 끝나면 트리를 다시 읽는다
@@ -240,10 +251,25 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
   }
 
   /** 상대 경로가 속한 가장 안쪽 저장소의 절대 경로 (없으면 null) */
-  const repoOf = (path: string) => innermostRepo(repoPaths, joinRoot(root, path));
+  const repoOf = (path: string) => {
+    const abs = space.toAbs(path);
+    return abs === null ? null : innermostRepo(repoPaths, abs);
+  };
   /** 저장소 경로의 이름 (요약 이름, 없으면 경로의 마지막 요소) */
   const repoName = (repoPath: string) =>
     f.summaries.find((s) => s.path === repoPath)?.name ?? baseName(repoPath);
+
+  /**
+   * 디렉터리를 펼치거나 접는다. 그룹의 "저장소 아님" 멤버는 코어가 그 아래 경로를 거부하므로 펼치지 않고 편집 안내를
+   * 보인다 (없는 멤버는 펼치면 "없음"이다)
+   */
+  const toggle = (path: string) => {
+    if (lostMembers.get(path) === 'notRepo') {
+      useAppStore.getState().notice({ kind: 'info', title: S.group.notRepoHint });
+      return;
+    }
+    tree.toggle(path);
+  };
 
   /** 기준 행이 저장소(나 그 안의 항목)면 활성 저장소가 그 저장소가 된다 (WS-07). 로그·에디터는 그대로 */
   const follow = (id: string) => {
@@ -304,11 +330,11 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
 
   /** 루트 기준 상대 경로가 저장소 디렉터리면 그 저장소 */
   const repoAt = (rel: string) => {
-    const abs = joinRoot(root, rel);
-    return decorations.has(abs) ? { path: abs, name: repoName(abs) } : null;
+    const abs = space.toAbs(rel);
+    return abs !== null && decorations.has(abs) ? { path: abs, name: repoName(abs) } : null;
   };
   /** 파일의 가장 안쪽 저장소와 그 저장소 기준 경로. 세션 기능을 쓸 수 없으면 null (메뉴·머리줄에 항목을 두지 않는다) */
-  const fileRepo = (rel: string) => (repoActions ? rootToRepo(root, repoPaths, rel) : null);
+  const fileRepo = (rel: string) => (repoActions ? rootToRepoIn(space, repoPaths, rel) : null);
   /** 파일 보기 탭 머리줄의 히스토리·Blame (ED-04): 저장소 안 파일일 때만 */
   const fileTools = (doc: EditorDoc): FileViewRepoTools | null => {
     const target = doc.kind === 'file' ? fileRepo(doc.path) : null;
@@ -329,9 +355,11 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
   const files: FileMenuSource | undefined = repoActions
     ? {
         target: (rel) => {
-          const abs = joinRoot(root, rel);
+          const abs = space.toAbs(rel);
           const repoPath = repoOf(rel);
-          return repoPath === null ? null : { repoPath, path: relativeTo(repoPath, abs) ?? '' };
+          return abs === null || repoPath === null
+            ? null
+            : { repoPath, path: relativeTo(repoPath, abs) ?? '' };
         },
         entriesOf: (repoPath) =>
           ownEntries(
@@ -347,7 +375,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
       {
         row,
         targets: menuTargets(row.id, tree.selection, order),
-        root,
+        space,
         repoAt,
         isOpenable: (rel) => openableFiles.has(rel),
         fileRepo,
@@ -381,8 +409,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
       },
     );
 
-  const activeDoc = docs.find((d) => d.id === ws.activeDocId);
-  const locatePath = docTreePath(activeDoc, root);
+  const locatePath = docTreePath(ws.focusedDoc, space);
 
   return (
     <>
@@ -397,10 +424,15 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
             <ManagedProjectTree
               protectedPaths={repoPaths}
               session={f.id}
+              space={f.space}
               // 폴더 탭마다 새로 마운트해 다른 폴더의 스크롤 자리가 섞이지 않게 한다
               key={f.id}
-              root={{ name: f.name, detail: f.path }}
+              root={{
+                name: f.name,
+                detail: f.group ? S.group.rootDetail(f.group.members.length) : f.path,
+              }}
               rows={rows}
+              filter={filter}
               selected={tree.selected}
               selection={tree.selection}
               decorate={decorate}
@@ -409,7 +441,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
               onSelect={select}
               onToggleSelect={toggleSelect}
               onSelectRange={selectRange}
-              onToggle={tree.toggle}
+              onToggle={toggle}
               onOpenFile={openFile}
               onLoadMore={tree.loadMore}
               onRetry={tree.retry}
@@ -418,6 +450,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
               onRescan={() => void f.rescan()}
               onLocate={() => {
                 if (locatePath !== null) {
+                  filter?.showPath(locatePath);
                   void tree.reveal(locatePath);
                 }
               }}
@@ -431,19 +464,13 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
           )
         }
         editor={
-          <EditorArea
+          <SplitEditorArea
             dirtyOf={(doc) => doc.kind === 'file' && fileEditors.hasDirty(f.id, doc.path)}
             key={f.id}
-            docs={docs}
-            activeId={ws.activeDocId}
             titleOf={docTitle}
             detailOf={docDetail}
             tooltipOf={docTooltip}
             renderDoc={(doc) => renderDoc(doc, fileTools)}
-            onActivate={ws.activateDoc}
-            onClose={ws.closeDoc}
-            onCloseMany={ws.closeDocs}
-            onPin={ws.pinDoc}
             tabMenu={editorFileMenu}
             empty={
               <EditorEmptyState

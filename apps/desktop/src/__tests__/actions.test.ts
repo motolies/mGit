@@ -68,6 +68,21 @@ function ctx(
   };
 }
 
+/** 폴더 탭의 동작 (일괄 흐름 스파이, 루트 `/work/folder`) */
+function folderActions(): NonNullable<ActionContext['folder']> {
+  return {
+    enabled: true,
+    root: '/work/folder',
+    groupId: null,
+    fetch: vi.fn(),
+    pull: vi.fn(),
+    push: vi.fn(),
+    createBranch: vi.fn(),
+    checkout: vi.fn(),
+    runCommand: vi.fn(),
+  };
+}
+
 describe('actions', () => {
   it('저장소가 없으면 저장소 동작은 꺼지고 앱 동작은 켜진다', () => {
     const list = buildActions(ctx());
@@ -90,6 +105,150 @@ describe('actions', () => {
     expect(c.app.openExternal).toHaveBeenCalledWith('editor', '/r');
     byId['repo.nextTab']?.run();
     expect(c.app.setActiveSession).toHaveBeenCalledWith(1);
+  });
+
+  it('폴더 탭의 동기화 단축키는 툴바와 같은 일괄 흐름을 부르고, 일괄 작업 중이면 꺼진다 (같은 동작 id)', () => {
+    const folder = folderActions();
+    const c = { ...ctx({ active: 2, tabKind: 'folder' }), folder };
+    const byId = Object.fromEntries(buildActions(c).map((a) => [a.id, a]));
+    for (const id of ['sync.fetch', 'sync.pull', 'sync.push']) {
+      expect(byId[id]?.enabled, id).toBe(true);
+    }
+    byId['sync.fetch']?.run();
+    byId['sync.pull']?.run();
+    byId['sync.push']?.run();
+    expect(folder.fetch).toHaveBeenCalledTimes(1);
+    expect(folder.pull).toHaveBeenCalledTimes(1);
+    expect(folder.push).toHaveBeenCalledTimes(1);
+    // 일괄 작업 중(또는 저장소 없음)이면 꺼진다
+    const busy = Object.fromEntries(
+      buildActions({ ...c, folder: { ...folder, enabled: false } }).map((a) => [a.id, a]),
+    );
+    expect(['sync.fetch', 'sync.pull', 'sync.push'].map((id) => busy[id]?.enabled)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    // 폴더 흐름이 없으면 폴더 탭에서 꺼진 채다 (예전처럼)
+    const none = Object.fromEntries(
+      buildActions(ctx({ active: 2, tabKind: 'folder' })).map((a) => [a.id, a]),
+    );
+    expect(none['sync.fetch']?.enabled).toBe(false);
+  });
+
+  it('"여러 저장소 복제…" 는 흐름이 있으면 켜지고 부르며, 여는 중이면 꺼진다 (기본 키 없음)', () => {
+    const startCloneMany = vi.fn();
+    const action = buildActions({ ...ctx(), startCloneMany }).find(
+      (a) => a.id === 'repo.cloneMany',
+    );
+    expect(action?.enabled).toBe(true);
+    expect(action?.shortcut).toBeUndefined();
+    action?.run();
+    expect(startCloneMany).toHaveBeenCalledTimes(1);
+    expect(buildActions(ctx()).find((a) => a.id === 'repo.cloneMany')?.enabled).toBe(false);
+  });
+
+  it('폴더 탭의 "저장소에 git 명령 실행…" 은 일괄 흐름을 부르고 일괄 작업 중·저장소 탭에서는 꺼진다 (기본 키 없음)', () => {
+    const folder = folderActions();
+    const c = { ...ctx({ active: 2, tabKind: 'folder' }), folder };
+    const action = buildActions(c).find((a) => a.id === 'folder.runCommand');
+    expect(action?.enabled).toBe(true);
+    expect(action?.shortcut).toBeUndefined();
+    action?.run();
+    expect(folder.runCommand).toHaveBeenCalledTimes(1);
+    const busy = buildActions({ ...c, folder: { ...folder, enabled: false } });
+    expect(busy.find((a) => a.id === 'folder.runCommand')?.enabled).toBe(false);
+    const repoTab = buildActions(ctx({ active: 2, session: {} }));
+    expect(repoTab.find((a) => a.id === 'folder.runCommand')?.enabled).toBe(false);
+  });
+
+  it('저장소 탭의 동기화는 폴더 흐름이 있어도 그 세션에 대고 돈다', () => {
+    const folder = folderActions();
+    const c = { ...ctx({ active: 2, session: {} }), folder };
+    const byId = Object.fromEntries(buildActions(c).map((a) => [a.id, a]));
+    byId['sync.fetch']?.run();
+    byId['sync.pull']?.run();
+    byId['sync.push']?.run();
+    expect(c.session?.fetch).toHaveBeenCalledWith(null, true);
+    expect(c.session?.pull).toHaveBeenCalled();
+    expect(c.session?.push).toHaveBeenCalled();
+    expect(folder.fetch).not.toHaveBeenCalled();
+    expect(folder.push).not.toHaveBeenCalled();
+  });
+
+  it('폴더 탭의 branch 전환·만들기는 일괄 줄과 같은 흐름이고 일괄 작업 중이면 꺼진다, 외부 앱은 폴더 루트를 연다', () => {
+    const folder = folderActions();
+    const c = { ...ctx({ active: 2, tabKind: 'folder' }), folder };
+    const byId = Object.fromEntries(buildActions(c).map((a) => [a.id, a]));
+    const ids = [
+      'branch.quickSwitch',
+      'branch.create',
+      'external.editor',
+      'external.terminal',
+      'external.reveal',
+    ];
+    expect(ids.map((id) => byId[id]?.enabled)).toEqual([true, true, true, true, true]);
+    byId['branch.quickSwitch']?.run();
+    byId['branch.create']?.run();
+    expect(folder.checkout).toHaveBeenCalledTimes(1);
+    expect(folder.createBranch).toHaveBeenCalledTimes(1);
+    // 저장소 탭의 빠른 전환 창·branch 이름 창은 부르지 않는다
+    expect(c.openQuickSwitch).not.toHaveBeenCalled();
+    expect(c.promptBranch).not.toHaveBeenCalled();
+    byId['external.editor']?.run();
+    byId['external.terminal']?.run();
+    byId['external.reveal']?.run();
+    expect(vi.mocked(c.app.openExternal).mock.calls).toEqual([
+      ['editor', '/work/folder'],
+      ['terminal', '/work/folder'],
+      ['reveal', '/work/folder'],
+    ]);
+    // 파일 탐색기에서 보기는 기본 키가 없다 (팔레트로만)
+    expect(byId['external.reveal']?.shortcut).toBeUndefined();
+    // 일괄 작업 중이면 branch 동작은 꺼지고, 외부 앱 열기는 그대로 켜져 있다
+    const busy = Object.fromEntries(
+      buildActions({ ...c, folder: { ...folder, enabled: false } }).map((a) => [a.id, a]),
+    );
+    expect(ids.map((id) => busy[id]?.enabled)).toEqual([false, false, true, true, true]);
+    // 이름은 저장소 탭과 같다 (팔레트에 같은 이름으로 보인다)
+    const repo = Object.fromEntries(
+      buildActions(ctx({ active: 2, session: {} })).map((a) => [a.id, a]),
+    );
+    expect(ids.map((id) => byId[id]?.title)).toEqual(ids.map((id) => repo[id]?.title));
+    // 폴더 흐름이 없으면 예전처럼 꺼진 채다
+    const none = Object.fromEntries(
+      buildActions(ctx({ active: 2, tabKind: 'folder' })).map((a) => [a.id, a]),
+    );
+    expect(ids.map((id) => none[id]?.enabled)).toEqual([false, false, false, false, false]);
+  });
+
+  it('저장소 탭의 branch 전환·만들기·외부 앱은 폴더 흐름이 있어도 그 저장소에 대고 돈다', () => {
+    const folder = folderActions();
+    const c = { ...ctx({ active: 2, session: {} }), folder };
+    const byId = Object.fromEntries(buildActions(c).map((a) => [a.id, a]));
+    byId['branch.quickSwitch']?.run();
+    byId['branch.create']?.run();
+    byId['external.terminal']?.run();
+    byId['external.reveal']?.run();
+    expect(c.openQuickSwitch).toHaveBeenCalledTimes(1);
+    expect(c.promptBranch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(c.app.openExternal).mock.calls).toEqual([
+      ['terminal', '/r'],
+      ['reveal', '/r'],
+    ]);
+    expect(folder.checkout).not.toHaveBeenCalled();
+    expect(folder.createBranch).not.toHaveBeenCalled();
+    // 저장소 탭은 세션이 바쁘면 branch 동작이 꺼진다 (예전 그대로)
+    const busy = Object.fromEntries(
+      buildActions({ ...ctx({ active: 2, session: { busy: true } }), folder }).map((a) => [
+        a.id,
+        a,
+      ]),
+    );
+    expect([busy['branch.quickSwitch']?.enabled, busy['branch.create']?.enabled]).toEqual([
+      false,
+      false,
+    ]);
   });
 
   it('진행 중 작업이 있으면 병합류·동기화가 꺼진다', () => {
@@ -812,6 +971,7 @@ describe('팔레트·단축키 대화상자의 제목 정리 (W27) — 동작 id
     expect(keys).toEqual({
       ...DEFAULT_KEYS,
       'workspace.quickOpen': 'mod+p',
+      'workspace.recentFiles': 'mod+e',
       'workspace.searchContent': 'mod+alt+f',
       'editor.format': 'mod+alt+l',
       'editor.zoomIn': 'mod+=',

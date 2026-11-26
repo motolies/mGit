@@ -610,10 +610,15 @@ async fn auto_fetch_leaves_undo_stack_alone() {
 
     b.commit("from b");
     b.tag("v9", false);
-    // 한 트랜잭션으로 올려 자동 fetch 가 main 만 보고 tag 는 못 보는 경합을 막는다
-    b.git_ok(["push", "-q", "--atomic", "origin", "main", "refs/tags/v9"]);
+    // tag 를 먼저, main 을 나중에 올린다. 새 main 을 본 자동 fetch 는 이미 자리 잡은 tag 도 함께 받는다
+    // (--atomic 한 번으로는 부족하다: files ref 저장소는 ref 목록을 한 시점에 읽지 않는다). tag 만 올라간 동안의
+    // 자동 fetch 는 tag 가 가리키는 커밋이 없어 tag 를 따라 받지 않으므로 아무것도 바뀌지 않는다
+    b.git_ok(["push", "-q", "origin", "refs/tags/v9"]);
+    b.git_ok(["push", "-q", "origin", "main"]);
+    // push 보다 먼저 돈 자동 fetch 도 AutoFetched 를 보낼 수 있다: git 2.48+ 는 첫 fetch 에서 origin/HEAD 를 만든다.
+    // 그 이벤트에서 풀리지 않도록 origin/main 을 받아 온 바퀴까지 기다린다
     wait_for(&mut rx, Duration::from_secs(10), |e| {
-        matches!(e, CoreEvent::AutoFetched { .. })
+        matches!(e, CoreEvent::AutoFetched { refs, .. } if refs.iter().any(|r| r == "origin/main"))
     })
     .await;
 

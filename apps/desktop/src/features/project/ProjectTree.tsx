@@ -11,6 +11,7 @@ import {
   useRef,
 } from 'react';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
+import { MatchedText } from '../../components/MatchedText';
 import { useRovingToolbar } from '../../components/roving';
 import { openContextMenuAt, treeKeyCommand } from '../../components/tree-keys';
 import { type TreeWidthRow, useTreeContentWidth } from '../../components/tree-width';
@@ -94,6 +95,10 @@ export interface ProjectTreeProps {
   revealSeq?: number;
   /** 작업 완료 후 선택 행을 보이며 트리 키보드 탐색을 이어간다. */
   focusSeq?: number;
+  /** 행 id → 이름에서 강조할 글자 위치 (이름 필터, R1). 없는 행은 강조하지 않는다 */
+  marks?: ReadonlyMap<string, readonly number[]>;
+  /** 거른 보기인지 (R1): 폴더가 모두 펼쳐져 있어 ← 가 접지 않고 부모 행으로만 간다 */
+  filtered?: boolean;
 }
 
 /** 항목 종류의 아이콘 */
@@ -224,6 +229,8 @@ export function ProjectTree({
   onScrollTopChange,
   revealSeq,
   focusSeq = 0,
+  marks,
+  filtered = false,
 }: ProjectTreeProps) {
   const baseId = useId();
   const toolsRoving = useRovingToolbar<HTMLElement>('horizontal');
@@ -404,7 +411,7 @@ export function ProjectTree({
    */
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const row = rows[selectedIndex];
-    const command = treeKeyCommand(e, keyRows, selectedIndex);
+    const command = treeKeyCommand(e, keyRows, selectedIndex, { canCollapse: !filtered });
     if (!command) {
       return;
     }
@@ -476,6 +483,7 @@ export function ProjectTree({
       now !== undefined && row.kind === 'entry' && row.entryKind === 'file'
         ? fileStamp(row.size, row.mtimeMs, now)
         : null;
+    const marked = marks?.get(row.id);
     return (
       <>
         <span className={styles.twisty}>
@@ -491,7 +499,13 @@ export function ProjectTree({
           </span>
         )}
         <span className={bold ? styles.nameBold : styles.name} title={title}>
-          {inline?.id === row.id ? inline.input : name}
+          {inline?.id === row.id ? (
+            inline.input
+          ) : marked ? (
+            <MatchedText text={name} positions={marked} />
+          ) : (
+            name
+          )}
         </span>
         {row.kind === 'root' ? <span className={styles.detail}>{root.detail}</span> : null}
         {row.kind === 'entry' && deco?.detail ? (

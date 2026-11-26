@@ -5,11 +5,13 @@ import {
   Children,
   isValidElement,
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -24,6 +26,77 @@ export interface PreviewSource {
   path: string;
 }
 type ImageCache = Map<string, Promise<FsImage>>;
+
+/**
+ * 미리보기에 보이는 로컬 그림의 읽기 캐시와 파일 표지·판. 2초 검사 신호에는 표지만 묻고(N6 의 `fsFileStamps`), 표지가
+ * 바뀐 그림만 캐시를 비우고 판을 올려 그 그림만 다시 읽는다 — 본문(Markdown·Mermaid)은 다시 그리지 않는다
+ */
+interface ImageWatch {
+  cache: ImageCache;
+  /** 지금 보이는 로컬 그림 경로와 그 경로를 쓰는 그림 수 */
+  shown: Map<string, number>;
+  /** 경로마다 읽기 직전에 본 표지 (일반 파일이 아니거나 모르면 null — 그런 그림은 검사마다 다시 읽는다) */
+  stamps: Map<string, string | null>;
+  /** 경로마다 다시 읽은 횟수 (그림이 다시 읽을 때를 안다) */
+  versions: Map<string, number>;
+  listeners: Set<() => void>;
+}
+
+/** 빈 그림 감시를 만든다 (원본·새로고침·포커스가 바뀌면 새로 만들어 모든 그림을 다시 읽는다) */
+function createImageWatch(): ImageWatch {
+  return {
+    cache: new Map(),
+    shown: new Map(),
+    stamps: new Map(),
+    versions: new Map(),
+    listeners: new Set(),
+  };
+}
+
+/** 표지를 먼저 적고 그림을 읽는다. 표지 뒤에 바뀐 그림은 다음 검사에서 표지가 달라 한 번 더 읽힌다 */
+function readImage(watch: ImageWatch, source: PreviewSource, path: string): Promise<FsImage> {
+  return source.client
+    .fsFileStamps(source.session, [path])
+    .then(
+      ([stamp]) => stamp ?? null,
+      () => null,
+    )
+    .then((stamp) => {
+      watch.stamps.set(path, stamp);
+      return source.client.fsReadImage(source.session, path);
+    })
+    .catch((): FsImage => ({ kind: 'denied' }));
+}
+
+/**
+ * 보이는 로컬 그림의 표지를 한 번에 묻고 바뀐 그림만 다시 읽게 한다. 아직 읽는 중인 그림(표지를 적기 전)은 건너뛴다.
+ * 표지를 모르면(null·조회 실패) 예전처럼 다시 읽는다
+ */
+async function checkImages(watch: ImageWatch, source: PreviewSource): Promise<void> {
+  const paths = [...watch.shown.keys()].filter((path) => watch.stamps.has(path));
+  if (paths.length === 0) {
+    return;
+  }
+  const stamps = await source.client
+    .fsFileStamps(source.session, paths)
+    .catch(() => paths.map(() => null));
+  const changed = paths.filter((path, i) => {
+    const before = watch.stamps.get(path);
+    const stamp = stamps[i] ?? null;
+    return stamp === null || stamp !== before;
+  });
+  if (changed.length === 0) {
+    return;
+  }
+  for (const path of changed) {
+    watch.cache.delete(path);
+    watch.stamps.delete(path);
+    watch.versions.set(path, (watch.versions.get(path) ?? 0) + 1);
+  }
+  for (const listener of watch.listeners) {
+    listener();
+  }
+}
 
 /** 코드 블록도 소스 편집기와 동일한 파서·토큰을 사용한다. */
 function CodeBlock({ source, language }: { source: string; language: string }) {
@@ -66,35 +139,61 @@ function CodeBlock({ source, language }: { source: string; language: string }) {
   );
 }
 
-/** 로컬 요청을 공유하며 브라우저 이미지 실패에도 대체 텍스트와 이유를 표시한다. */
+/**
+ * 로컬 요청을 공유하며 브라우저 이미지 실패에도 대체 텍스트와 이유를 표시한다. 보이는 동안 경로를 그림 감시에 올려 두고,
+ * 감시가 그 경로의 판을 올리면(파일 표지가 바뀜) 그 그림만 다시 읽는다
+ */
 function PreviewImage({
   src,
   alt,
   title,
   source,
-  cache,
+  watch,
 }: {
   src: string;
   alt: string;
   title?: string;
   source: PreviewSource;
-  cache: ImageCache;
+  watch: ImageWatch;
 }) {
   const remote = /^https?:\/\//i.test(src);
   const path = remote ? null : localImagePath(source.path, src);
   const [result, setResult] = useState<FsImage | null>(null);
   const [failed, setFailed] = useState(false);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      watch.listeners.add(listener);
+      return () => {
+        watch.listeners.delete(listener);
+      };
+    },
+    [watch],
+  );
+  const version = useSyncExternalStore(subscribe, () =>
+    path === null ? 0 : (watch.versions.get(path) ?? 0),
+  );
+  // 보이는 로컬 그림으로 올려 둔다 (표지 검사 대상)
+  useEffect(() => {
+    if (path === null) {
+      return;
+    }
+    watch.shown.set(path, (watch.shown.get(path) ?? 0) + 1);
+    return () => {
+      const left = (watch.shown.get(path) ?? 1) - 1;
+      if (left > 0) watch.shown.set(path, left);
+      else watch.shown.delete(path);
+    };
+  }, [watch, path]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version 은 표지가 바뀌어 다시 읽을 때의 신호다.
   useEffect(() => {
     let live = true;
     setResult(null);
     setFailed(false);
     if (!remote && path) {
-      let request = cache.get(path);
+      let request = watch.cache.get(path);
       if (!request) {
-        request = source.client
-          .fsReadImage(source.session, path)
-          .catch((): FsImage => ({ kind: 'denied' }));
-        cache.set(path, request);
+        request = readImage(watch, source, path);
+        watch.cache.set(path, request);
       }
       void request.then((image) => {
         if (live) setResult(image);
@@ -103,7 +202,7 @@ function PreviewImage({
     return () => {
       live = false;
     };
-  }, [remote, path, source.client, source.session, cache]);
+  }, [remote, path, source, watch, version]);
   const reason = failed
     ? S.markdown.imageFailed
     : !remote && !path
@@ -163,18 +262,24 @@ function usePreviewTheme(): 'light' | 'dark' {
   return theme;
 }
 
-/** HTML은 실행하지 않고 현재 초안을 GFM으로 표시한다. 캐시는 새로고침·진입·포커스마다 교체한다. */
+/**
+ * HTML은 실행하지 않고 현재 초안을 GFM으로 표시한다. 그림 캐시는 새로고침(`refreshKey`)·진입·포커스마다 교체해 모두 다시
+ * 읽는다. 문서의 다시 확인 신호(`checkKey` — 2초 검사·원문 교체)에는 보이는 그림의 파일 표지만 묻고 바뀐 그림만 다시
+ * 읽는다 (본문은 다시 그리지 않는다)
+ */
 export function MarkdownPreview({
   text,
   source,
   viewState,
   refreshKey,
+  checkKey = 0,
   zoomPercent = 100,
 }: {
   text: string;
   source: PreviewSource;
   viewState: MarkdownViewState;
   refreshKey: string;
+  checkKey?: number;
   zoomPercent?: number;
 }) {
   const host = useRef<HTMLElement>(null);
@@ -185,10 +290,14 @@ export function MarkdownPreview({
   const theme = usePreviewTheme();
   const [focusEpoch, setFocusEpoch] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 파일 새로고침과 포커스는 로컬 이미지 캐시 교체 신호다.
-  const cache = useMemo<ImageCache>(
-    () => new Map(),
+  const watch = useMemo<ImageWatch>(
+    () => createImageWatch(),
     [source.client, source.session, source.path, refreshKey, focusEpoch],
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: checkKey 는 그림 표지를 다시 확인할 때의 신호다.
+  useEffect(() => {
+    void checkImages(watch, stableSource);
+  }, [checkKey, watch, stableSource]);
   useEffect(() => {
     const refresh = () => setFocusEpoch((value) => value + 1);
     window.addEventListener('focus', refresh);
@@ -228,7 +337,7 @@ export function MarkdownPreview({
             alt={alt ?? ''}
             title={title}
             source={stableSource}
-            cache={cache}
+            watch={watch}
           />
         );
       },
@@ -262,7 +371,7 @@ export function MarkdownPreview({
         );
       },
     }),
-    [stableSource, cache, theme, refreshKey, focusEpoch],
+    [stableSource, watch, theme, refreshKey, focusEpoch],
   );
   // 배율만 바뀔 때 Markdown 파싱과 Mermaid 컴포넌트 구성을 반복하지 않는다.
   const rendered = useMemo(() => {

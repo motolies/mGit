@@ -13,7 +13,8 @@
 
 import type { RepoChanges, StatusEntry } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { ancestorDirs, isWithin, relativeTo, repoToRoot } from '../../store/fs-path';
+import { ancestorDirs, isWithin, repoToRootIn } from '../../store/fs-path';
+import { dirSpace, type RootSpace } from '../../store/root-space';
 
 /** 상태의 색 갈래. 색은 `--status-<tone>` 토큰이다 */
 export type StatusTone = 'modified' | 'added' | 'untracked' | 'conflict';
@@ -74,20 +75,40 @@ export function entryStatus(e: StatusEntry): RowStatus | null {
   }
 }
 
+/** 상태 문자가 붙는 경로 하나 (보기 거르기 "변경된 파일만"의 후보, R1) */
+export interface ChangedPath {
+  /** 루트 기준 상대 경로 */
+  path: string;
+  /** 통째로 untracked 인 디렉터리 (git 이 내려가지 않는 중첩 저장소, `dir/`) */
+  dir: boolean;
+}
+
 /** 루트 기준 상대 경로 → 행 상태 */
 export interface StatusLookup {
   get(path: string): RowStatus | null;
+  /** 상태 문자가 붙는 경로 전부 ("안에 변경 있음" 디렉터리는 빼고). 순서는 정하지 않는다 */
+  changed(): readonly ChangedPath[];
 }
 
 /** 변경이 하나도 없을 때 */
-const EMPTY_LOOKUP: StatusLookup = { get: () => null };
+const EMPTY_LOOKUP: StatusLookup = { get: () => null, changed: () => [] };
 
 /**
  * 저장소별 변경 엔트리로 행 상태 색인을 만든다 (PT-06). `root` 는 트리 루트(폴더)의 절대 경로, `repoPaths` 는
- * 폴더의 저장소 절대 경로들(중첩 판정용). 경로마다 한 번 묻는 `get` 은 상수 시간 + 조상 수만큼이다
+ * 폴더의 저장소 절대 경로들(중첩 판정용). 경로마다 한 번 묻는 `get` 은 상수 시간 + 조상 수만큼이다. 디렉터리 하나인
+ * 공간의 `buildStatusLookupIn` 이다 (저장소 탭)
  */
 export function buildStatusLookup(
   root: string,
+  repoPaths: readonly string[],
+  changes: readonly RepoChanges[],
+): StatusLookup {
+  return buildStatusLookupIn(dirSpace(root), repoPaths, changes);
+}
+
+/** `buildStatusLookup` 의 경로 공간 판 (MR-13): 저장소·엔트리의 트리 경로를 공간의 `toRel` 로 찾는다 */
+export function buildStatusLookupIn(
+  space: RootSpace,
   repoPaths: readonly string[],
   changes: readonly RepoChanges[],
 ): StatusLookup {
@@ -95,20 +116,20 @@ export function buildStatusLookup(
     return EMPTY_LOOKUP;
   }
   const repoRels = repoPaths.flatMap((p) => {
-    const rel = relativeTo(root, p);
+    const rel = space.toRel(p);
     return rel === null ? [] : [rel];
   });
   const own = new Map<string, RowStatus>();
   const untrackedDirs = new Set<string>();
   for (const repo of changes) {
-    const base = relativeTo(root, repo.path);
+    const base = space.toRel(repo.path);
     if (base === null) {
       continue;
     }
     // 이 저장소 안에 든 다른 저장소: 그 아래 엔트리는 안쪽 저장소의 것이다
     const nested = repoRels.filter((rel) => rel !== base && isWithin(rel, base));
     for (const e of repo.entries) {
-      const path = repoToRoot(root, repo.path, e.path);
+      const path = repoToRootIn(space, repo.path, e.path);
       if (path === null || path === base || nested.some((rel) => isWithin(path, rel))) {
         continue;
       }
@@ -139,7 +160,12 @@ export function buildStatusLookup(
   const t = S.project.fileStatus;
   const insideMark: RowStatus = { tone: 'modified', letter: null, title: t.inside };
   const untrackedMark = mark('untracked', '?', t.untracked);
+  let changed: ChangedPath[] | null = null;
   return {
+    changed() {
+      changed ??= [...own.keys()].map((path) => ({ path, dir: untrackedDirs.has(path) }));
+      return changed;
+    },
     get(path) {
       const found = own.get(path);
       if (found) {

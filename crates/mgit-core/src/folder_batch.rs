@@ -11,7 +11,8 @@ use mgit_git::cmd::{
 };
 use mgit_l10n::{pick, tr};
 use mgit_model::{
-    CancelToken, EnvProfile, FoundRepo, GitRequest, GitRunner, StatusEntry, StatusSummary,
+    BranchHeader, CancelToken, EnvProfile, FoundRepo, GitRequest, GitRunner, StatusEntry,
+    StatusSummary,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -22,7 +23,7 @@ use crate::branch_update::{self, BranchUpdate, NotUpdatable};
 use crate::core::{Core, CoreInner};
 use crate::error::CoreError;
 use crate::events::{CoreEvent, EventSink, SessionId};
-use crate::folder::{FolderSession, canonical_paths, repo_name};
+use crate::folder::{FolderSession, canonical_paths, remote_names, repo_name};
 use crate::messages;
 use crate::refname::check_ref_name;
 
@@ -111,7 +112,12 @@ pub enum BatchOp {
         prune: bool,
     },
     Pull,
-    Push,
+    /// 업스트림이 있는 저장소는 그 업스트림으로 `git push` 한다 (보낼 commit 이 없으면 건너뛴다).
+    /// 업스트림이 없는 branch 는 `new_upstream` 이 있을 때만 새 업스트림을 정해 게시하고, 없으면 예전처럼 건너뛴다
+    Push {
+        #[serde(default)]
+        new_upstream: Option<NewUpstream>,
+    },
     CreateBranch {
         name: String,
         checkout: bool,
@@ -151,6 +157,25 @@ pub enum BatchOp {
         from: String,
         to: String,
     },
+    /// 변경이 있는 저장소마다 `git stash push` 한다 (일괄 stash 저장). 메시지 끝에 묶음 표시 `[mgit-batch:<batch>]` 를 붙여
+    /// 꺼낼 때 찾는다 (`folder_stash.rs`). 변경은 일괄 pull·checkout 이 "커밋하지 않은 변경" 으로 보는 것과 같고, 미추적
+    /// 파일은 `include_untracked` 일 때만 넣는다. 변경이 없거나 진행 중 작업·충돌이 있는 저장소는 건너뛴다
+    StashPush {
+        batch: String,
+        #[serde(default)]
+        message: Option<String>,
+        include_untracked: bool,
+    },
+    /// 묶음 `batch` 의 stash 항목을 저장소마다 찾아(맨 위가 아니어도 된다) apply 하고 성공하면 지운다 (일괄 stash 꺼내기).
+    /// 충돌이 나면 git 의 pop 처럼 항목을 남기고 실패로 알린다. 그 묶음의 항목이 없는 저장소는 건너뛴다
+    StashPop {
+        batch: String,
+    },
+    /// 저장소마다 그 작업 트리에서 git 명령 하나를 실행한다 (MR-14 일괄 명령, `folder_command.rs`). `args` 는 `git` 뒤의
+    /// 인자 배열이고 셸을 거치지 않는다. 종료 코드가 0 이 아니면 실패다
+    RunCommand {
+        args: Vec<String>,
+    },
 }
 
 impl BatchOp {
@@ -175,7 +200,7 @@ impl BatchOp {
             ),
             BatchOp::Fetch { .. } => pick("원격 정보 일괄 가져오기", "Batch fetch").into(),
             BatchOp::Pull => pick("원격 변경 일괄 가져오기", "Batch pull").into(),
-            BatchOp::Push => pick("일괄 푸시", "Batch push").into(),
+            BatchOp::Push { .. } => pick("일괄 푸시", "Batch push").into(),
             BatchOp::CreateBranch {
                 name,
                 start_point: Some(start),
@@ -207,6 +232,11 @@ impl BatchOp {
                     "Batch rename: {from} → {to}"
                 )
             }
+            BatchOp::StashPush { message, .. } => {
+                crate::folder_stash::push_label(message.as_deref())
+            }
+            BatchOp::StashPop { batch } => crate::folder_stash::pop_label(batch),
+            BatchOp::RunCommand { args } => crate::folder_command::label(args),
         }
     }
 
@@ -262,6 +292,16 @@ impl BatchOp {
                 check_ref_name(remote)?;
                 check_ref_name(branch)
             }
+            BatchOp::Push {
+                new_upstream: Some(plan),
+            } => plan
+                .remotes
+                .iter()
+                .try_for_each(|choice| check_ref_name(&choice.remote)),
+            BatchOp::StashPush { batch, .. } | BatchOp::StashPop { batch } => {
+                crate::folder_stash::validate_batch_id(batch)
+            }
+            BatchOp::RunCommand { args } => crate::folder_command::validate(args),
             BatchOp::Worktree {
                 branch, dest_root, ..
             } => {
@@ -283,6 +323,79 @@ fn short_ref(name: &str) -> &str {
     name.strip_prefix("refs/heads/")
         .or_else(|| name.strip_prefix("refs/remotes/"))
         .unwrap_or(name)
+}
+
+/// 일괄 push 가 업스트림이 없는 branch 를 게시하는 규칙 (`BatchOp::Push`). 저장소마다 원격을 하나 골라
+/// `push -u <원격> refs/heads/<b>:refs/heads/<b>` 로 같은 이름의 원격 branch 를 만들고 업스트림으로 지정한다
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NewUpstream {
+    /// 사용자가 저장소별로 고른 원격 (`origin` 이 없는 저장소의 예외 선택). 고르지 않은 저장소는 `upstream_remote` 규칙을 따른다
+    #[serde(default)]
+    pub remotes: Vec<PushRemote>,
+}
+
+/// 저장소 하나에 새 업스트림으로 쓸 원격
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PushRemote {
+    pub path: PathBuf,
+    pub remote: String,
+}
+
+/// 일괄 커밋에서 공통 메시지 대신 쓸 저장소 하나의 메시지 (`folder_commit_each`). 비었거나 공백뿐이면 공통 메시지를 쓴다
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCommitMessage {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+/// 커밋 메시지가 빈 요청의 거부 사유
+fn no_commit_message() -> CoreError {
+    CoreError::Invalid(pick("커밋 메시지를 입력하세요.", "Enter a commit message").into())
+}
+
+/// 저장소별 메시지를 정규화한 경로 → 메시지로 모은다. 비었거나 공백뿐인 메시지는 빼서 공통 메시지를 쓰게 한다
+fn own_commit_messages(per_repo: &[RepoCommitMessage]) -> HashMap<PathBuf, &str> {
+    per_repo
+        .iter()
+        .filter(|m| !m.message.trim().is_empty())
+        .map(|m| {
+            let path = m.path.canonicalize().unwrap_or_else(|_| m.path.clone());
+            (path, m.message.as_str())
+        })
+        .collect()
+}
+
+/// 업스트림이 없는 branch 를 게시할 원격을 정한 결과 (`upstream_remote`)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpstreamRemote {
+    /// 고르지 않았고 `origin` 이 있어 그것을 쓴다
+    Auto(String),
+    /// 사용자가 고른 원격
+    Selected(String),
+    /// `origin` 이 없어 사용자가 골라야 하는데 고르지 않았다
+    NeedsChoice,
+    /// 고른 원격이 저장소에 없다 (확인창을 연 뒤 지워졌다)
+    Missing(String),
+    /// 원격이 하나도 없다
+    NoRemotes,
+}
+
+/// 새 업스트림의 원격 고르기 (사용자 결정 "origin 자동 + 예외만 선택"). 고른 것이 있으면 그것(목록에 있을 때만),
+/// 없으면 `origin`. `origin` 이 없으면 원격이 하나뿐이어도 고르게 한다 — 확인창이 그 하나를 미리 골라 보이므로
+/// 사용자가 본 원격으로만 보낸다
+pub(crate) fn upstream_remote(remotes: &[String], chosen: Option<&str>) -> UpstreamRemote {
+    if remotes.is_empty() {
+        return UpstreamRemote::NoRemotes;
+    }
+    match chosen {
+        Some(name) if remotes.iter().any(|r| r == name) => UpstreamRemote::Selected(name.into()),
+        Some(name) => UpstreamRemote::Missing(name.into()),
+        None if remotes.iter().any(|r| r == "origin") => UpstreamRemote::Auto("origin".into()),
+        None => UpstreamRemote::NeedsChoice,
+    }
 }
 
 /// 여러 작업이 함께 쓰는 건너뜀 사유 (지금 언어). branch 업데이트(`branch_update.rs`)도 같은 문구를 쓴다
@@ -312,6 +425,35 @@ pub(crate) mod reason {
     /// 그 이름의 로컬 branch 가 없다 (branch 업데이트·이름 바꾸기)
     pub(crate) fn no_branch() -> &'static str {
         pick("해당 브랜치가 없습니다", "No such branch")
+    }
+
+    /// 보낼 commit 이 없다 (push)
+    pub(super) fn nothing_to_push() -> &'static str {
+        pick("푸시할 커밋이 없습니다", "No commits to push")
+    }
+
+    /// 분리된 HEAD 라 보낼 branch 가 없다 (push 의 새 업스트림)
+    pub(super) fn detached() -> &'static str {
+        pick(
+            "분리된 HEAD 상태에서는 푸시할 수 없습니다",
+            "Cannot push from a detached HEAD",
+        )
+    }
+
+    /// 취소해 실행 중이던 명령을 멈췄다 (fetch·push·일괄 명령). 원격에 일부 반영됐을 수 있다
+    pub(crate) fn interrupted() -> &'static str {
+        pick(
+            "실행 중에 취소했습니다 (반영 여부를 확인하세요)",
+            "Canceled while running (check whether it took effect)",
+        )
+    }
+
+    /// `origin` 이 없어 새 업스트림의 원격을 골라야 하는데 고르지 않았다
+    pub(super) fn remote_not_chosen() -> &'static str {
+        pick(
+            "origin 이 없어 보낼 원격을 골라야 합니다",
+            "No origin remote. Choose a remote to push to",
+        )
     }
 }
 
@@ -348,6 +490,18 @@ pub struct RepoResult {
     pub branch_deletion: Option<BranchDeletionResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration: Option<crate::IntegrationOutcome>,
+    /// 일괄 push 가 새로 지정한 업스트림 (`<원격>/<branch>`). 업스트림이 없던 branch 를 게시해 성공했을 때만
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_set: Option<String>,
+    /// 사용자가 일괄 작업을 취소해 이 저장소를 끝내지 못했다 (시작 전 취소, 또는 실행 중 멈춤). 건너뜀·실패와 따로 센다
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
+    /// 커밋하지 않은 변경이 있어 건너뛰었다 (pull·checkout·branch 업데이트). 결과 알림이 "stash 후 다시 실행" 을 안내한다
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped_dirty: bool,
+    /// 일괄 명령(`BatchOp::RunCommand`)의 종료 코드·소요 시간·출력. 명령을 실행했을 때만
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<crate::folder_command::CommandOutput>,
 }
 
 impl RepoResult {
@@ -362,6 +516,10 @@ impl RepoResult {
             moved: None,
             branch_deletion: None,
             integration: None,
+            upstream_set: None,
+            cancelled: false,
+            skipped_dirty: false,
+            command: None,
         }
     }
 
@@ -369,6 +527,18 @@ impl RepoResult {
     pub(crate) fn skip(&mut self, why: &str) {
         self.skipped = Some(why.into());
         self.ok = true;
+    }
+
+    /// 커밋하지 않은 변경 때문에 건너뛴다 (`skipped_dirty` 를 함께 켠다)
+    pub(crate) fn skip_dirty(&mut self) {
+        self.skip(reason::dirty());
+        self.skipped_dirty = true;
+    }
+
+    /// 시작하기 전에 취소됐다 (건너뜀·실패와 따로 센다)
+    pub(crate) fn cancel(&mut self) {
+        self.skip(messages::cancelled());
+        self.cancelled = true;
     }
 }
 
@@ -379,8 +549,33 @@ pub struct BatchResult {
     pub label: String,
     pub results: Vec<RepoResult>,
     pub succeeded: u32,
+    /// 건너뛴 저장소 (취소된 것은 빼고 `cancelled` 로 센다)
     pub skipped: u32,
     pub failed: u32,
+    /// 취소돼 끝내지 못한 저장소 (`RepoResult::cancelled`)
+    #[serde(default)]
+    pub cancelled: u32,
+}
+
+impl BatchResult {
+    /// 저장소별 결과로 수를 세어 결과를 만든다: 취소 → 건너뜀 → 실패 → 나머지는 성공
+    pub(crate) fn tally(label: String, results: Vec<RepoResult>) -> Self {
+        let cancelled = results.iter().filter(|r| r.cancelled).count() as u32;
+        let skipped = results
+            .iter()
+            .filter(|r| r.skipped.is_some() && !r.cancelled)
+            .count() as u32;
+        let failed = results.iter().filter(|r| !r.ok).count() as u32;
+        let succeeded = results.len() as u32 - skipped - failed - cancelled;
+        BatchResult {
+            label,
+            results,
+            succeeded,
+            skipped,
+            failed,
+            cancelled,
+        }
+    }
 }
 
 /// 저장소 하나의 변경 (MR-08)
@@ -435,13 +630,13 @@ async fn ref_upstreams(
         .collect())
 }
 
-/// 폴더 설정 키
-fn settings_key(path: &Path) -> String {
-    format!("folder:{}", path.display())
+/// 폴더 설정 키. `key` 는 세션 키(`FolderSession::key`)다 (그룹을 지울 때도 이 키로 지운다)
+pub(crate) fn settings_key(key: &str) -> String {
+    format!("folder:{key}")
 }
 
 /// git 하나를 돌리고 (성공, 메시지) 로
-async fn run_git(
+pub(crate) async fn run_git(
     inner: &CoreInner,
     work_tree: &Path,
     args: &[String],
@@ -509,7 +704,7 @@ pub(crate) async fn run_git_env_cancel(
 }
 
 /// 문자열 슬라이스 → Vec<String>
-fn strs(items: &[&str]) -> Vec<String> {
+pub(crate) fn strs(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
@@ -543,13 +738,17 @@ async fn run_batch_one(
     let _queued = tokio::select! {
         guard = lock.lock() => guard,
         () = cancel.cancelled() => {
-            r.skip(messages::cancelled());
+            r.cancel();
             return r;
         }
     };
     if cancel.is_cancelled() {
-        r.skip(messages::cancelled());
+        r.cancel();
         return r;
+    }
+    // 일괄 명령: 상태 검사 없이 그 작업 트리에서 그대로 실행한다 (쓰기 잠금은 위에서 쥐었다)
+    if let BatchOp::RunCommand { args } = &*op {
+        return crate::folder_command::execute(&inner, &d.work_tree, args, cancel, r).await;
     }
     if let BatchOp::DeleteRemoteBranch { targets, .. } | BatchOp::DeleteLocalBranches { targets } =
         &*op
@@ -619,11 +818,14 @@ async fn run_batch_one(
         .ok()
         .flatten()
         .is_some();
+    // push 가 업스트림이 없던 branch 에 새로 지정할 업스트림 (`<원격>/<branch>`). 성공하면 결과에 남긴다
+    let mut published: Option<String> = None;
     let (args, network): (Vec<String>, bool) = match &*op {
         BatchOp::Merge { .. } | BatchOp::Rebase { .. } => unreachable!("integration handled above"),
         BatchOp::DeleteRemoteBranch { .. } | BatchOp::DeleteLocalBranches { .. } => {
             unreachable!("deletion handled above")
         }
+        BatchOp::RunCommand { .. } => unreachable!("command handled above"),
         BatchOp::DeleteBranch { name } => {
             if in_op {
                 r.skip(reason::in_progress());
@@ -668,7 +870,7 @@ async fn run_batch_one(
                 return r;
             }
             if dirty {
-                r.skip(reason::dirty());
+                r.skip_dirty();
                 return r;
             }
             if status.branch.upstream.is_none() {
@@ -682,16 +884,34 @@ async fn run_batch_one(
             };
             (strs(&["pull", mode]), true)
         }
-        BatchOp::Push => {
-            if status.branch.upstream.is_none() {
-                r.skip(reason::no_upstream());
-                return r;
+        BatchOp::Push { new_upstream } => {
+            if status.branch.upstream.is_some() {
+                if status.branch.ahead == 0 {
+                    r.skip(reason::nothing_to_push());
+                    return r;
+                }
+                (strs(&["push"]), true)
+            } else {
+                // 업스트림이 없는 branch: 규칙을 받았을 때만 새 업스트림으로 게시한다 (ahead 를 셀 수 없어 보낼 commit 은 보지 않는다)
+                let Some(plan) = new_upstream else {
+                    r.skip(reason::no_upstream());
+                    return r;
+                };
+                match publish_args(runner, &d.work_tree, &found.path, &status.branch, plan).await {
+                    Ok((args, upstream)) => {
+                        published = Some(upstream);
+                        (args, true)
+                    }
+                    Err(NotRun::Skip(why)) => {
+                        r.skip(&why);
+                        return r;
+                    }
+                    Err(NotRun::Failed(e)) => {
+                        r.message = e;
+                        return r;
+                    }
+                }
             }
-            if status.branch.ahead == 0 {
-                r.skip(pick("푸시할 커밋이 없습니다", "No commits to push"));
-                return r;
-            }
-            (strs(&["push"]), true)
         }
         BatchOp::CreateBranch {
             name,
@@ -731,7 +951,7 @@ async fn run_batch_one(
                 return r;
             }
             if dirty {
-                r.skip(reason::dirty());
+                r.skip_dirty();
                 return r;
             }
             if status.branch.head.as_deref() == Some(name.as_str()) {
@@ -746,7 +966,7 @@ async fn run_batch_one(
                 return r;
             }
             if dirty {
-                r.skip(reason::dirty());
+                r.skip_dirty();
                 return r;
             }
             let tracking = format!("refs/remotes/{remote}/{branch}");
@@ -841,15 +1061,31 @@ async fn run_batch_one(
         BatchOp::RenameBranch { from, to } => {
             match rename_args(runner, &d.work_tree, from, to).await {
                 Ok(args) => (args, false),
-                Err(RenameSkip::Skip(why)) => {
+                Err(NotRun::Skip(why)) => {
                     r.skip(&why);
                     return r;
                 }
-                Err(RenameSkip::Failed(e)) => {
+                Err(NotRun::Failed(e)) => {
                     r.message = e;
                     return r;
                 }
             }
+        }
+        // stash 는 명령 여럿(전후 확인·apply·drop)으로 돈다: `folder_stash.rs`. 로컬 작업이라 취소로 끊지 않는다
+        BatchOp::StashPush {
+            batch,
+            message,
+            include_untracked,
+        } => {
+            let save = crate::folder_stash::StashSave {
+                batch,
+                message: message.as_deref(),
+                include_untracked: *include_untracked,
+            };
+            return crate::folder_stash::push_one(&inner, &d, &status, in_op, &save, r).await;
+        }
+        BatchOp::StashPop { batch } => {
+            return crate::folder_stash::pop_one(&inner, &d, &status, in_op, batch, r).await;
         }
     };
     // fetch·pull 은 수동 fetch 경로다: 로컬 tag 집합이 바뀌면 열린 탭의 원격 tag 캐시를 오래됨으로 (TG-08 ④)
@@ -864,10 +1100,28 @@ async fn run_batch_one(
         BatchOp::Pull => head_oid(runner, &d.work_tree).await,
         _ => None,
     };
-    let (ok, msg) = run_git(&inner, &d.work_tree, &args, network).await;
+    // 네트워크에서 멈출 수 있는 fetch·push 는 취소하면 실행 중인 명령도 멈춘다 (저장소 탭의 취소와 같이 SIGTERM → 유예 →
+    // SIGKILL, git 은 SIGTERM 에 잠금 파일을 지운다). 작업 트리를 바꾸는 pull·checkout 등은 중간에 끊지 않고 끝까지 둔다
+    let interruptible = matches!(&*op, BatchOp::Fetch { .. } | BatchOp::Push { .. });
+    let (ok, msg) = run_git_env_cancel(
+        &inner,
+        &d.work_tree,
+        &args,
+        network,
+        &[],
+        interruptible.then(|| cancel.clone()),
+    )
+    .await;
     if tags_before.is_some() {
         let tags_after = inner.tag_marks_at(&d.common_dir, &d.work_tree).await;
         inner.stale_if_tags_changed(&d.common_dir, tags_before, tags_after);
+    }
+    if !ok && interruptible && cancel.is_cancelled() {
+        // 취소로 멈춘 명령: 원격에 일부가 반영됐을 수 있어 실패와 구분해 알린다
+        r.skip(reason::interrupted());
+        r.cancelled = true;
+        r.message = msg;
+        return r;
     }
     if ok
         && let (Some(from), Some(branch)) = (head_before, status.branch.head.clone())
@@ -885,15 +1139,67 @@ async fn run_batch_one(
             commits,
         });
     }
+    if ok {
+        r.upstream_set = published;
+    }
+    // 일괄 fetch(`--all`) 성공은 사용자 fetch 로 적어 둔다 — 자동 fetch 가 곧바로 다시 받지 않게 (M5)
+    if ok && matches!(&*op, BatchOp::Fetch { .. }) {
+        inner.note_fetched(&d.common_dir);
+    }
     r.ok = ok;
     r.message = msg;
     r
 }
 
-/// 일괄 이름 바꾸기를 하지 않는 이유: 건너뜀(사유) 또는 읽기 실패(메시지)
-enum RenameSkip {
+/// 저장소 하나에서 git 쓰기를 하지 않는 이유 (이름 바꾸기·새 업스트림 게시): 건너뜀(사유) 또는 읽기 실패(메시지)
+enum NotRun {
     Skip(String),
     Failed(String),
+}
+
+/// 업스트림이 없는 branch 를 게시하는 push 인자와 새 업스트림 이름(`<원격>/<branch>`). 원격은 `upstream_remote` 로
+/// 고르고, refspec 은 단일 저장소 push 와 같이 `refs/heads/<b>:refs/heads/<b>`(같은 이름)다. 분리 HEAD, commit 이 없는
+/// branch, 보낼 원격이 정해지지 않은 저장소는 건너뛴다. 강제 push 는 하지 않는다
+async fn publish_args(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+    path: &Path,
+    branch: &BranchHeader,
+    plan: &NewUpstream,
+) -> Result<(Vec<String>, String), NotRun> {
+    let Some(name) = branch.head.as_deref() else {
+        return Err(NotRun::Skip(reason::detached().into()));
+    };
+    if branch.oid.is_none() {
+        return Err(NotRun::Skip(reason::nothing_to_push().into()));
+    }
+    let remotes = remote_names(runner, work_tree)
+        .await
+        .map_err(|e| NotRun::Failed(mgit_model::redact_text(&e.to_string())))?;
+    let chosen = plan
+        .remotes
+        .iter()
+        .find(|choice| choice.path == path)
+        .map(|choice| choice.remote.as_str());
+    let remote = match upstream_remote(&remotes, chosen) {
+        UpstreamRemote::Auto(remote) | UpstreamRemote::Selected(remote) => remote,
+        UpstreamRemote::NeedsChoice => {
+            return Err(NotRun::Skip(reason::remote_not_chosen().into()));
+        }
+        UpstreamRemote::Missing(remote) => {
+            return Err(NotRun::Skip(messages::unknown_remote(&remote)));
+        }
+        UpstreamRemote::NoRemotes => return Err(NotRun::Skip(messages::no_remotes().into())),
+    };
+    let upstream = format!("{remote}/{name}");
+    let args = vec![
+        "push".into(),
+        "-u".into(),
+        "--end-of-options".into(),
+        remote,
+        format!("refs/heads/{name}:refs/heads/{name}"),
+    ];
+    Ok((args, upstream))
 }
 
 /// 일괄 이름 바꾸기 한 저장소의 git 인자 (단일 저장소 `rename_branch` 와 같다). `from` 이 없거나 `to` 가 이미 있으면
@@ -903,17 +1209,17 @@ async fn rename_args(
     work_tree: &Path,
     from: &str,
     to: &str,
-) -> Result<Vec<String>, RenameSkip> {
+) -> Result<Vec<String>, NotRun> {
     let old = format!("refs/heads/{from}");
     let new = format!("refs/heads/{to}");
     let found = ref_upstreams(runner, work_tree, &[old.as_str(), new.as_str()])
         .await
-        .map_err(RenameSkip::Failed)?;
+        .map_err(NotRun::Failed)?;
     if !found.contains_key(&old) {
-        return Err(RenameSkip::Skip(reason::no_branch().into()));
+        return Err(NotRun::Skip(reason::no_branch().into()));
     }
     if found.contains_key(&new) {
-        return Err(RenameSkip::Skip(tr!(
+        return Err(NotRun::Skip(tr!(
             "이미 사용 중인 이름입니다: {to}",
             "New name already exists: {to}"
         )));
@@ -922,7 +1228,11 @@ async fn rename_args(
 }
 
 /// 읽기 git 하나의 stdout (앞뒤 공백 제거). 실패하면 None
-async fn read_out(runner: &dyn GitRunner, work_tree: &Path, args: &[&str]) -> Option<String> {
+pub(crate) async fn read_out(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+    args: &[&str],
+) -> Option<String> {
     let req = GitRequest::new(work_tree, args.iter().map(|a| (*a).to_string()))
         .with_env(EnvProfile::ReadInteractive);
     let out = runner.run(req).await.ok()?;
@@ -981,7 +1291,7 @@ async fn update_branch_one(
         return r;
     }
     if target.current && dirty {
-        r.skip(reason::dirty());
+        r.skip_dirty();
         return r;
     }
     if let Some(args) = branch_update::fetch_args(&target, false) {
@@ -1035,7 +1345,7 @@ impl Core {
         let folder = self.inner_arc().folders_get(session)?;
         Ok(self
             .store()
-            .setting_get(&settings_key(&folder.path))
+            .setting_get(&settings_key(&folder.key()))
             .ok()
             .flatten()
             .and_then(|j| serde_json::from_str(&j).ok())
@@ -1052,7 +1362,7 @@ impl Core {
         let json = serde_json::to_string(settings)
             .map_err(|e| CoreError::Invalid(messages::settings_serialize_failed(&e)))?;
         self.store()
-            .setting_set(&settings_key(&folder.path), &json)?;
+            .setting_set(&settings_key(&folder.key()), &json)?;
         Ok(())
     }
 
@@ -1116,6 +1426,22 @@ impl Core {
                 }
             }
         }
+        // push 의 저장소별 원격 선택은 대상 목록과 같은 기준(정규화한 경로)으로 저장소에 맞춘다
+        let op = match op {
+            BatchOp::Push {
+                new_upstream: Some(mut plan),
+            } => {
+                for choice in &mut plan.remotes {
+                    if let Some(path) = canonical_paths(std::slice::from_ref(&choice.path)).pop() {
+                        choice.path = path;
+                    }
+                }
+                BatchOp::Push {
+                    new_upstream: Some(plan),
+                }
+            }
+            other => other,
+        };
         let wanted = canonical_paths(integration_paths.as_deref().unwrap_or(repos));
         let targets: Vec<FoundRepo> = if wanted.is_empty() {
             all
@@ -1155,7 +1481,13 @@ impl Core {
         op.validate()?;
         let inner = self.inner_arc();
         let settings = Arc::new(settings);
-        let label = op.label();
+        // stash 꺼내기는 묶음 id 대신 저장할 때의 메시지로 이름을 짓는다 (대상 저장소의 stash 목록에서 읽는다)
+        let label = match &op {
+            BatchOp::StashPop { batch } => {
+                crate::folder_stash::pop_label_in(inner.runner(), &targets, batch).await
+            }
+            _ => op.label(),
+        };
         let op = Arc::new(op);
         let handle = inner.ops.begin(session);
         let op_id = handle.id;
@@ -1178,7 +1510,7 @@ impl Core {
                 let _permit = sem.acquire().await;
                 if cancel.is_cancelled() {
                     let mut r = RepoResult::new(found.path);
-                    r.skip(messages::cancelled());
+                    r.cancel();
                     return r;
                 }
                 run_batch_one(inner, found, op, settings, cancel).await
@@ -1202,28 +1534,30 @@ impl Core {
             }
         }
         results.sort_by(|a, b| a.path.cmp(&b.path));
-        let skipped = results.iter().filter(|r| r.skipped.is_some()).count() as u32;
-        let failed = results.iter().filter(|r| !r.ok).count() as u32;
-        let succeeded = results.len() as u32 - skipped - failed;
+        let result = BatchResult::tally(label, results);
+        let (succeeded, skipped, failed, cancelled) = (
+            result.succeeded,
+            result.skipped,
+            result.failed,
+            result.cancelled,
+        );
+        let mut message = tr!(
+            "성공 {succeeded} · 건너뜀 {skipped} · 실패 {failed}",
+            "{succeeded} succeeded · {skipped} skipped · {failed} failed"
+        );
+        if cancelled > 0 {
+            message.push_str(&tr!(" · 취소됨 {cancelled}", " · {cancelled} canceled"));
+        }
         sink.emit(CoreEvent::OperationFinished {
             session,
             op_id,
             ok: failed == 0,
             cancelled: handle.cancel.is_cancelled(),
-            message: tr!(
-                "성공 {succeeded} · 건너뜀 {skipped} · 실패 {failed}",
-                "{succeeded} succeeded · {skipped} skipped · {failed} failed"
-            ),
+            message,
             lock_left: false,
         });
         inner.ops.end(op_id);
-        Ok(BatchResult {
-            label,
-            results,
-            succeeded,
-            skipped,
-            failed,
-        })
+        Ok(result)
     }
 
     /// 변경이 있는 저장소의 상태 (MR-08). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다
@@ -1276,10 +1610,24 @@ impl Core {
         message: &str,
         stage_all: bool,
     ) -> Result<BatchResult, CoreError> {
-        if message.trim().is_empty() {
-            return Err(CoreError::Invalid(
-                pick("커밋 메시지를 입력하세요.", "Enter a commit message").into(),
-            ));
+        self.folder_commit_each(session, repos, message, &[], stage_all)
+            .await
+    }
+
+    /// 일괄 커밋 (MR-08): `per_repo` 에 메시지가 있는 저장소는 그 메시지로, 나머지는 공통 `message` 로 커밋한다.
+    /// 저장소별 메시지가 비었거나 공백뿐이면 공통 메시지를 쓴다. 대상 중 쓸 메시지가 빈 저장소가 하나라도 있으면
+    /// 아무것도 하지 않고 거부한다 (일부만 커밋되지 않게). 건너뛰기·검사는 `folder_commit` 과 같다
+    pub async fn folder_commit_each(
+        &self,
+        session: SessionId,
+        repos: &[PathBuf],
+        message: &str,
+        per_repo: &[RepoCommitMessage],
+        stage_all: bool,
+    ) -> Result<BatchResult, CoreError> {
+        let own = own_commit_messages(per_repo);
+        if message.trim().is_empty() && own.is_empty() {
+            return Err(no_commit_message());
         }
         let inner = self.inner_arc();
         let folder = inner.folders_get(session)?;
@@ -1289,8 +1637,17 @@ impl Core {
             .into_iter()
             .filter(|r| wanted.is_empty() || wanted.iter().any(|p| p == &r.path))
             .collect();
+        // 저장소에 쓸 메시지: 자기 메시지가 있으면 그것, 없으면 공통 메시지
+        let message_of = |path: &Path| own.get(path).copied().unwrap_or(message);
+        if targets
+            .iter()
+            .any(|r| message_of(&r.path).trim().is_empty())
+        {
+            return Err(no_commit_message());
+        }
         let mut results = Vec::new();
         for found in targets {
+            let commit_message = message_of(&found.path);
             let mut r = RepoResult::new(found.path.clone());
             let d = match discover(inner.runner(), &found.path).await {
                 Ok(d) => d,
@@ -1352,7 +1709,7 @@ impl Core {
             }
             let req = GitRequest::new(&d.work_tree, ["commit", "-q", "-F", "-"])
                 .with_env(EnvProfile::Write)
-                .with_stdin(message.as_bytes().to_vec());
+                .with_stdin(commit_message.as_bytes().to_vec());
             match inner.runner().run(req).await {
                 Ok(out) if out.exit.success() => {
                     r.ok = true;
@@ -1363,16 +1720,72 @@ impl Core {
             }
             results.push(r);
         }
-        let skipped = results.iter().filter(|r| r.skipped.is_some()).count() as u32;
-        let failed = results.iter().filter(|r| !r.ok).count() as u32;
-        let succeeded = results.len() as u32 - skipped - failed;
         notify_changed(&folder, &results);
-        Ok(BatchResult {
-            label: pick("일괄 커밋", "Batch commit").into(),
+        Ok(BatchResult::tally(
+            pick("일괄 커밋", "Batch commit").into(),
             results,
-            succeeded,
-            skipped,
-            failed,
-        })
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UpstreamRemote, upstream_remote};
+
+    /// 원격 이름 목록
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn upstream_remote_picks_origin_automatically() {
+        assert_eq!(
+            upstream_remote(&names(&["origin"]), None),
+            UpstreamRemote::Auto("origin".into())
+        );
+        // 원격이 여럿이어도 origin 이 있으면 묻지 않는다
+        assert_eq!(
+            upstream_remote(&names(&["fork", "origin"]), None),
+            UpstreamRemote::Auto("origin".into())
+        );
+    }
+
+    #[test]
+    fn upstream_remote_prefers_users_choice() {
+        assert_eq!(
+            upstream_remote(&names(&["fork", "origin"]), Some("fork")),
+            UpstreamRemote::Selected("fork".into())
+        );
+        assert_eq!(
+            upstream_remote(&names(&["team", "fork"]), Some("team")),
+            UpstreamRemote::Selected("team".into())
+        );
+        // 고른 원격이 그사이 사라졌으면 다른 원격으로 바꾸지 않는다
+        assert_eq!(
+            upstream_remote(&names(&["origin"]), Some("gone")),
+            UpstreamRemote::Missing("gone".into())
+        );
+    }
+
+    #[test]
+    fn upstream_remote_needs_choice_without_origin() {
+        // origin 이 없으면 하나뿐이어도 확인창이 미리 고른 값을 받아야 보낸다
+        assert_eq!(
+            upstream_remote(&names(&["upstream"]), None),
+            UpstreamRemote::NeedsChoice
+        );
+        assert_eq!(
+            upstream_remote(&names(&["team", "fork"]), None),
+            UpstreamRemote::NeedsChoice
+        );
+    }
+
+    #[test]
+    fn upstream_remote_without_remotes() {
+        assert_eq!(upstream_remote(&[], None), UpstreamRemote::NoRemotes);
+        assert_eq!(
+            upstream_remote(&[], Some("origin")),
+            UpstreamRemote::NoRemotes
+        );
     }
 }

@@ -85,10 +85,13 @@ async function press(key: string, mods: { shift?: boolean } = {}) {
   await tick();
 }
 
-/** 지금 포커스가 있는 요소의 영역 이름 (`data-panel`) */
+/**
+ * 지금 포커스가 있는 요소의 영역 이름 (`data-panel`). 패널 라이브러리의 칸(`data-panel="true"` — 편집기 공간의 그룹 칸
+ * 등)은 영역이 아니므로 건너뛴다 (저장소 탭 테스트와 같은 규칙)
+ */
 const focusedPanel = () =>
   (document.activeElement as HTMLElement | null)
-    ?.closest('[data-panel]')
+    ?.closest('[data-panel]:not([data-panel="true"])')
     ?.getAttribute('data-panel');
 
 beforeEach(() => {

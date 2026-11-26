@@ -91,6 +91,48 @@ describe('Markdown preview', () => {
     render(<MarkdownPreview {...props} />);
     await waitFor(() => expect(client.fsReadImage).toHaveBeenCalledTimes(4));
   });
+  it('다시 확인 신호(checkKey)에는 보이는 그림의 표지만 묻고, 표지가 바뀐 그림만 다시 읽으며 본문은 다시 그리지 않는다', async () => {
+    const stamps: Record<string, string> = { 'a.png': 's1', 'b.png': 't1' };
+    const client = {
+      ...createNullClient(),
+      fsReadImage: vi.fn(async (_session: number, path: string) => ({
+        kind: 'image' as const,
+        mime: 'image/png',
+        dataUrl: `data:image/png;base64,${path}`,
+        size: 1,
+      })),
+      fsFileStamps: vi.fn(async (_session: number, paths: string[]) =>
+        paths.map((path) => stamps[path] ?? null),
+      ),
+    };
+    const props = {
+      text: '![a](../a.png) ![b](../b.png)\n\n```mermaid\nflowchart LR\nA --> B\n```',
+      source: { client, session: 23, path: 'docs/readme.md' },
+      viewState: { mode: 'preview' as const, ratio: 50, scrollTop: 0 },
+      refreshKey: '0',
+      checkKey: 0,
+    };
+    const { rerender } = render(<MarkdownPreview {...props} />);
+    await screen.findByAltText('a');
+    await screen.findByAltText('b');
+    expect(client.fsReadImage).toHaveBeenCalledTimes(2);
+    const mermaid = screen.getByTestId('mermaid');
+    // 표지가 그대로면 다시 읽지 않고, 본문(Mermaid 포함)도 그대로다
+    rerender(<MarkdownPreview {...props} checkKey={1} />);
+    await waitFor(() =>
+      expect(client.fsFileStamps).toHaveBeenLastCalledWith(23, ['a.png', 'b.png']),
+    );
+    await act(async () => {});
+    expect(client.fsReadImage).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('mermaid')).toBe(mermaid);
+    // b 만 바뀌면 b 만 다시 읽는다
+    stamps['b.png'] = 't2';
+    rerender(<MarkdownPreview {...props} checkKey={2} />);
+    await waitFor(() => expect(client.fsReadImage).toHaveBeenCalledTimes(3));
+    expect(client.fsReadImage).toHaveBeenLastCalledWith(23, 'b.png');
+    await screen.findByAltText('b');
+    expect(screen.getByTestId('mermaid')).toBe(mermaid);
+  });
   it('reports forbidden paths and remote failures without invoking local reads', async () => {
     const { client } = fixture('![bad](../../secret.png)\n\n![remote](https://example.test/a.png)');
     expect(screen.getByText(`bad: ${S.markdown.imagePath}`)).toBeTruthy();
@@ -157,6 +199,8 @@ describe('Markdown preview', () => {
       refreshKey: '0',
     };
     const { rerender } = render(<MarkdownPreview {...props} />);
+    // 그림은 표지를 적은 뒤 읽는다 (읽기 요청이 나간 다음에 그 응답을 잡는다)
+    await waitFor(() => expect(client.fsReadImage).toHaveBeenCalledTimes(1));
     const old = resolve;
     rerender(
       <MarkdownPreview {...props} source={{ ...props.source, session: 2 }} text="![new](b.png)" />,

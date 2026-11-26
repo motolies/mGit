@@ -149,3 +149,28 @@
   flex: 0 0 auto;
   padding: 0 var(--space-5) 0 var(--space-4);
 }
+
+/* 머리줄 아래 안내 띠 (예: 줄 끝이 섞인 파일의 읽기 전용 안내와 통일 단추) */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--panel-seam);
+  background: var(--bg-panel);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.noticeText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 통일하지 못한 사유: 띠 아래 줄에 따로 보인다 */
+.noticeError {
+  flex-basis: 100%;
+  color: var(--danger);
+}

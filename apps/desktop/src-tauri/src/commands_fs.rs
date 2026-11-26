@@ -3,10 +3,10 @@
 //! 거부는 `IpcError::Internal`, 없음·권한 없음 등 정상 상태는 결과의 `kind` 로 나간다
 
 use mgit_core::{
-    FsEditableFile, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing, FsSaveResult,
-    SessionId,
+    FsEditableFile, FsEncoding, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing,
+    FsSaveResult, SessionId,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::IpcError;
@@ -225,7 +225,59 @@ pub async fn fs_read_image(
         .into())
 }
 
-/// 원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다.
+/// 텍스트 파일 인코딩 (R2). 편집 조회 결과가 알리고, 사용자가 골라 다시 읽거나 저장할 때 보낸다
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FsEncodingDto {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+    /// 표준 EUC-KR 표 (CP949 를 품는다)
+    EucKr,
+    ShiftJis,
+    EucJp,
+    Gb18030,
+    Big5,
+    Windows1252,
+}
+
+impl From<FsEncodingDto> for FsEncoding {
+    /// wire → 코어
+    fn from(encoding: FsEncodingDto) -> Self {
+        match encoding {
+            FsEncodingDto::Utf8 => Self::Utf8,
+            FsEncodingDto::Utf16Le => Self::Utf16Le,
+            FsEncodingDto::Utf16Be => Self::Utf16Be,
+            FsEncodingDto::EucKr => Self::EucKr,
+            FsEncodingDto::ShiftJis => Self::ShiftJis,
+            FsEncodingDto::EucJp => Self::EucJp,
+            FsEncodingDto::Gb18030 => Self::Gb18030,
+            FsEncodingDto::Big5 => Self::Big5,
+            FsEncodingDto::Windows1252 => Self::Windows1252,
+        }
+    }
+}
+
+impl From<FsEncoding> for FsEncodingDto {
+    /// 코어 → wire
+    fn from(encoding: FsEncoding) -> Self {
+        match encoding {
+            FsEncoding::Utf8 => Self::Utf8,
+            FsEncoding::Utf16Le => Self::Utf16Le,
+            FsEncoding::Utf16Be => Self::Utf16Be,
+            FsEncoding::EucKr => Self::EucKr,
+            FsEncoding::ShiftJis => Self::ShiftJis,
+            FsEncoding::EucJp => Self::EucJp,
+            FsEncoding::Gb18030 => Self::Gb18030,
+            FsEncoding::Big5 => Self::Big5,
+            FsEncoding::Windows1252 => Self::Windows1252,
+        }
+    }
+}
+
+/// 원문 편집 조회 결과를 전달한다. 편집 불가 상태는 기존 파일 조회와 같은 태그다. 원문은 `encoding` 으로 디코드한
+/// 글자열이고(BOM 은 맨 앞 U+FEFF), `guessed` 는 BOM 없이 UTF-8 이 아니어서 후보 중에서 고른 인코딩이라는 뜻이다 (R2 —
+/// 예전 응답과 맞게 둘 다 선택 필드다: 없으면 UTF-8)
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(
     tag = "kind",
@@ -241,6 +293,12 @@ pub enum FsEditableFileDto {
         revision: String,
         line_ending: FsLineEndingDto,
         bom: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[specta(optional)]
+        encoding: Option<FsEncodingDto>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[specta(optional)]
+        guessed: Option<bool>,
     },
     Binary {
         #[specta(type = specta_typescript::Number)]
@@ -261,15 +319,51 @@ pub enum FsEditableFileDto {
     },
     Missing,
     Denied,
-    MixedLineEndings,
+    /// 줄 끝이 섞였거나 단독 CR 이 있어 편집할 수 없다. 원문은 읽기 전용으로 보이고, revision 은 줄 끝 통일
+    /// 저장(`fs_normalize_line_endings`)의 비교 기준이다. `lf`·`crlf`·`cr` 은 줄 끝 종류별 개수다
+    MixedLineEndings {
+        text: String,
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+        revision: String,
+        lf: u32,
+        crlf: u32,
+        cr: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[specta(optional)]
+        encoding: Option<FsEncodingDto>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[specta(optional)]
+        guessed: Option<bool>,
+    },
+    /// 같은 인코딩으로 다시 쓰면 원래 바이트와 달라져 편집할 수 없다 (R2). 원문은 읽기 전용으로 보인다. `malformed` 면
+    /// 그 인코딩으로 읽을 수 없는 바이트가 U+FFFD 로 보이고, 아니면 같은 글자를 다른 바이트로 쓰게 된다
+    Lossy {
+        text: String,
+        #[specta(type = specta_typescript::Number)]
+        size: u64,
+        encoding: FsEncodingDto,
+        guessed: bool,
+        malformed: bool,
+    },
 }
 
 /// 저장할 줄 끝 형식이다.
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum FsLineEndingDto {
     Lf,
     Crlf,
+}
+
+impl From<FsLineEndingDto> for FsLineEnding {
+    /// wire → 코어
+    fn from(line_ending: FsLineEndingDto) -> Self {
+        match line_ending {
+            FsLineEndingDto::Lf => FsLineEnding::Lf,
+            FsLineEndingDto::Crlf => FsLineEnding::Crlf,
+        }
+    }
 }
 
 impl From<FsEditableFile> for FsEditableFileDto {
@@ -283,6 +377,8 @@ impl From<FsEditableFile> for FsEditableFileDto {
                 revision,
                 line_ending,
                 bom,
+                encoding,
+                guessed,
             } => Self::Text {
                 text,
                 size,
@@ -293,8 +389,39 @@ impl From<FsEditableFile> for FsEditableFileDto {
                     FsLineEnding::Crlf => FsLineEndingDto::Crlf,
                 },
                 bom,
+                encoding: Some(encoding.into()),
+                guessed: Some(guessed),
             },
-            FsEditableFile::MixedLineEndings => Self::MixedLineEndings,
+            FsEditableFile::MixedLineEndings {
+                text,
+                size,
+                revision,
+                counts,
+                encoding,
+                guessed,
+            } => Self::MixedLineEndings {
+                text,
+                size,
+                revision,
+                lf: counts.lf,
+                crlf: counts.crlf,
+                cr: counts.cr,
+                encoding: Some(encoding.into()),
+                guessed: Some(guessed),
+            },
+            FsEditableFile::Lossy {
+                text,
+                size,
+                encoding,
+                guessed,
+                malformed,
+            } => Self::Lossy {
+                text,
+                size,
+                encoding: encoding.into(),
+                guessed,
+                malformed,
+            },
             FsEditableFile::Unavailable(file) => match file {
                 FsFile::Binary { size } => Self::Binary { size },
                 FsFile::NotUtf8 { size } => Self::NotUtf8 { size },
@@ -334,23 +461,41 @@ impl From<FsSaveResult> for FsSaveResultDto {
     }
 }
 
-/// 안전한 원문 편집 조회를 세션 루트에 한정한다.
+/// 안전한 원문 편집 조회를 세션 루트에 한정한다. `encoding` 을 주면 그 인코딩으로만 읽는다 (사용자가 고른 인코딩, R2).
+/// 없으면 BOM·UTF-8·후보 차례로 정한다
 #[tauri::command]
 #[specta::specta]
 pub async fn fs_read_editable_file(
     state: State<'_, AppState>,
     session: u32,
     path: String,
+    encoding: Option<FsEncodingDto>,
 ) -> Result<FsEditableFileDto, IpcError> {
     Ok(state
         .core()?
         .core
-        .fs_read_editable_file(SessionId(session), &path)
+        .fs_read_editable_file_as(SessionId(session), &path, encoding.map(Into::into))
         .await?
         .into())
 }
 
-/// expected revision과 현재 파일이 같을 때만 원문을 저장한다.
+/// 열린 편집기의 주기 검사용 표지 (원문을 읽지 않는 메타데이터 묶음). 경로마다 하나, 일반 파일이 아니면 null
+#[tauri::command]
+#[specta::specta]
+pub async fn fs_file_stamps(
+    state: State<'_, AppState>,
+    session: u32,
+    paths: Vec<String>,
+) -> Result<Vec<Option<String>>, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .fs_file_stamps(SessionId(session), &paths)
+        .await?)
+}
+
+/// expected revision과 현재 파일이 같을 때만 원문을 저장한다. 원문은 `encoding`(없으면 UTF-8)으로 다시 써서 저장하고,
+/// revision 은 같은 인코딩으로 읽은 조회의 것이어야 한다 (R2)
 #[tauri::command]
 #[specta::specta]
 pub async fn fs_save_file(
@@ -359,11 +504,44 @@ pub async fn fs_save_file(
     path: String,
     expected_revision: String,
     text: String,
+    encoding: Option<FsEncodingDto>,
 ) -> Result<FsSaveResultDto, IpcError> {
     Ok(state
         .core()?
         .core
-        .fs_save_file(SessionId(session), &path, &expected_revision, &text)
+        .fs_save_file_as(
+            SessionId(session),
+            &path,
+            &expected_revision,
+            &text,
+            encoding.map_or(FsEncoding::Utf8, Into::into),
+        )
+        .await?
+        .into())
+}
+
+/// 줄 끝이 섞인 파일을 `line_ending` 하나로 통일해 저장한다. expected revision 과 현재 파일이 같을 때만 쓴다. 원문은
+/// `encoding`(없으면 UTF-8)으로 읽고 같은 인코딩으로 다시 쓴다 (R2)
+#[tauri::command]
+#[specta::specta]
+pub async fn fs_normalize_line_endings(
+    state: State<'_, AppState>,
+    session: u32,
+    path: String,
+    expected_revision: String,
+    line_ending: FsLineEndingDto,
+    encoding: Option<FsEncodingDto>,
+) -> Result<FsSaveResultDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .fs_normalize_line_endings_as(
+            SessionId(session),
+            &path,
+            &expected_revision,
+            line_ending.into(),
+            encoding.map_or(FsEncoding::Utf8, Into::into),
+        )
         .await?
         .into())
 }
@@ -464,6 +642,40 @@ mod tests {
         for (file, want) in cases {
             assert_eq!(serde_json::to_value(FsFileDto::from(file)).unwrap(), want);
         }
+    }
+
+    /// 편집 조회 (R2): 인코딩과 추정 여부를 싣고, 다시 쓸 수 없는 파일은 `lossy` 다. 인코딩 이름은 camelCase 다
+    #[test]
+    fn editable_dto_carries_encoding() {
+        let text = FsEditableFile::Text {
+            text: "한".into(),
+            size: 2,
+            file_key: "k".into(),
+            revision: "r".into(),
+            line_ending: FsLineEnding::Crlf,
+            bom: false,
+            encoding: FsEncoding::EucKr,
+            guessed: true,
+        };
+        assert_eq!(
+            serde_json::to_value(FsEditableFileDto::from(text)).unwrap(),
+            serde_json::json!({"kind": "text", "text": "한", "size": 2, "fileKey": "k", "revision": "r",
+                "lineEnding": "crlf", "bom": false, "encoding": "eucKr", "guessed": true})
+        );
+        let lossy = FsEditableFile::Lossy {
+            text: "\u{fffd}".into(),
+            size: 1,
+            encoding: FsEncoding::Utf16Le,
+            guessed: false,
+            malformed: true,
+        };
+        assert_eq!(
+            serde_json::to_value(FsEditableFileDto::from(lossy)).unwrap(),
+            serde_json::json!({"kind": "lossy", "text": "\u{fffd}", "size": 1, "encoding": "utf16Le",
+                "guessed": false, "malformed": true})
+        );
+        let chosen: FsEncodingDto = serde_json::from_value(serde_json::json!("shiftJis")).unwrap();
+        assert_eq!(FsEncoding::from(chosen), FsEncoding::ShiftJis);
     }
 
     /// 이미지 응답은 camelCase 필드와 상태 태그를 유지한다.

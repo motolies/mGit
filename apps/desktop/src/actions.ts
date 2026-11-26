@@ -4,6 +4,7 @@ import { commandTarget, executeCommand, resolveCommand } from './command-registr
 import { projectEditStrings } from './features/project/project-edit-strings';
 import { useSearchPanel } from './features/search/search-state';
 import { type AppStore, effectiveDock, type LeftTool, type TabKind } from './store/app-store';
+import { baseName } from './store/fs-path';
 import type { SessionState } from './store/session-store';
 import { type TagsDocRequest, tagsDoc, type WorkspaceState } from './store/workspace-store';
 
@@ -51,6 +52,7 @@ export type ActionApp = Pick<
   | 'openExternal'
   | 'setSettingsOpen'
   | 'setTheme'
+  | 'setGroupDialog'
 >;
 
 /** 동작이 쓰는 세션 상태 */
@@ -90,6 +92,8 @@ export interface ActionContext {
   /** 홈 화면의 clone/init 흐름 */
   startClone: () => void;
   startInit: () => void;
+  /** 여러 저장소 clone 흐름 (폴더 탭에서 열면 상위 폴더 선택 창이 그 폴더에서 열린다) */
+  startCloneMany?: () => void;
   /** 이름 입력 대화상자 (branch 만들기) */
   promptBranch: () => void;
   /** 두 ref 비교 대화상자 (DIFF-06) */
@@ -106,6 +110,38 @@ export interface ActionContext {
    * "tag 관리"·"모든 tag push…" 가 꺼진다
    */
   openTagsDoc?: (request?: TagsDocRequestInput) => void;
+  /**
+   * 폴더 탭의 동작 (툴바·개요 탭 일괄 줄과 같은 흐름 — 대상은 고른 저장소, 없으면 전부): 동기화(fetch·pull 은 바로, push
+   * 는 체크 목록), branch 만들기·전환(입력 창), 외부 앱으로 열 폴더 루트. 폴더 탭이면 같은 동작 id(`sync.*`·
+   * `branch.create`·`branch.quickSwitch`·`external.editor`·`external.terminal`·`external.reveal`)가 이것을 부른다. 주지
+   * 않으면 폴더 탭에서 그 동작이 꺼진다
+   */
+  folder?: FolderActions;
+}
+
+/** 폴더 탭의 동작 (`ActionContext.folder`) */
+export interface FolderActions {
+  /** 일괄 작업을 시작할 수 있는지 (도는 일괄 작업이 없고 저장소가 하나 이상) */
+  enabled: boolean;
+  /**
+   * 외부 편집기·터미널로 여는 곳 (저장소 탭의 저장소 루트에 해당한다): 폴더 탭은 폴더 루트, 가상 그룹은 활성 저장소. 없으면
+   * (활성 저장소가 없는 그룹) null 이고 외부 열기만 꺼진다
+   */
+  root: string | null;
+  /**
+   * 가상 그룹 탭이면 그 그룹 id (MR-13), 폴더 탭이면 null. 그룹 탭은 "그룹 편집…" 이, 폴더 탭은 "이 폴더로 그룹
+   * 만들기…" 가 켜진다
+   */
+  groupId: string | null;
+  fetch: () => void;
+  pull: () => void;
+  push: () => void;
+  /** 일괄 branch 만들기 (이름·생성 후 전환을 받는 창) */
+  createBranch: () => void;
+  /** 일괄 branch 전환 (이름을 받는 창) */
+  checkout: () => void;
+  /** 고른 저장소(없으면 전부)에 git 명령 실행 (MR-14, 명령을 받는 창) */
+  runCommand: () => void;
 }
 
 /**
@@ -164,7 +200,9 @@ export function focusPanel(name: PanelName): void {
   if (!panel) {
     return;
   }
-  focusTargetIn(panel).focus();
+  // 편집기를 나눴으면 지금 그룹 안에서 찾는다 (R3)
+  const scope = panel.querySelector<HTMLElement>('[data-editor-current="true"]') ?? panel;
+  focusTargetIn(scope).focus();
 }
 
 /** 지금 키보드 포커스가 그 영역(`data-panel`) 안에 있는지 */
@@ -279,6 +317,21 @@ export function focusLogFilter(part: LogFilterPart): void {
   }
 }
 
+/**
+ * Project 트리 위 이름 필터 칸에 포커스를 주고 적어 둔 글자를 전체 선택한다 (R1, `view.projectFilter`). 칸이 없으면(다른
+ * 왼쪽 도구 창) 아무것도 하지 않는다
+ */
+export function focusProjectFilter(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-panel="project"] [data-project-filter]',
+  );
+  input?.focus();
+  input?.select();
+}
+
 /** 사용자 재지정(UX-04)을 적용한다: null 은 해제 */
 function applyOverrides(list: Action[], overrides: Record<string, string | null>): Action[] {
   return list.map((a) => {
@@ -337,6 +390,10 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
   const idx = activeId === null ? -1 : order.indexOf(activeId);
   const tabAt = (i: number) => order[(i + order.length) % order.length];
   const inFolder = ctx.tabKind === 'folder';
+  // 폴더 탭의 동기화·branch 단축키는 툴바·일괄 줄과 같은 일괄 흐름을 쓴다 (저장소 탭은 그 세션에 대고)
+  const folder = inFolder ? (ctx.folder ?? null) : null;
+  // 외부 앱으로 여는 곳: 저장소 탭은 저장소 루트, 폴더 탭은 폴더 루트 (Project 트리 선택과 상관없이 탭의 루트)
+  const openPath = folder ? folder.root : repoPath;
   // 저장소 탭 세션의 원격 프로젝트 종류 (Pull Requests 도구 창을 보일 수 있는가 — 폴더 탭은 세션이 null 이라 없음)
   const remoteKind = session?.remoteProject?.kind ?? null;
   const dockVisible = effectiveDock(app.dock, ctx.tabKind).tool !== null;
@@ -453,24 +510,26 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.actions.fetch,
       group: 'sync',
       shortcut: 'mod+shift+f',
-      enabled: hasRepo && hasRemotes && !busy && !inOp,
-      run: () => void session?.fetch(null, true),
+      enabled: folder ? folder.enabled : hasRepo && hasRemotes && !busy && !inOp,
+      run: () => (folder ? folder.fetch() : void session?.fetch(null, true)),
     },
     {
       id: 'sync.pull',
       title: S.actions.pull,
       group: 'sync',
       shortcut: 'mod+shift+l',
-      enabled: hasRepo && !!current?.upstream && !current.upstreamGone && !busy && !inOp,
-      run: () => void session?.pull(),
+      enabled: folder
+        ? folder.enabled
+        : hasRepo && !!current?.upstream && !current.upstreamGone && !busy && !inOp,
+      run: () => (folder ? folder.pull() : void session?.pull()),
     },
     {
       id: 'sync.push',
       title: S.actions.push,
       group: 'sync',
       shortcut: 'mod+shift+k',
-      enabled: hasRepo && hasRemotes && !!current && !busy && !inOp,
-      run: () => void session?.push(),
+      enabled: folder ? folder.enabled : hasRepo && hasRemotes && !!current && !busy && !inOp,
+      run: () => (folder ? folder.push() : void session?.push()),
     },
     {
       // 저장소 탭 = 그래프 찾기 줄, 폴더 탭 = 로그 필터 바의 텍스트 칸 (5.7절, 동작 id 유지). 저장소 탭의 찾기 줄도 Git
@@ -603,20 +662,22 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       run: () => app.setShortcutsOpen(true),
     },
     {
+      // 폴더 탭 = 개요 탭 일괄 줄의 "브랜치 전환…"(이름을 받아 고른 저장소에서, 저장하지 않은 편집 확인 포함)
       id: 'branch.quickSwitch',
       title: S.actions.quickSwitch,
       group: 'branch',
       shortcut: 'mod+b',
-      enabled: hasRepo && !busy,
-      run: ctx.openQuickSwitch,
+      enabled: folder ? folder.enabled : hasRepo && !busy,
+      run: () => (folder ? folder.checkout() : ctx.openQuickSwitch()),
     },
     {
+      // 폴더 탭 = 개요 탭 일괄 줄의 "브랜치 만들기…"(고른 저장소마다). 기본 키는 없다 (command-keymap 의 IntelliJ 기본값)
       id: 'branch.create',
       title: S.actions.createBranch,
       group: 'branch',
       shortcut: 'mod+shift+b',
-      enabled: hasRepo && !busy,
-      run: ctx.promptBranch,
+      enabled: folder ? folder.enabled : hasRepo && !busy,
+      run: () => (folder ? folder.createBranch() : ctx.promptBranch()),
     },
     {
       id: 'branch.stash',
@@ -642,27 +703,29 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       run: () => app.toggleDock('git', 'console'),
     },
     {
+      // 탭의 루트를 연다 (폴더 탭은 폴더 루트). 일괄 작업과 겹쳐도 되는 보기 동작이라 일괄 작업 중에도 켜져 있다
       id: 'external.editor',
       title: S.actions.openEditor,
       group: 'external',
       shortcut: 'mod+shift+e',
-      enabled: repoPath !== null,
-      run: () => repoPath && void app.openExternal('editor', repoPath),
+      enabled: openPath !== null,
+      run: () => openPath && void app.openExternal('editor', openPath),
     },
     {
       id: 'external.terminal',
       title: S.actions.openTerminal,
       group: 'external',
       shortcut: 'mod+shift+t',
-      enabled: repoPath !== null,
-      run: () => repoPath && void app.openExternal('terminal', repoPath),
+      enabled: openPath !== null,
+      run: () => openPath && void app.openExternal('terminal', openPath),
     },
     {
+      // 폴더 탭은 폴더 루트를 Finder 에서 보인다 (편집기·터미널에서 열기와 같다, 기본 키 없음)
       id: 'external.reveal',
       title: S.actions.reveal,
       group: 'external',
-      enabled: repoPath !== null,
-      run: () => repoPath && void app.openExternal('reveal', repoPath),
+      enabled: openPath !== null,
+      run: () => openPath && void app.openExternal('reveal', openPath),
     },
     {
       id: 'app.settings',
@@ -835,6 +898,15 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       run: () => useSearchPanel.getState().open('files'),
     },
     {
+      // 최근에 연 파일만 빠른 열기 창에 보인다. 기본 키(⌘E)는 command-keymap 의 IntelliJ 기본값
+      id: 'workspace.recentFiles',
+      title: S.workspaceSearch.recentFiles,
+      group: 'view',
+      enabled: hasRepo || inFolder,
+      input: 'allow',
+      run: () => useSearchPanel.getState().open('recent'),
+    },
+    {
       id: 'workspace.searchContent',
       title: S.workspaceSearch.title,
       group: 'view',
@@ -843,7 +915,81 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       input: 'allow',
       run: () => useSearchPanel.getState().open('content'),
     },
+    // 가상 그룹 (MR-13): 새 그룹·이 폴더로 그룹 만들기·그룹 편집. 그룹 열기는 그룹마다의 항목이다 (`groupOpenActions`)
+    {
+      id: 'group.create',
+      title: S.group.create,
+      group: 'repo',
+      enabled: !app.isOpening,
+      run: () => app.setGroupDialog({ mode: 'create' }),
+    },
+    {
+      id: 'group.fromFolder',
+      title: S.group.fromFolder,
+      group: 'repo',
+      enabled: folder !== null && folder.groupId === null && folder.root !== null,
+      run: () => {
+        if (folder?.root) {
+          app.setGroupDialog({ mode: 'create', name: baseName(folder.root), paths: [folder.root] });
+        }
+      },
+    },
+    {
+      id: 'group.edit',
+      title: S.group.edit,
+      group: 'repo',
+      enabled: folder?.groupId != null,
+      run: () => {
+        if (folder?.groupId) app.setGroupDialog({ mode: 'edit', id: folder.groupId });
+      },
+    },
+    {
+      // 시작 화면의 "여러 저장소 복제…" 와 같다. 기본 키는 없다
+      id: 'repo.cloneMany',
+      title: S.actions.cloneMany,
+      group: 'repo',
+      enabled: !app.isOpening && ctx.startCloneMany !== undefined,
+      run: () => ctx.startCloneMany?.(),
+    },
+    {
+      // 폴더 탭: 개요 일괄 줄의 "명령 실행…"(고른 저장소, 없으면 전부). 기본 키는 없고 저장소 탭에서는 꺼진다
+      id: 'folder.runCommand',
+      title: S.actions.runFolderCommand,
+      group: 'sync',
+      enabled: folder?.enabled ?? false,
+      run: () => folder?.runCommand(),
+    },
+    {
+      // Project 도구 창을 열고 트리 위 이름 필터 칸으로 간다 (R1). IntelliJ 의 트리 찾기 키(⌘F)는 커밋 검색이 쓰므로 기본
+      // 키가 없다 — 트리에서 글자를 치면 바로 이 칸으로 간다
+      id: 'view.projectFilter',
+      title: S.actions.projectFilter,
+      group: 'view',
+      enabled: hasRepo || inFolder,
+      run: () => {
+        showLeftTool(app, 'project');
+        setTimeout(focusProjectFilter, 0);
+      },
+    },
   ];
+}
+
+/**
+ * 팔레트의 "그룹 열기: <이름>" 항목들 (MR-13). 그룹마다 하나라 단축키 설정 목록에는 넣지 않고 팔레트에만 더한다. 이미 열린
+ * 그룹이면 그 탭으로 간다
+ */
+export function groupOpenActions(
+  groups: readonly { id: string; name: string }[],
+  openGroupAt: (id: string) => void,
+  enabled: boolean,
+): Action[] {
+  return groups.map((g) => ({
+    id: `group.open.${g.id}`,
+    title: S.group.openNamed(g.name),
+    group: 'repo',
+    enabled,
+    run: () => openGroupAt(g.id),
+  }));
 }
 
 /** 화면별 명령은 안정적 ID와 메타데이터를 갖고, 구현은 화면 수명에 맞춰 등록한다. */
@@ -877,6 +1023,10 @@ function contextActions(): Action[] {
     ['branch.checkout', S.actions.checkoutBranch, 'branch'],
     ['diff.previousFile', S.diff.previousFile, 'view'],
     ['diff.nextFile', S.diff.nextFile, 'view'],
+    ['editor.splitRight', S.actions.splitRight, 'view'],
+    ['editor.moveToOppositeGroup', S.actions.moveToOppositeGroup, 'view'],
+    ['editor.unsplit', S.actions.unsplit, 'view'],
+    ['editor.focusOtherGroup', S.actions.focusOtherGroup, 'view'],
   ];
   return definitions.map(([id, title, group]) => ({
     id,

@@ -11,6 +11,7 @@ import {
 import type { ProjectTreeProps } from '../features/project/ProjectTree';
 import { projectEditStrings } from '../features/project/project-edit-strings';
 import { flattenProjectTree } from '../features/project/project-tree-model';
+import { groupSpace } from '../store/root-space';
 import { installDialogStub, tick } from './dialog-stub';
 
 const prepare = vi.hoisted(() => vi.fn());
@@ -217,5 +218,20 @@ describe('삭제 후 트리 포커스', () => {
     });
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+  it('그룹 맨 위(실제 디렉터리가 없는 루트)에는 새 파일을 만들지 않고 안내한다 (MR-13)', async () => {
+    const props = mount();
+    cleanup();
+    const space = groupSpace({
+      id: 'g1',
+      members: [{ alias: 'api', path: '/w/api', state: 'present', kind: 'standalone' }],
+    });
+    render(<ManagedProjectTree {...props} selected={null} session={1} space={space} />);
+    const t = projectEditStrings();
+    fireEvent.click(screen.getByRole('button', { name: t.newFile }));
+    await tick();
+    expect(screen.queryByRole('textbox', { name: t.name })).toBeNull();
+    expect(screen.getByRole('alert').textContent).toBe(S.group.topReadOnly);
+    expect(prepare).not.toHaveBeenCalled();
   });
 });

@@ -222,6 +222,73 @@ pub async fn restore_backup(
     Ok(())
 }
 
+/// 고른 폐기 백업을 지운다 (#26). 사본과 색인을 함께 지우며 되돌릴 수 없다. 지운 수를 돌려준다
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_file_backups(
+    state: State<'_, AppState>,
+    session: u32,
+    ids: Vec<u32>,
+) -> Result<u32, IpcError> {
+    let ids: Vec<u64> = ids.into_iter().map(u64::from).collect();
+    Ok(state
+        .core()?
+        .core
+        .delete_backups(SessionId(session), &ids)?)
+}
+
+/// 이 저장소의 폐기 백업 중 `before_ms`(epoch 밀리초)보다 먼저 만든 것을 지운다 (#26). 지운 수를 돌려준다
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_file_backups_before(
+    state: State<'_, AppState>,
+    session: u32,
+    before_ms: f64,
+) -> Result<u32, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .delete_backups_before(SessionId(session), before_ms as i64)?)
+}
+
+/// 하루 한 번 자동 백업 정리의 결과
+#[derive(Debug, Clone, Copy, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPruneDto {
+    /// 정리를 실제로 돌렸다 (하루 안에 이미 했으면 false)
+    pub ran: bool,
+    /// 지운 백업 ref 수
+    pub refs: u32,
+    /// 지운 폐기 백업 수
+    pub files: u32,
+}
+
+impl From<mgit_core::BackupPrune> for BackupPruneDto {
+    /// 코어 구조체와 1:1
+    fn from(p: mgit_core::BackupPrune) -> Self {
+        BackupPruneDto {
+            ran: p.ran,
+            refs: p.refs,
+            files: p.files,
+        }
+    }
+}
+
+/// 저장소 탭의 하루 한 번 백업 정리 (#18·#26). 보관 기간이 지난 백업 ref·폐기 백업을 지운다
+#[tauri::command]
+#[specta::specta]
+pub async fn prune_backups_daily(
+    state: State<'_, AppState>,
+    session: u32,
+) -> Result<BackupPruneDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .prune_backups_daily(SessionId(session))
+        .await?
+        .into())
+}
+
 /// stage 된 내용의 충돌 마커 (CF-24)
 #[tauri::command]
 #[specta::specta]

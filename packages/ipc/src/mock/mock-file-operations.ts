@@ -23,11 +23,15 @@ const parent = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')
 const name = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 const child = (path: string, base: string) => (path ? `${path}/${base}` : base);
 
-/** 실제 파일 API와 같은 준비·결정·부분 성공 계약을 목 트리에 적용한다. */
+/**
+ * 실제 파일 API와 같은 준비·결정·부분 성공 계약을 목 트리에 적용한다. `locate` 를 주면 세션 경로를 (루트, 나머지)로 나누는
+ * 데 그것을 쓴다 (그룹의 `별칭/…` 경로 — 맨 위·모르는 별칭은 거기서 거부한다). 없으면 세션 루트 기준 경로 그대로다
+ */
 export function createMockFileOperations(
   fs: MockFs,
   rootOf: (session: number) => string,
   after: (items: FsOperationOutcome[]) => void,
+  locate?: (session: number, path: string) => { root: string; path: string },
 ): Pick<
   IpcClient,
   | 'fsPrepareOperation'
@@ -50,10 +54,13 @@ export function createMockFileOperations(
     string,
     { request: FsOperationRequest; plan: FsOperationPlan; nodes: Node[] }
   >();
-  const location = (value: FsLocation): Location => ({
-    root: rootOf(value.session),
-    path: value.path,
-  });
+  const location = (value: FsLocation): Location =>
+    locate
+      ? locate(value.session, value.path)
+      : {
+          root: rootOf(value.session),
+          path: value.path,
+        };
   /** 세션 또는 외부 입력 토큰으로 등록한 경로만 찾는다. */
   const sourceOf = (source: FsSource): Location => {
     if (source.kind === 'session') return location(source);

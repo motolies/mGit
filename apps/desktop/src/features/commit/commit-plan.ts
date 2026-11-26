@@ -2,8 +2,10 @@
 // 규칙은 코어 `folder_commit(…, stage_all = false)` 의 건너뛰기와 같다 (계획 부록 "W14 ① 에서 확정"): 커밋될 저장소 =
 // 변경 목록의 stage 된 항목이 있고 충돌이 없으며, 요약의 진행 중 작업·요약 실패가 없는 저장소. stage 된 것이 없는
 // 저장소는 대상도 아니고 건너뜀으로 보이지도 않는다. stage 는 됐는데 커밋되지 않을 저장소는 사유와 함께 보인다.
+// 저장소별 메시지: 대상 저장소마다 공통 메시지를 덮어쓸 수 있다 (비었거나 공백뿐이면 공통 메시지 — 코어
+// `folder_commit_each` 와 같은 규칙). "이 저장소만 커밋"은 대상을 그 저장소 하나로 좁힌 같은 흐름이다.
 
-import type { BatchResult, RepoChanges, RepoSummary } from '@mgit/ipc';
+import type { BatchResult, RepoChanges, RepoCommitMessage, RepoSummary } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { entryInArea } from '../../store/session-store';
 
@@ -76,17 +78,44 @@ export function commitPlan(
   return { repos, files: repos.reduce((sum, r) => sum + r.files, 0), skipped };
 }
 
+/** 저장소별 커밋 메시지 초안 (저장소 경로 → 메시지). 없거나 비었거나 공백뿐이면 공통 메시지로 커밋한다 */
+export type RepoMessages = Readonly<Record<string, string>>;
+
+/** 저장소 하나의 자기 메시지. 없거나 공백뿐이면 null (공통 메시지를 쓴다) */
+export function ownMessage(messages: RepoMessages, path: string): string | null {
+  const own = messages[path];
+  return own !== undefined && own.trim() !== '' ? own : null;
+}
+
+/** 대상 중 자기 메시지로 커밋될 저장소의 경로·메시지 (대상 순서). 코어에 그대로 넘긴다 */
+export function repoMessagesFor(
+  repos: readonly CommitPlanRepo[],
+  messages: RepoMessages,
+): RepoCommitMessage[] {
+  return repos.flatMap((r) => {
+    const message = ownMessage(messages, r.path);
+    return message === null ? [] : [{ path: r.path, message }];
+  });
+}
+
+/** 그 저장소 하나만 대상으로 하는 계획 ("이 저장소만 커밋"). 커밋될 저장소가 아니면 null */
+export function planFor(plan: CommitPlan, path: string): CommitPlan | null {
+  const repo = plan.repos.find((r) => r.path === path);
+  return repo ? { repos: [repo], files: repo.files, skipped: [] } : null;
+}
+
 /** 커밋 버튼을 막는 사유 */
 export type CommitBlocker = 'running' | 'pending' | 'noTargets' | 'noMessage';
 
 /**
  * 커밋 버튼을 막는 사유 (툴팁으로 보인다). 일괄 작업(커밋 포함)이 돌고 있음 → stage·unstage 가 돌고 있음 → 커밋될 것이
- * 없음 → 메시지가 빔 순서. 누를 수 있으면 null
+ * 없음 → 쓸 메시지가 빈 저장소가 있음(공통 메시지가 비었고 자기 메시지도 없는 대상) 순서. 누를 수 있으면 null
  */
 export function commitBlocker(
   plan: CommitPlan,
   message: string,
   state: { running: boolean; pending: boolean },
+  messages: RepoMessages = {},
 ): CommitBlocker | null {
   if (state.running) {
     return 'running';
@@ -97,7 +126,65 @@ export function commitBlocker(
   if (plan.repos.length === 0) {
     return 'noTargets';
   }
-  return message.trim() === '' ? 'noMessage' : null;
+  const commonEmpty = message.trim() === '';
+  return commonEmpty && plan.repos.some((r) => ownMessage(messages, r.path) === null)
+    ? 'noMessage'
+    : null;
+}
+
+/**
+ * "이 저장소만 커밋"을 막는 사유 (메뉴 항목·단추의 꺼진 사유 글자). 커밋될 저장소가 아니면 커밋되지 않을 사유나
+ * `스테이징된 변경이 없습니다`, 커밋될 저장소면 그 저장소 하나로 본 `commitBlocker`. 누를 수 있으면 null
+ */
+export function repoCommitBlocker(
+  plan: CommitPlan,
+  path: string,
+  message: string,
+  state: { running: boolean; pending: boolean },
+  messages: RepoMessages,
+): string | null {
+  const t = S.commitTool;
+  const one = planFor(plan, path);
+  if (one === null) {
+    const skip = plan.skipped.find((s) => s.path === path);
+    return skip ? t.skip[skip.reason] : t.noTargets;
+  }
+  const blocker = commitBlocker(one, message, state, messages);
+  return blocker === null ? null : t[blocker];
+}
+
+/** 메시지의 첫 줄 (앞뒤 빈 줄을 뺀 제목) */
+function subjectOf(message: string): string {
+  return message.trim().split('\n', 1)[0] ?? '';
+}
+
+/** 누르기 전에 보이는 대상 줄과 툴팁 */
+export interface TargetsSummary {
+  /** `저장소 N개 · 파일 M개`, 자기 메시지로 커밋될 저장소가 있으면 뒤에 `· 저장소별 메시지 K개` */
+  text: string;
+  /** 툴팁: 대상 줄과 자기 메시지로 커밋될 저장소별 제목 (`저장소: 첫 줄`) */
+  detail: string;
+}
+
+/** 누르기 전에 보이는 대상 줄 (메시지가 다른 저장소를 누르기 전에 알린다). 커밋될 것이 없으면 null */
+export function targetsSummary(plan: CommitPlan, messages: RepoMessages): TargetsSummary | null {
+  if (plan.repos.length === 0) {
+    return null;
+  }
+  const t = S.commitTool;
+  const own = plan.repos.flatMap((r) => {
+    const message = ownMessage(messages, r.path);
+    return message === null ? [] : [t.ownMessageLine(r.name, subjectOf(message))];
+  });
+  const base = t.targets(plan.repos.length, plan.files);
+  const text = own.length === 0 ? base : `${base} · ${t.ownMessages(own.length)}`;
+  return { text, detail: [text, ...own].join('\n') };
+}
+
+/** 빈 저장소별 메시지 칸의 안내 글자: 공통 메시지의 첫 줄 (비었으면 그렇다고) */
+export function commonPlaceholder(message: string): string {
+  const t = S.commitTool;
+  return message.trim() === '' ? t.commonMessageEmpty : t.commonMessage(subjectOf(message));
 }
 
 /**

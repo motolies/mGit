@@ -45,6 +45,7 @@ import type {
   RefLabel,
   RemoteProject,
   RepoChanges,
+  RepoCommitMessage,
   RepoKind,
   RepoRefs,
   RepoResult,
@@ -360,6 +361,8 @@ interface FolderRepoSpec {
   refs: [string, number][];
   /** 태그 [이름, 위에서 몇 번째 커밋]. 태그로만 닿는 커밋은 포함 브랜치가 0개다 */
   tags?: [string, number][];
+  /** stash 항목 수 (요약의 `stashCount`). 워크트리는 원 저장소와 같은 수다 (목록을 함께 쓴다). 없으면 0 */
+  stashes?: number;
 }
 
 /**
@@ -404,6 +407,7 @@ const FOLDER_REPOS: FolderRepoSpec[] = [
     op: null,
     fetchedMinutesAgo: 47,
     error: null,
+    stashes: 2,
     entries: [
       entry('src/main/java/com/acme/auth/login/RateLimiter.java', 'added', 'unmodified'),
       entry('src/main/java/com/acme/auth/login/LoginController.java', 'modified', 'modified'),
@@ -475,6 +479,7 @@ const FOLDER_REPOS: FolderRepoSpec[] = [
     op: null,
     fetchedMinutesAgo: 3,
     error: null,
+    stashes: 1,
     entries: [],
     timeline: true,
     headDepth: 2,
@@ -495,6 +500,7 @@ const FOLDER_REPOS: FolderRepoSpec[] = [
     op: null,
     fetchedMinutesAgo: 3,
     error: null,
+    stashes: 1,
     entries: [
       entry('tokens/color/semantic.json', 'unmodified', 'modified'),
       entry('packages/react/src/components/Button/Button.module.css', 'unmodified', 'modified'),
@@ -897,6 +903,10 @@ function folderData(
             ? null
             : BASE_TIME * 1000 - spec.fetchedMinutesAgo * 60_000,
         error: spec.error,
+        // 코어처럼 업스트림이 없는 branch 에서만 원격 이름을 읽는다 (장면의 원격은 모두 origin)
+        ...(!failed && spec.sync === null && spec.branch !== null ? { remotes: ['origin'] } : {}),
+        // 코어처럼 stash 가 있을 때만 수를 싣는다 (상태를 못 읽은 줄은 없다)
+        ...(!failed && (spec.stashes ?? 0) > 0 ? { stashCount: spec.stashes } : {}),
       };
     }),
     folderChanges: repos
@@ -1261,21 +1271,32 @@ export function mockStatusWith(
  * 저장소(코어는 `ls-files -u` 실패를 충돌로 본다)·충돌·진행 중 작업 → "진행 중인 작업이 있음", `stageAll` 이면
  * 전부 stage 한 뒤, stage 된 것이 없으면 "stage 된 변경 없음". 커밋한 저장소는 stage 된 변경이 빠지고 ahead 가
  * 오른다. 바뀐 저장소 경로를 `committed` 로 알린다 (호출자가 세션 상태·이벤트를 맞춘다). 훅·서명·충돌 마커
- * 실패는 흉내 내지 않는다. 빈 `repos` 는 전부, 목록 밖 경로는 코어처럼 조용히 빠진다
+ * 실패는 흉내 내지 않는다. 빈 `repos` 는 전부, 목록 밖 경로는 코어처럼 조용히 빠진다. `repoMessages` 의 저장소는 자기
+ * 메시지를 쓰고(비었거나 공백뿐이면 공통 메시지), 대상 중 쓸 메시지가 빈 저장소가 있으면 아무것도 바꾸지 않고 거부한다
+ * (코어 `folder_commit_each` 와 같다)
  */
 export function mockFolderCommit(
   data: MockFolderData,
   repos: readonly string[],
   message: string,
   stageAll: boolean,
+  repoMessages: readonly RepoCommitMessage[] = [],
 ): { result: BatchResult; committed: string[] } {
-  if (message.trim() === '') {
-    throw new IpcClientError({
+  const own = new Map(
+    repoMessages.filter((m) => m.message.trim() !== '').map((m) => [m.path, m.message]),
+  );
+  const noMessage = () =>
+    new IpcClientError({
       kind: 'internal',
       message: pick('커밋 메시지를 입력하세요', 'Enter a commit message'),
     });
+  if (message.trim() === '' && own.size === 0) {
+    throw noMessage();
   }
   const targets = data.openFolder.filter((r) => repos.length === 0 || repos.includes(r.path));
+  if (targets.some((r) => (own.get(r.path) ?? message).trim() === '')) {
+    throw noMessage();
+  }
   const committed: string[] = [];
   const results: RepoResult[] = targets.map(({ path }) => {
     const summary = data.folderSummaries.find((row) => row.path === path);

@@ -200,6 +200,14 @@
   overflow-wrap: anywhere;
 }
 
+/* 고르는 칸의 보조 글자 (PromptDialog `select` 의 `note`): 칸의 이름에 섞이지 않게 label 밖, 칸 바로 아래에 붙인다 */
+.fieldNote {
+  margin-top: -6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .expandItems {
   background: transparent;
   border: 0;

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmDialog } from '../ConfirmDialog';
 import styles from '../ConfirmDialog.module.css';
@@ -59,6 +59,21 @@ function Choice() {
       />
     </>
   );
+}
+
+/**
+ * 대화상자 뒤에 그려져 같은 커밋의 DOM 을 레이아웃 효과에서 읽는다 (효과보다 먼저, 화면에 그려지기 전). 체크 칸이 있는
+ * 커밋마다 `체크여부 글자칸값 고른값` 을 `commits` 에 적는다
+ */
+function CommitProbe({ commits }: { commits: string[] }) {
+  useLayoutEffect(() => {
+    const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!box) return;
+    const text = document.querySelector<HTMLInputElement>('input[type="text"]');
+    const select = document.querySelector<HTMLSelectElement>('select');
+    commits.push(`${box.checked} ${text?.value} ${select?.value}`);
+  });
+  return null;
 }
 
 describe('ConfirmDialog 닫힘 처리', () => {
@@ -142,6 +157,79 @@ describe('PromptDialog 입력 유지', () => {
     rerender(view(true));
     await tick();
     expect((screen.getByLabelText('이름') as HTMLInputElement).value).toBe('');
+  });
+
+  it('열 때 첫 커밋부터 초깃값이다 — 빈 값으로 열린 화면이 그려지지 않는다 (닫힌 채 두었다 여는 앱의 쓰임새)', () => {
+    const fields: PromptField[] = [
+      { key: 'pick', label: '고르기', type: 'checkbox', initial: true },
+      { key: 'name', label: '이름', initial: 'x' },
+      {
+        key: 'mode',
+        label: '방식',
+        type: 'select',
+        initial: 'b',
+        options: [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+        ],
+      },
+    ];
+    const commits: string[] = [];
+    const view = (open: boolean) => (
+      <>
+        <PromptDialog
+          open={open}
+          title="t"
+          fields={open ? fields : []}
+          onConfirm={() => {}}
+          onCancel={() => {}}
+        />
+        <CommitProbe commits={commits} />
+      </>
+    );
+    const { rerender } = render(view(false));
+    rerender(view(true));
+    expect(commits[0]).toBe('true x b');
+  });
+});
+
+describe('PromptDialog 고르는 칸의 보조 글자', () => {
+  it('select 의 note 는 칸 아래의 설명이고 이름에 섞이지 않는다. note 가 없으면 그리지 않는다', () => {
+    render(
+      <PromptDialog
+        open
+        title="t"
+        fields={[
+          {
+            key: 'remote',
+            label: '보낼 원격',
+            type: 'select',
+            initial: '',
+            options: [
+              { value: '', label: '고르지 않음' },
+              { value: 'fork', label: 'fork' },
+            ],
+            note: '고르지 않으면 건너뜁니다',
+          },
+          {
+            key: 'mode',
+            label: '방식',
+            type: 'select',
+            initial: 'a',
+            options: [{ value: 'a', label: 'a' }],
+          },
+        ]}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const remote = screen.getByRole<HTMLSelectElement>('combobox', { name: '보낼 원격' });
+    const note = document.getElementById(remote.getAttribute('aria-describedby') ?? '');
+    expect(note?.textContent).toBe('고르지 않으면 건너뜁니다');
+    expect(note?.className).toBe(styles.fieldNote);
+    expect(remote.closest('label')?.contains(note as Node)).toBe(false);
+    const mode = screen.getByRole<HTMLSelectElement>('combobox', { name: '방식' });
+    expect(mode.hasAttribute('aria-describedby')).toBe(false);
   });
 });
 

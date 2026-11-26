@@ -2,9 +2,12 @@ import type { FsOperationPlan, FsOperationRequest, FsOperationResult, IpcClient 
 import { S } from '@mgit/ui';
 import { guardFileEditorClose } from '../../store/file-editor-close';
 import { type EditorFile, type EditorSource, fileEditors } from '../../store/file-editor-store';
-import { baseName, innermostRepo, isWithin, joinRoot, relativeTo } from '../../store/fs-path';
+import { baseName, innermostRepo, isWithin } from '../../store/fs-path';
+import { remapGroupFileDocs, remapTreePaths } from '../../store/path-remap';
+import type { RootSpace } from '../../store/root-space';
 import { fileWorkspaceSessions, getSessionStore } from '../../store/session-registry';
-import { type EditorDoc, fileViewDoc } from '../../store/workspace-store';
+import { tabSpace } from '../../store/session-space';
+import { fileViewDoc } from '../../store/workspace-store';
 import { flattenProjectTree, type ProjectTreeRow } from './project-tree-model';
 
 /** 삭제된 기준 행 대신 남은 선택, 다음 항목, 이전 항목, 루트 순서로 고른다. */
@@ -40,14 +43,28 @@ export function selectionAfterTrash(
   };
 }
 
+/** 열린 Project 세션의 경로 공간 (세션 키로 찾는다, `tabSpace`). 닫힌 그룹이면 null */
+function projectSpace(session: { id: number; root: string }): RootSpace | null {
+  return tabSpace(session.id, session.root);
+}
+
+/** 열린 Project 세션마다 경로 공간 (세션 id → 공간). 문서 별칭의 실제 경로를 얻는다 */
+function sessionSpaces(): Map<number, RootSpace> {
+  return new Map(
+    fileWorkspaceSessions().flatMap((session) => {
+      const space = projectSpace(session);
+      return space ? [[session.id, space] as const] : [];
+    }),
+  );
+}
+
 /** 계획에 포함된 원본과 목적지의 열린 문서를 실제 경로로 수집한다. */
 function affectedDocuments(plan: FsOperationPlan): EditorFile[] {
-  const roots = new Map(fileWorkspaceSessions().map((session) => [session.id, session.root]));
+  const spaces = sessionSpaces();
   return fileEditors.documents().filter((doc) =>
     [...doc.sources.values()].some((source) => {
-      const root = roots.get(source.session);
-      if (!root) return false;
-      const abs = joinRoot(root, source.path);
+      const abs = spaces.get(source.session)?.toAbs(source.path);
+      if (!abs) return false;
       return plan.items.some(
         (item) =>
           (item.source && isWithin(abs, item.source)) ||
@@ -89,8 +106,11 @@ async function applyResults(
   destinationSession?: number,
   rowsBeforeTrash?: ReadonlyMap<number, readonly ProjectTreeRow[]>,
 ) {
-  const sessions = fileWorkspaceSessions();
-  const roots = new Map(sessions.map((session) => [session.id, session.root]));
+  const sessions = fileWorkspaceSessions().flatMap((session) => {
+    const space = projectSpace(session);
+    return space ? [{ ...session, space }] : [];
+  });
+  const spaces = new Map(sessions.map((session) => [session.id, session.space]));
   const successes = result.items.filter((item) => item.status === 'committed');
   const repoPaths = [...new Set(sessions.flatMap((session) => session.repoPaths ?? []))];
   const moves = plan.kind === 'move' || plan.kind === 'rename';
@@ -124,19 +144,20 @@ async function applyResults(
   };
   for (const doc of docs) {
     const old = [...doc.sources.values()];
-    const first = old.find((source) => roots.has(source.session));
+    const first = old.find((source) => spaces.has(source.session));
     if (!first) continue;
-    const absolute = joinRoot(roots.get(first.session) ?? '', first.path);
+    // 그룹 맨 위처럼 실제 경로가 없는 별칭은 파일 작업의 대상이 아니다
+    const absolute = spaces.get(first.session)?.toAbs(first.path) ?? null;
+    if (absolute === null) continue;
     const next = mapped(absolute);
     if (next && next !== absolute) {
       const sources: EditorSource[] = old.flatMap((source) => {
-        const root = roots.get(source.session);
-        const path = root ? relativeTo(root, next) : null;
+        const path = spaces.get(source.session)?.toRel(next) ?? null;
         return path === null ? [] : [{ ...source, path }];
       });
       const destination = sessions.find((session) => session.id === destinationSession);
       if (destination) {
-        const path = relativeTo(destination.root, next);
+        const path = destination.space.toRel(next);
         if (path !== null && !sources.some((source) => source.session === destination.id))
           sources.push({ client, session: destination.id, path });
       }
@@ -155,18 +176,14 @@ async function applyResults(
   }
   for (const session of sessions) {
     const tree = session.tree.getState();
-    const remapTreePath = (path: string | null): string | null => {
-      if (path === null) return null;
-      const absolute = mapped(joinRoot(session.root, path));
-      return absolute === null ? null : relativeTo(session.root, absolute);
+    const { space } = session;
+    const remapTreePath = (path: string): string | null => {
+      const absolute = space.toAbs(path);
+      // 실제 경로가 없는 자리(그룹 맨 위)는 파일 작업으로 바뀌지 않는다
+      if (absolute === null) return path;
+      const next = mapped(absolute);
+      return next === null ? null : space.toRel(next);
     };
-    const remapSet = (set: Readonly<Record<string, true>>) =>
-      Object.fromEntries(
-        Object.keys(set).flatMap((path) => {
-          const next = remapTreePath(path);
-          return next === null ? [] : [[next, true as const]];
-        }),
-      );
     const trashSelection =
       plan.kind === 'trash'
         ? selectionAfterTrash(
@@ -174,35 +191,31 @@ async function applyResults(
             tree.selected,
             tree.selection,
             successes.flatMap((item) => {
-              const path = item.source ? relativeTo(session.root, item.source) : null;
+              const path = item.source ? space.toRel(item.source) : null;
               return path === null ? [] : [path];
             }),
             tree.anchor,
           )
         : null;
     session.tree.setState({
-      selected: remapTreePath(tree.selected),
-      anchor: remapTreePath(tree.anchor),
-      selection: remapSet(tree.selection),
-      expanded: remapSet(tree.expanded),
+      ...remapTreePaths(tree, remapTreePath),
       revealSeq: tree.revealSeq + 1,
       ...(trashSelection ?? {}),
     });
-    const state = session.workspace.getState();
     const transfers: { absolute: string; pinned: boolean }[] = [];
-    const entries = state.docs.flatMap<EditorDoc>((doc) => {
-      if (doc.kind !== 'file') return [doc];
-      const absolute = joinRoot(session.root, doc.path);
-      const next = mapped(absolute);
-      if (next === absolute) return [doc];
-      if (next === null) return [];
-      const path = relativeTo(session.root, next);
-      if (path === null) {
-        transfers.push({ absolute: next, pinned: doc.pinned });
-        return [];
-      }
-      return [
-        {
+    session.workspace.setState(
+      remapGroupFileDocs(session.workspace.getState(), (doc) => {
+        const absolute = space.toAbs(doc.path);
+        if (absolute === null) return doc;
+        const next = mapped(absolute);
+        if (next === absolute) return doc;
+        if (next === null) return null;
+        const path = space.toRel(next);
+        if (path === null) {
+          transfers.push({ absolute: next, pinned: doc.pinned });
+          return null;
+        }
+        return {
           ...doc,
           id: `file:${path}`,
           path,
@@ -211,26 +224,13 @@ async function applyResults(
           repoName: innermostRepo(repoPaths, next)
             ? baseName(innermostRepo(repoPaths, next) ?? '')
             : null,
-        },
-      ];
-    });
-    const docsById = new Map(entries.map((doc) => [doc.id, doc]));
-    const active = state.docs.find((doc) => doc.id === state.activeDocId);
-    const activeNext = active?.kind === 'file' ? mapped(joinRoot(session.root, active.path)) : null;
-    const activePath = activeNext ? relativeTo(session.root, activeNext) : null;
-    session.workspace.setState({
-      docs: [...docsById.values()],
-      activeDocId:
-        active?.kind === 'file'
-          ? activePath !== null && docsById.has(`file:${activePath}`)
-            ? `file:${activePath}`
-            : (entries[0]?.id ?? null)
-          : state.activeDocId,
-    });
+        };
+      }),
+    );
     const destination = sessions.find((item) => item.id === destinationSession);
     if (destination)
       for (const item of transfers) {
-        const path = relativeTo(destination.root, item.absolute);
+        const path = destination.space.toRel(item.absolute);
         if (path !== null)
           destination.workspace.getState().openDoc(
             fileViewDoc({
@@ -250,8 +250,8 @@ async function applyResults(
       await Promise.all([session.tree.getState().reload(), session.refresh()]);
       const repo = getSessionStore(session.id)?.getState();
       const path = repo?.selectedFile?.path;
-      if (repo && path) {
-        const absolute = joinRoot(repo.path, path);
+      const absolute = repo && path ? repo.space.toAbs(path) : null;
+      if (repo && path && absolute !== null) {
         if (
           successes.some(
             (item) =>
@@ -296,7 +296,7 @@ export async function executeFileOperation(
   } finally {
     fileEditors.lockMutation(docs, false);
     // 원본 정리 실패처럼 일부만 게시된 경우도 잠금 해제 뒤 디스크의 실제 결과를 읽는다.
-    const roots = new Map(fileWorkspaceSessions().map((session) => [session.id, session.root]));
+    const spaces = sessionSpaces();
     const destinations =
       result?.items.flatMap((item) => (item.destination ? [item.destination] : [])) ?? [];
     await Promise.allSettled(
@@ -305,8 +305,8 @@ export async function executeFileOperation(
         .filter((doc) => docs.includes(doc))
         .map((doc) => {
           const destination = [...doc.sources.values()].some((source) => {
-            const root = roots.get(source.session);
-            return root && destinations.some((path) => isWithin(joinRoot(root, source.path), path));
+            const absolute = spaces.get(source.session)?.toAbs(source.path);
+            return !!absolute && destinations.some((path) => isWithin(absolute, path));
           });
           return destination ? fileEditors.reloadAfterReplacement(doc) : fileEditors.refresh(doc);
         }),

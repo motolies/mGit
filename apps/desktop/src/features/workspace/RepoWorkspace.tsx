@@ -15,7 +15,7 @@ import {
 } from '../../store';
 import { fileEditors } from '../../store/file-editor-store';
 import { baseName, innermostRepo, joinRoot, relativeTo, rootToRepo } from '../../store/fs-path';
-import { allDocs, fileViewDoc } from '../../store/workspace-store';
+import { fileViewDoc, focusedEditorDoc } from '../../store/workspace-store';
 import { ChangesPanel } from '../changes/ChangesPanel';
 import { RepoCommitTool } from '../commit/RepoCommitTool';
 import { SessionConflictPane } from '../conflict/ConflictPane';
@@ -32,14 +32,16 @@ import type { ProjectOpenMode } from '../project/ProjectTree';
 import { type RowDecoration, repoDecoration } from '../project/project-rows';
 import { type EntryRow, flattenProjectTree, type RootRow } from '../project/project-tree-model';
 import { useFileActions } from '../project/use-file-actions';
+import { useProjectFilter } from '../project/use-project-filter';
 import { TagsDoc } from '../tags/TagsDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
-import { EditorArea, EditorEmptyState } from './EditorArea';
+import { EditorEmptyState } from './EditorArea';
 import { editorHints, tagsDocLink } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
 import { repoTreeMenu } from './repo-tree-menu';
+import { SplitEditorArea } from './SplitEditorArea';
 import { useEditorFileMenu } from './use-current-file';
 import docStyles from './WorktreeDiffDoc.module.css';
 
@@ -157,14 +159,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     scrollTop: t.scrollTop,
   }));
   const ws = useWorkspace((w) => ({
-    docs: w.docs,
-    sessionDocs: w.sessionDocs,
-    activeDocId: w.activeDocId,
+    // 트리에서 찾기는 지금 편집기 그룹의 보고 있는 문서를 본다 (R3)
+    focusedDoc: focusedEditorDoc(w),
     openDoc: w.openDoc,
-    activateDoc: w.activateDoc,
-    closeDoc: w.closeDoc,
-    closeDocs: w.closeDocs,
-    pinDoc: w.pinDoc,
   }));
   // 왼쪽 도구 창: Project·Commit·Pull Requests 가 같은 자리에 번갈아 뜬다 (폭은 폴더 탭과 함께 쓴다, WS-05). 그리는 것은
   // 저장된 값이 아니라 지금 보이는 것이다 — 원격 프로젝트가 없으면 저장된 Pull Requests 대신 Project (W24)
@@ -191,15 +188,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
   const root = s.path;
   const dirs = tree?.dirs;
   const expanded = tree?.expanded;
-  const rows = useMemo(
+  const treeRows = useMemo(
     () => (dirs && expanded ? flattenProjectTree(dirs, expanded) : []),
     [dirs, expanded],
-  );
-  const order = useMemo(() => rows.map((r) => r.id), [rows]);
-  // 메뉴의 "새 탭으로 열기" 대상 판정 (보이는 행 중 파일 보기로 열 수 있는 파일)
-  const openableFiles = useMemo(
-    () => new Set(rows.flatMap((r) => (r.kind === 'entry' && r.openable ? [r.path] : []))),
-    [rows],
   );
   // 파일 날짜의 기준 시각 (PT-10): 나열이 바뀔 때만 새로 잡는다
   // biome-ignore lint/correctness/useExhaustiveDependencies: dirs 는 기준 시각을 새로 잡으라는 신호다
@@ -212,6 +203,14 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     const changes: RepoChanges[] = [{ path: root, name, branch: null, entries, summary }];
     return buildStatusLookup(root, repoPaths, changes);
   }, [root, name, repoPaths, entries, summary]);
+  // 보기 거르기 (R1): 이름 필터·변경된 파일만 (이 저장소의 변경). 범위 선택·메뉴 대상은 보이는(거른) 행 기준이다
+  const { rows, filter } = useProjectFilter({ session: tabId, rows: treeRows, dirs, statuses });
+  const order = useMemo(() => rows.map((r) => r.id), [rows]);
+  // 메뉴의 "새 탭으로 열기" 대상 판정 (보이는 행 중 파일 보기로 열 수 있는 파일)
+  const openableFiles = useMemo(
+    () => new Set(rows.flatMap((r) => (r.kind === 'entry' && r.openable ? [r.path] : []))),
+    [rows],
+  );
   const rootKind = structure.rootKind;
   const rootDeco = useMemo(
     () =>
@@ -241,13 +240,6 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
       return status ? { status } : null;
     },
     [statuses, rootDeco, structureDecorations],
-  );
-  // 탭 막대: 저장한 문서(파일 보기) 뒤에 세션에서 파생한 문서
-  const storedDocs = ws?.docs;
-  const sessionDocs = ws?.sessionDocs;
-  const docs = useMemo(
-    () => allDocs({ docs: storedDocs ?? [], sessionDocs: sessionDocs ?? [] }),
-    [storedDocs, sessionDocs],
   );
   const hints = useMemo(() => editorHints(actions), [actions]);
   const emptyAction = useMemo(() => tagsDocLink(actions), [actions]);
@@ -400,8 +392,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     }
   };
 
-  const activeDoc = docs.find((d) => d.id === ws.activeDocId);
-  const locatePath = repoDocTreePath(activeDoc);
+  const locatePath = repoDocTreePath(ws.focusedDoc);
 
   return (
     <WorkspaceShell
@@ -428,6 +419,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
               key={tabId}
               root={{ name: s.name, detail: root }}
               rows={rows}
+              filter={filter}
               selected={tree.selected}
               selection={tree.selection}
               decorate={decorate}
@@ -445,6 +437,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
               onRefresh={refresh}
               onLocate={() => {
                 if (locatePath !== null) {
+                  filter?.showPath(locatePath);
                   void tree.reveal(locatePath);
                 }
               }}
@@ -460,19 +453,13 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
         )
       }
       editor={
-        <EditorArea
+        <SplitEditorArea
           dirtyOf={(doc) => doc.kind === 'file' && fileEditors.hasDirty(tabId, doc.path)}
           key={tabId}
-          docs={docs}
-          activeId={ws.activeDocId}
           titleOf={docTitle}
           detailOf={docDetail}
           tooltipOf={docTooltip}
           renderDoc={renderDoc}
-          onActivate={ws.activateDoc}
-          onClose={ws.closeDoc}
-          onCloseMany={ws.closeDocs}
-          onPin={ws.pinDoc}
           tabMenu={editorFileMenu}
           empty={<EditorEmptyState hints={hints} action={emptyAction} />}
         />

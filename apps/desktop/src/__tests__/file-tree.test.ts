@@ -382,6 +382,38 @@ describe('createFileTree (PT-03·08·09)', () => {
     expect(s.calls).toHaveLength(3);
   });
 
+  it('트리에서 찾기의 선택 유지 (R1 거르기를 끈 뒤): 펼치고 스크롤 차례만 올리고 선택은 그대로 둔다', async () => {
+    const s = manualSource();
+    const tree = createFileTree(s.source);
+    tree.getState().toggleInSelection('api/src/Main.java');
+    tree.getState().toggleInSelection('web/b.ts');
+    const found = tree.getState().reveal('web/b.ts', true);
+    await s.answer('', listing([entry('api', 'dir'), entry('web', 'dir')]));
+    await s.answer('web', listing([entry('b.ts')]));
+    await found;
+    expect(tree.getState()).toMatchObject({
+      selected: 'web/b.ts',
+      revealSeq: 1,
+      expanded: { '': true, web: true },
+    });
+    expect(Object.keys(tree.getState().selection).sort()).toEqual([
+      'api/src/Main.java',
+      'web/b.ts',
+    ]);
+  });
+
+  it('보기 거르기 (R1): 일부만 바꾸고, 같은 값이면 상태를 새로 만들지 않는다. 나열·펼침은 건드리지 않는다', () => {
+    const tree = createFileTree(manualSource().source);
+    const before = tree.getState();
+    expect(before.filter).toEqual({ query: '', changedOnly: false });
+    tree.getState().setFilter({ query: '' });
+    expect(tree.getState()).toBe(before);
+    tree.getState().setFilter({ query: 'main' });
+    tree.getState().setFilter({ changedOnly: true });
+    expect(tree.getState().filter).toEqual({ query: 'main', changedOnly: true });
+    expect(tree.getState().expanded).toBe(before.expanded);
+  });
+
   it('dispose 뒤의 응답은 버린다', async () => {
     const s = manualSource();
     const tree = createFileTree(s.source);

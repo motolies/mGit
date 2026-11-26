@@ -238,7 +238,7 @@ const offLabels = (items: readonly MenuItem[]) =>
 describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·하위 메뉴·꺼짐 — 손대기 전 화면에서 모은 그대로)', () => {
   const menu = (target: RepoBranchTarget, state: Partial<RepoBranchMenuState> = {}) =>
     shape(repoBranchMenu(target, setup(state).deps));
-  const MERGE_SUB = `▸ {merge, ${S.menu.mergeIntoNoFf}, ${S.menu.mergeIntoFfOnly}, ${S.menu.mergeIntoSquash}}`;
+  const MERGE_SUB = `▸ {${S.menu.mergeIntoDefault}, ${S.menu.mergeIntoNoFf}, ${S.menu.mergeIntoFfOnly}, ${S.menu.mergeIntoSquash}}`;
 
   it('로컬 (현재가 아닌 branch, 업스트림 있음) — 13개 (옛 12개 + checkout 다음의 업데이트, BR-09)', () => {
     const items = repoBranchMenu(T.development, setup().deps);
@@ -383,13 +383,13 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     expect(repoBranchMenu(T.backupMain, setup().deps)).toHaveLength(3);
     expect(menu(T.backupMain)).toEqual([
       '새 브랜치로 복원…',
-      'main 를 이 시점으로 되돌리기',
+      'main 브랜치를 이 시점으로 되돌리기',
       '---',
       '백업 삭제 [danger]',
     ]);
     expect(menu(T.backupStaging)).toEqual([
       '새 브랜치로 복원…',
-      'staging 를 이 시점으로 되돌리기',
+      'staging 브랜치를 이 시점으로 되돌리기',
       '---',
       '백업 삭제 [danger]',
     ]);
@@ -523,7 +523,7 @@ describe('누르면 부르는 세션 동작과 확인·입력 대화상자 (옛 
     await select(items, S.menu.compareWithHead(n));
     expect(session.openCompare).toHaveBeenCalledWith('main', n, false);
     for (const [label, mode] of [
-      ['merge', 'default'],
+      [S.menu.mergeIntoDefault, 'default'],
       [S.menu.mergeIntoNoFf, 'noFf'],
       [S.menu.mergeIntoFfOnly, 'ffOnly'],
       [S.menu.mergeIntoSquash, 'squash'],

@@ -262,7 +262,7 @@ export function graphMenuItems(row: GraphRow, a: GraphMenuActions, d: Dialogs): 
           label: S.menu.mergePreview(l.shortName),
           onSelect: () => void a.openMergePreview(l.shortName),
         },
-        { label: 'merge', onSelect: () => void a.merge(l.shortName, 'default') },
+        { label: S.menu.mergeIntoDefault, onSelect: () => void a.merge(l.shortName, 'default') },
         { label: S.menu.mergeIntoNoFf, onSelect: () => void a.merge(l.shortName, 'noFf') },
         { label: S.menu.mergeIntoFfOnly, onSelect: () => void a.merge(l.shortName, 'ffOnly') },
         { label: S.menu.mergeIntoSquash, onSelect: () => void a.merge(l.shortName, 'squash') },

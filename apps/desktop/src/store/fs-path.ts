@@ -1,5 +1,8 @@
 // 파일 트리의 경로 다루기 (W11). 트리는 루트 기준 상대 경로(`/` 구분, 루트 = '')로 항목을 가리키고,
-// 저장소 요약(`RepoSummary.path`)은 절대 경로로 온다. 둘을 잇는 순수 함수만 둔다.
+// 저장소 요약(`RepoSummary.path`)은 절대 경로로 온다. 둘을 잇는 순수 함수만 둔다. 탭의 루트와 잇는 변환은 경로 공간
+// (`root-space.ts`)을 거친다 — 이름 끝이 `In` 인 함수가 그 판이다.
+
+import type { RootSpace } from './root-space';
 
 /** 상대 경로의 상위 디렉터리. 루트 바로 아래면 '', 루트('')면 null */
 export function parentDir(path: string): string | null {
@@ -67,7 +70,16 @@ export function relativeTo(root: string, abs: string): string | null {
  * 끝의 `/`(통째로 untracked 인 디렉터리를 git 이 그렇게 알린다)는 뗀다. 저장소 기준 경로가 비면 저장소 자신이다
  */
 export function repoToRoot(root: string, repoPath: string, repoRel: string): string | null {
-  const repo = relativeTo(root, repoPath);
+  return underRepo(relativeTo(root, repoPath), repoRel);
+}
+
+/** `repoToRoot` 의 경로 공간 판 (MR-13): 저장소 디렉터리의 위치를 공간의 `toRel` 로 찾는다 */
+export function repoToRootIn(space: RootSpace, repoPath: string, repoRel: string): string | null {
+  return underRepo(space.toRel(repoPath), repoRel);
+}
+
+/** 루트 기준 저장소 위치(`repo`, 공간 밖이면 null) 아래에 저장소 기준 상대 경로를 잇는다 (`repoToRoot` 공용) */
+function underRepo(repo: string | null, repoRel: string): string | null {
   if (repo === null) {
     return null;
   }
@@ -87,7 +99,24 @@ export function rootToRepo(
   repoPaths: readonly string[],
   rel: string,
 ): { repoPath: string; path: string } | null {
-  const abs = joinRoot(root, rel);
+  return repoEntryOf(repoPaths, joinRoot(root, rel));
+}
+
+/** `rootToRepo` 의 경로 공간 판 (MR-13). 공간이 절대 경로로 바꾸지 못하는 자리(그룹 맨 위)도 null */
+export function rootToRepoIn(
+  space: RootSpace,
+  repoPaths: readonly string[],
+  rel: string,
+): { repoPath: string; path: string } | null {
+  const abs = space.toAbs(rel);
+  return abs === null ? null : repoEntryOf(repoPaths, abs);
+}
+
+/** 절대 경로의 (가장 안쪽 저장소, 그 저장소 기준 상대 경로). 저장소 밖이거나 저장소 디렉터리 자신이면 null */
+function repoEntryOf(
+  repoPaths: readonly string[],
+  abs: string,
+): { repoPath: string; path: string } | null {
   const repoPath = innermostRepo(repoPaths, abs);
   if (repoPath === null) {
     return null;

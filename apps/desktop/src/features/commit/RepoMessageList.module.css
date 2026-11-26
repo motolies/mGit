@@ -1,0 +1,69 @@
+/* 저장소별 커밋 메시지 목록 (떠 있는 창 안): 저장소마다 머리 한 줄과 두 줄 메시지 칸 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  width: min(380px, calc(100vw - 32px));
+  padding: var(--space-3) var(--space-4);
+}
+
+.hint {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 이름 · 파일 수 · 단추. 이름이 길면 말줄임 (전체 경로는 툴팁) */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.files {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.commit {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.message {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}

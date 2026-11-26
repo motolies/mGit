@@ -63,10 +63,11 @@ function isBoundEscape(e: KeyboardEvent, actions: readonly Action[]): boolean {
 
 /**
  * 전역 단축키 (UX-03): 레지스트리의 `shortcut` 과 맞는 동작을 실행한다. Esc 는 검색 → 세션 diff·충돌 화면 →
- * 미리보기 탭 순서로 하나를 닫고, 고정 탭과 개요는 닫지 않는다 (결정 8번). 팔레트는 ⌘⇧P. 한글 조합 중, 이미 처리된
+ * 미리보기 탭 순서로 하나를 닫고, 고정 탭과 개요는 닫지 않는다 (결정 8번). 입력란(commit 메시지·편집기 등) 안의 Esc 는 그
+ * 입력란 몫이라 이 화면들을 닫지 않는다 (#37 — 홈 화면에서 돌아가기만 예외). 팔레트는 ⌘⇧P. 한글 조합 중, 이미 처리된
  * 키, 모달이 떠 있을 때는 건드리지 않는다 (모달 뒤의 화면이 닫히거나, 단축키를 재지정하는 입력란의 키가 실제 동작을
  * 실행하지 않게 한다 — 대화상자의 Esc 는 대화상자가 먼저 닫는다). 수정키가 붙은 Esc 가 레지스트리 단축키면 화면을
- * 닫지 않고 그 동작만 실행한다 (맨 Esc 는 언제나 화면 닫기)
+ * 닫지 않고 그 동작만 실행한다 (맨 Esc 는 입력란 밖에서 화면 닫기)
  */
 export function handleGlobalKey(e: KeyboardEvent, ctx: GlobalKeyContext): void {
   if (isImeKey(e) || e.defaultPrevented || isModalOpen()) {
@@ -78,21 +79,26 @@ export function handleGlobalKey(e: KeyboardEvent, ctx: GlobalKeyContext): void {
   const terminal = target?.closest?.('[data-terminal], .xterm');
   if (terminal && !terminalPassKey(e, ctx.actions)) return;
   if (e.key === 'Escape' && !isBoundEscape(e, ctx.actions)) {
+    // 홈 화면은 입력란(최근 목록 검색)에서도 Esc 로 돌아간다 — 홈을 닫는 것이 그 화면 Esc 의 뜻이다
     if (ctx.returnHome?.()) {
       e.preventDefault();
+      return;
+    }
+    // 입력란(commit 메시지·브랜치 검색·편집기 글자 칸 등) 안의 Esc 는 그 입력란 몫이다 (#37). 찾기 줄 칸은 자기 Esc 로
+    // 찾기 줄을 닫으므로(이미 처리된 키) 여기까지 오지 않는다
+    if (typing) {
       return;
     }
     if (ctx.searchOpen) {
       ctx.closeSearch();
     } else if (ctx.activeDoc === 'diff') {
       ctx.closeActiveDoc();
-    } else if (ctx.activeDoc === 'conflict' && !target?.closest?.('.cm-content')) {
-      // 편집기 안의 Esc 는 편집기 몫이다. 닫기 전에 확인창(초안, W15)이 뜰 수 있으므로 이 키의 기본 동작을 막는다 —
-      // 막지 않으면 같은 Esc 가 방금 연 모달 대화상자를 곧바로 취소한다 (브라우저의 닫기 요청)
+    } else if (ctx.activeDoc === 'conflict') {
+      // 닫기 전에 확인창(초안, W15)이 뜰 수 있으므로 이 키의 기본 동작을 막는다 — 막지 않으면 같은 Esc 가 방금 연 모달
+      // 대화상자를 곧바로 취소한다 (브라우저의 닫기 요청)
       e.preventDefault();
       ctx.closeActiveDoc();
-    } else if (ctx.activeDoc === 'preview' && !typing) {
-      // 입력란(브랜치 검색 등)의 Esc 는 그 입력란 몫이다
+    } else if (ctx.activeDoc === 'preview') {
       ctx.closeActiveDoc();
     }
     return;

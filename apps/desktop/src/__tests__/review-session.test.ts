@@ -7,6 +7,7 @@ import {
   type RepoOpened,
   type StashEntry,
 } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { notifyHub } from '../store/notify';
 import { createSessionStore, type SessionState } from '../store/session-store';
@@ -442,6 +443,42 @@ describe('폐기 백업', () => {
     });
     expect(await store.getState().restoreFileBackup(3)).toBe(false);
     expect(store.getState().actionError).toContain('다른 저장소');
+  });
+
+  it('고른 것·기준 시각보다 오래된 것을 지우면 코어에 넘기고, 목록을 다시 읽고, 지운 수를 알린다 (#26)', async () => {
+    let list = [rec, { ...rec, id: 4, relPath: 'b.txt', savedAt: 5 }];
+    const deleteFileBackups = vi.fn(async (_s: number, ids: number[]) => {
+      list = list.filter((b) => !ids.includes(b.id));
+      return ids.length;
+    });
+    const deleteFileBackupsBefore = vi.fn(async (_s: number, before: number) => {
+      const n = list.filter((b) => b.savedAt < before).length;
+      list = list.filter((b) => b.savedAt >= before);
+      return n;
+    });
+    const { store } = setup({
+      listBackups: async () => list,
+      deleteFileBackups,
+      deleteFileBackupsBefore,
+    });
+    await store.getState().openFileBackups();
+    expect(await store.getState().deleteFileBackups({ ids: [3] })).toBe(true);
+    expect(deleteFileBackups).toHaveBeenCalledWith(1, [3]);
+    expect(store.getState().fileBackups?.map((b) => b.id)).toEqual([4]);
+    expect(notes.at(-1)?.title).toBe(S.safety.fileBackupsDeleted(1));
+    expect(await store.getState().deleteFileBackups({ beforeMs: 10 })).toBe(true);
+    expect(deleteFileBackupsBefore).toHaveBeenCalledWith(1, 10);
+    expect(store.getState().fileBackups).toEqual([]);
+    // 실패하면 오류로 남기고 알리지 않는다
+    const failing = setup({
+      deleteFileBackups: async () => {
+        throw { kind: 'internal', message: '다른 저장소의 백업입니다' };
+      },
+    });
+    const before = notes.length;
+    expect(await failing.store.getState().deleteFileBackups({ ids: [9] })).toBe(false);
+    expect(failing.store.getState().actionError).toContain('다른 저장소');
+    expect(notes.length).toBe(before);
   });
 });
 

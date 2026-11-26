@@ -15,6 +15,7 @@ import type {
   FsEntryKind,
   FsFile,
   FsImage,
+  FsLineEnding,
   FsSaveResult,
 } from '../types';
 import { pick } from './mock-l10n';
@@ -112,6 +113,22 @@ export interface MockFs {
 // ── 경로 검증 (코어와 같은 순서·문구) ─────────────────────────────────────────────
 
 /** UTF-8 바이트 길이 */
+/** 줄 끝 종류별 개수 (코어 `FsLineEndingCounts::of`): CRLF 는 하나로, 뒤에 LF 가 없는 CR 은 단독 CR 로 센다 */
+export function mockLineEndingCounts(text: string): { lf: number; crlf: number; cr: number } {
+  const counts = { lf: 0, crlf: 0, cr: 0 };
+  for (const eol of text.match(/\r\n|\r|\n/g) ?? []) {
+    if (eol === '\r\n') counts.crlf += 1;
+    else if (eol === '\r') counts.cr += 1;
+    else counts.lf += 1;
+  }
+  return counts;
+}
+
+/** 모든 줄 끝(LF·CRLF·단독 CR)을 하나로 바꾼다 (코어 `normalize_line_endings`). 그 밖의 글자는 그대로다 */
+export function mockNormalizeLineEndings(text: string, lineEnding: FsLineEnding): string {
+  return text.replace(/\r\n|\r|\n/g, lineEnding === 'crlf' ? '\r\n' : '\n');
+}
+
 function utf8Length(text: string): number {
   let n = 0;
   for (const ch of text) {
@@ -536,8 +553,14 @@ function folderSamples(): [string, MockNode][] {
       textFile('samples/release-notes.md', longMarkdown('Release notes', 30)),
     ],
     ['samples/주간 보고 2026-11-18.md', textFile('samples/주간 보고 2026-11-18.md', koreanNote)],
+    // 줄 끝이 섞인 파일 (CRLF 와 LF): 편집기는 읽기 전용으로 보이고 줄 끝 통일을 권한다
+    ['samples/legacy-build.bat', textFile('samples/legacy-build.bat', () => MIXED_EOL_SAMPLE)],
   ];
 }
+
+/** 줄 끝이 섞인 표본의 원문: CRLF 4줄, LF 2줄 */
+const MIXED_EOL_SAMPLE =
+  '@echo off\r\nrem legacy batch file (some lines end with CRLF, others with LF)\r\nset MODE=ship\ncall gradlew.bat assemble\r\necho ok\r\nexit /b 0\n';
 
 /** 기본 `logs/` 항목 수 (기본 상한 2,000 을 넘어 "더 보기" 가 나온다) */
 const DEFAULT_LOG_ENTRIES = 2_400;
@@ -645,14 +668,15 @@ export function createMockFs(layout: MockFsLayout): MockFs {
     const file = node.read();
     if (file.kind !== 'text') return file;
     if (file.text.includes('\0')) return { kind: 'binary', size: file.size };
-    const plain = file.text.replaceAll('\r\n', '');
-    if (plain.includes('\r') || (file.text.includes('\r\n') && plain.includes('\n')))
-      return { kind: 'mixedLineEndings' };
     let revision = revisions.get(node);
     if (!revision) {
       revision = `mock-${++nextRevision}`;
       revisions.set(node, revision);
     }
+    // 코어처럼 줄 끝이 섞인 파일도 원문·revision·줄 끝 수를 준다 (읽기 전용 보기와 줄 끝 통일의 비교 기준)
+    const counts = mockLineEndingCounts(file.text);
+    if (counts.cr > 0 || (counts.lf > 0 && counts.crlf > 0))
+      return { kind: 'mixedLineEndings', text: file.text, size: file.size, revision, ...counts };
     return {
       ...file,
       fileKey: `${root}/${path}`,
@@ -794,7 +818,10 @@ export function createMockFs(layout: MockFsLayout): MockFs {
     readEditable: editable,
     save(root, path, expectedRevision, text) {
       const current = editable(root, path);
-      if (current.kind !== 'text' || current.revision !== expectedRevision)
+      if (
+        (current.kind !== 'text' && current.kind !== 'mixedLineEndings') ||
+        current.revision !== expectedRevision
+      )
         return { kind: 'conflict' };
       if (utf8Length(text) > MOCK_FS_READ_MAX_BYTES)
         return { kind: 'failed', message: 'File exceeds 1 MiB' };

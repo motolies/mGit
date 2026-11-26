@@ -7,10 +7,13 @@
 
 mod authors;
 mod auto_fetch;
+mod backup_cleanup;
 mod branch;
 mod branch_delete;
 mod branch_update;
 mod changes;
+mod clone_batch;
+pub use clone_batch::{CLONE_CONCURRENCY_DEFAULT, CloneBatch, CloneTarget};
 mod diff_document;
 pub use diff_document::{DiffDocument, DiffDocumentSide};
 mod commit_table;
@@ -25,15 +28,20 @@ mod events;
 mod folder;
 mod folder_auto_fetch;
 mod folder_batch;
+mod folder_command;
+pub use folder_command::{COMMAND_STDERR_KEEP, COMMAND_STDOUT_MAX, CommandOutput};
 mod folder_integration;
+mod folder_stash;
 pub use folder_integration::{
     BatchMergeMode, IntegrationOutcome, IntegrationPreview, IntegrationTarget,
 };
+pub use folder_stash::{StashBatch, StashBatchRepo};
 mod folder_branches;
 mod folder_index;
 mod folder_inspect;
 mod folder_timeline;
 mod fs_tree;
+mod group;
 mod history;
 mod hosting;
 mod hosting_pr;
@@ -69,6 +77,7 @@ mod worktree;
 mod write;
 
 pub use authors::AUTHORS_MAX;
+pub use backup_cleanup::BackupPrune;
 pub use branch::{CheckoutTarget, is_not_fully_merged};
 pub use branch_delete::{
     BranchDeleteLocalTarget, BranchDeleteTarget, BranchDeletionResult, BranchDeletionStatus,
@@ -93,19 +102,26 @@ pub use events::{CoreEvent, EventSink, SessionId};
 pub use folder::{FolderOpened, FolderRepo, FolderSession, SCAN_DEPTH};
 pub use folder_auto_fetch::AutoFetchedRepo;
 pub use folder_batch::{
-    BatchOp, BatchPullMode, BatchResult, FolderSettings, RefMove, RepoChanges, RepoResult,
+    BatchOp, BatchPullMode, BatchResult, FolderSettings, NewUpstream, PushRemote, RefMove,
+    RepoChanges, RepoCommitMessage, RepoResult,
 };
 pub use folder_branches::{FolderBranch, FolderBranchIn, FolderBranchRepo, FolderBranches};
 pub use folder_index::{IndexTarget, IndexWriteResult, SkipReason, SkippedPath};
 pub use folder_timeline::{TimelineInfo, TimelineRepoInfo};
 pub use fs_tree::{
     FS_IMAGE_MAX_BYTES, FS_LIST_DEFAULT_LIMIT, FS_LIST_MAX_LIMIT, FS_READ_MAX_BYTES,
-    FsEditableFile, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding, FsListing, FsSaveResult,
+    FsEditableFile, FsEncoding, FsEntry, FsEntryKind, FsFile, FsImage, FsLineEnding,
+    FsLineEndingCounts, FsListing, FsSaveResult,
 };
 pub use fs_tree::{
     FsConflictKind, FsDecisionAction, FsLocation, FsOperationDecision, FsOperationItem,
     FsOperationKind, FsOperationOutcome, FsOperationPlan, FsOperationProgress, FsOperationRequest,
     FsOperationResult, FsOperations, FsOutcomeStatus, FsSource, FsTrash,
+};
+pub use group::{
+    GROUP_KEY_PREFIX, GROUP_NAME_MAX_CHARS, GROUPS_SETTING_KEY, GroupDef, GroupId, GroupMember,
+    GroupMount, GroupPathCheck, GroupSummary, GroupUpdate, GroupView, MemberState, PathIssue,
+    group_key,
 };
 pub use history::EMPTY_TREE;
 pub use hosting::{HostingAccount, OauthConfig, Profile, SshKeyInfo, account_id};
@@ -182,4 +198,11 @@ pub use mgit_model::{
     HookInfo, PerfStatus, RepoSettings, SecretHit, SecretIgnore, SignatureStatus, SigningInfo,
 };
 
-pub use fs_tree::{SearchDraft, WorkspaceSearchHit, WorkspaceSearchQuery, WorkspaceSearchResult};
+pub use fs_tree::{
+    REPLACE_BACKUP_REASON, REPLACE_FILE_LIMIT, REPLACE_PREVIEW_LINES, ReplaceChoice,
+    ReplaceExcluded, ReplaceFilePreview, ReplaceLine, ReplaceMatch, ReplaceOutcome, ReplacePattern,
+    ReplacePlan, ReplacePreview, ReplaceQuery, ReplaceSkipReason, ReplaceUndo, ReplaceUndoOutcome,
+};
+pub use fs_tree::{
+    SearchDraft, WorkspaceFileList, WorkspaceSearchHit, WorkspaceSearchQuery, WorkspaceSearchResult,
+};

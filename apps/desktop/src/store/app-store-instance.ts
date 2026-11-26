@@ -6,7 +6,6 @@ import {
   pickDirectory,
 } from '@mgit/ipc';
 import { settingsStorage } from '@mgit/storage';
-import { S } from '@mgit/ui';
 import { runtimeProfile } from '../runtime';
 import { createAppStore } from './app-store';
 
@@ -75,7 +74,7 @@ export const useAppStore = createAppStore(
       }
     : {
         client: createTauriClient(),
-        pickDirectory: (purpose) =>
-          pickDirectory(purpose === 'scan' ? S.home.scanTitle : S.toolbar.openRepo),
+        // 창 제목은 부르는 흐름이 정한다 (저장소 열기·폴더 스캔·clone·새 저장소·워크트리 폴더)
+        pickDirectory,
       },
 );

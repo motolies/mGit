@@ -6,8 +6,10 @@ import {
   type IpcClient,
   type RepoOpened,
 } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { describe, expect, it, vi } from 'vitest';
 import { subprojectPointers } from '../features/diff/subproject';
+import { type Notice, notifyHub } from '../store/notify';
 import { createSessionStore } from '../store/session-store';
 
 const HEAD = 'a'.repeat(40);
@@ -94,6 +96,42 @@ describe('SessionStore (C2 서브모듈)', () => {
     // 검사 건너뛰기
     await store.getState().push({}, { skipSubmoduleCheck: true });
     expect(c.push).toHaveBeenCalledTimes(2);
+  });
+
+  it('서브모듈 push 를 취소했거나 실패했으면 상위 저장소 push 로 이어 가지 않는다', async () => {
+    const notices: Notice[] = [];
+    const before = notifyHub.setHandler((n) => notices.push(n));
+    try {
+      const { store, client: c } = setup();
+      // 취소: 성공 1·취소 1 (실패 0 이어도 멈춘다)
+      vi.mocked(c.submoduleBatch).mockResolvedValueOnce({
+        label: '일괄 push',
+        results: [],
+        succeeded: 1,
+        skipped: 0,
+        failed: 0,
+        cancelled: 1,
+      });
+      await store.getState().pushSubmodulesThenPush({});
+      expect(c.push).not.toHaveBeenCalled();
+      expect(notices.map((n) => [n.kind, n.title])).toEqual([
+        ['info', `일괄 push: ${S.folder.batch.withCancelled(S.folder.batch.result(1, 0, 0), 1)}`],
+        ['info', S.dialog.submoduleUnpushedCancelled],
+      ]);
+      // 실패: 멈추고 오류 알림만
+      vi.mocked(c.submoduleBatch).mockResolvedValueOnce({
+        label: '일괄 push',
+        results: [],
+        succeeded: 0,
+        skipped: 0,
+        failed: 1,
+      });
+      await store.getState().pushSubmodulesThenPush({});
+      expect(c.push).not.toHaveBeenCalled();
+      expect(notices.at(-1)?.kind).toBe('error');
+    } finally {
+      notifyHub.setHandler(before);
+    }
   });
 
   it('서브모듈 포인터 diff 를 알아보고 commit 목록을 읽는다', async () => {

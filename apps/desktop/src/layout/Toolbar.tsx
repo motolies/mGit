@@ -17,6 +17,7 @@ import { useBatchReport } from '../features/folder/batch-report';
 import { useFolderBatchFlows } from '../features/folder/FolderBatchBar';
 import { RemotesDialog } from '../features/remote/RemotesDialog';
 import { useActiveTab, useAppStore, useFolder, useIsRepoTab, useSession } from '../store';
+import { GROUP_GLYPH, isGroupKey } from '../store/root-space';
 import { type SessionCloseMode, sessionCloseTargets } from '../store/session-close';
 import type { ThemePreference } from '../store/theme';
 import styles from './Toolbar.module.css';
@@ -254,11 +255,14 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
  * 폴더 탭의 Fetch·Pull·Push (WS-09, 결정 10번): 저장소 탭의 버튼과 같은 자리·모양이다. 대상은 프로젝트 트리에서
  * 고른 저장소, 없으면 전체 — 툴팁과 접근성 이름에 대상 수를 쓴다. Fetch 는 바로, Pull 은 폴더 설정의 방식(기본
  * ff-only)과 코어의 건너뛰기 규칙 그대로, Push 는 항상 대상 확인창을 거친다. 일괄 작업이 도는 동안 진행을 보이고
- * 버튼을 막는다. 결과는 토스트로 알린다 (개요 탭을 열지 않아도 보인다)
+ * 버튼을 막는다. 진행 옆 × 는 저장소 탭의 작업 표시와 같이 일괄 작업을 취소한다 (요청하면 끝날 때까지 꺼진다). 결과는
+ * 토스트로 알린다 (개요 탭을 열지 않아도 보인다)
  */
 function FolderSyncButtons() {
   const f = useFolder((st) => ({
     progress: st.batchProgress,
+    cancelling: st.batchCancelling,
+    cancelBatch: st.cancelBatch,
     pullMode: st.settings?.pullMode ?? 'ffOnly',
   }));
   const flows = useFolderBatchFlows(useBatchReport());
@@ -294,11 +298,24 @@ function FolderSyncButtons() {
         {S.remote.push}
       </Button>
       {f.progress ? (
-        <span className={styles.operation} role="status">
-          {S.operation.running(t.running(f.progress.label, f.progress.phase))}
+        <span className={styles.operation}>
+          <span role="status">
+            {S.operation.running(t.running(f.progress.label, f.progress.phase))}
+            {f.cancelling ? ` · ${t.cancelling}` : ''}
+          </span>
           {f.progress.percent !== null ? (
             <progress className={styles.progress} max={100} value={f.progress.percent} />
           ) : null}
+          <button
+            type="button"
+            className={styles.tabClose}
+            disabled={f.cancelling}
+            onClick={() => void f.cancelBatch()}
+            aria-label={t.cancel}
+            title={f.cancelling ? t.cancelling : t.cancelTip}
+          >
+            ×
+          </button>
         </span>
       ) : null}
       {flows.dialogs.element}
@@ -462,6 +479,13 @@ export function Toolbar() {
                 return null;
               }
               const active = id === activeSessionId;
+              // 가상 그룹 탭 (MR-13): 폴더 탭과 같은 종류지만 글리프·툴팁이 그룹이다 (경로 대신 그룹 이름)
+              const group = isGroupKey(meta.path);
+              const kindLabel = group
+                ? S.group.kind
+                : meta.kind === 'folder'
+                  ? S.home.folder
+                  : S.home.repo;
               return (
                 <div
                   key={id}
@@ -479,10 +503,14 @@ export function Toolbar() {
                     }
                     onKeyDown={(e) => onTabKeyDown(e, id)}
                     onClick={() => setActiveSession(id)}
-                    title={`${meta.kind === 'folder' ? S.home.folder : S.home.repo}: ${meta.path}`}
-                    aria-description={meta.kind === 'folder' ? S.home.folder : S.home.repo}
+                    title={group ? S.group.tabTitle(meta.name) : `${kindLabel}: ${meta.path}`}
+                    aria-description={kindLabel}
                   >
-                    {meta.kind === 'folder' ? <Icon name="folder" /> : null}
+                    {group ? (
+                      <span aria-hidden="true">{GROUP_GLYPH}</span>
+                    ) : meta.kind === 'folder' ? (
+                      <Icon name="folder" />
+                    ) : null}
                     <span>{meta.parent !== null ? `└ ${meta.name}` : meta.name}</span>
                   </button>
                   <button
@@ -506,7 +534,14 @@ export function Toolbar() {
           active={activeSessionId === null ? null : String(activeSessionId)}
           items={sessionOrder.flatMap((id) =>
             sessions[id]
-              ? [{ id: String(id), title: `${sessions[id].name} — ${sessions[id].path}` }]
+              ? [
+                  {
+                    id: String(id),
+                    title: isGroupKey(sessions[id].path)
+                      ? S.group.tabTitle(sessions[id].name)
+                      : `${sessions[id].name} — ${sessions[id].path}`,
+                  },
+                ]
               : [],
           )}
           select={(id) => {

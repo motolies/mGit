@@ -9,6 +9,7 @@ import type { SubmoduleInfo } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import type { MenuItem } from '../../components/ContextMenu';
 import { repoNameOf } from '../../store';
+import { dirSpace } from '../../store/root-space';
 import type { DirRoles } from '../modules/repo-structure';
 import { joinGroups, openInItems } from '../project/file-actions-menu';
 import type { EntryRow, RootRow } from '../project/project-tree-model';
@@ -27,8 +28,10 @@ export interface RepoTreeMenuActions extends EntryMenuActions {
 }
 
 /** 저장소 탭 메뉴를 만들 때 필요한 것 */
-export type RepoTreeMenuInput = Omit<EntryMenuInput, 'row'> & {
+export type RepoTreeMenuInput = Omit<EntryMenuInput, 'row' | 'space'> & {
   row: RootRow | EntryRow;
+  /** 작업 트리(트리 루트)의 절대 경로. 일반 항목의 경로 공간은 이 디렉터리 하나다 */
+  root: string;
   /** 작업 트리 기준 경로의 역할 (모듈·서브모듈·하위 저장소). 없으면 null */
   roles(rel: string): DirRoles | null;
   /** 이 저장소가 서브모듈이면 상위 저장소의 절대 경로 */
@@ -76,7 +79,7 @@ export function repoTreeMenu(input: RepoTreeMenuInput, act: RepoTreeMenuActions)
     ]);
   }
   const roles = row.entryKind === 'dir' ? input.roles(row.path) : null;
-  const entry = entryMenu({ ...input, row }, act);
+  const entry = entryMenu({ ...input, row, space: dirSpace(input.root) }, act);
   if (roles === null) {
     return entry;
   }

@@ -261,6 +261,22 @@ export function revsAfterRename(
   return revsOfBranchNames([...new Set(next)]);
 }
 
+/**
+ * 로컬 branch 를 어느 저장소에서도 지운 뒤의 범위: 그 이름(`refs/heads/` 붙은 것도)을 범위에서 뺀다 — 사라진 이름으로 걸린
+ * 로그가 비지 않게. 그 이름만 걸려 있었으면 HEAD 범위로, 범위에 없으면 그대로다
+ */
+export function revsAfterDelete(revs: GraphRevs, name: string): GraphRevs {
+  const gone = (value: string) => value === name || value === `refs/heads/${name}`;
+  if (revs.kind === 'solo') {
+    return gone(revs.name) ? headRevs() : revs;
+  }
+  if (revs.kind === 'branches') {
+    const names = revs.names.filter((value) => !gone(value));
+    return names.length > 0 ? { kind: 'branches', names } : headRevs();
+  }
+  return revs;
+}
+
 /** 범위에 맞춰 선택된 것으로 그릴 노드 id. HEAD 범위면 HEAD 행 하나다 */
 export function selectedBranchNodeIds(
   revs: GraphRevs,

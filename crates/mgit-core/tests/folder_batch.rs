@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::{collector, core, core_watching, wait_for};
-use mgit_core::{BatchOp, BatchPullMode, CoreEvent, FolderSettings};
+use mgit_core::{
+    BatchOp, BatchPullMode, CoreEvent, FolderSettings, NewUpstream, PushRemote, RepoCommitMessage,
+};
 use mgit_testkit::TestRepo;
 
 /// 경로에 빈 저장소를 만든다 (`TestRepo::at` 은 init 하지 않는다)
@@ -77,10 +79,16 @@ async fn batch_fetch_pull_push_branch_checkout_and_exclude() {
 
     // push: a 에 새 commit → 보냄, b 는 업스트림 없음
     a.commit("a third");
-    let r = core.folder_batch(fid, BatchOp::Push, &[]).await.unwrap();
+    let r = core
+        .folder_batch(fid, BatchOp::Push { new_upstream: None }, &[])
+        .await
+        .unwrap();
     let ra = r.results.iter().find(|x| x.name == "a").unwrap();
     assert!(ra.ok && ra.skipped.is_none(), "{ra:?}");
-    let r = core.folder_batch(fid, BatchOp::Push, &[]).await.unwrap();
+    let r = core
+        .folder_batch(fid, BatchOp::Push { new_upstream: None }, &[])
+        .await
+        .unwrap();
     assert_eq!(
         r.results
             .iter()
@@ -282,6 +290,86 @@ async fn batch_worktree_changes_and_commit() {
         .unwrap();
     assert_eq!(r.succeeded, 1);
     assert!(core.folder_changes(fid, &[]).await.unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 저장소의 마지막 commit 메시지 전체 (`%B`, 끝 공백 제거)
+fn last_message(repo: &mut TestRepo) -> String {
+    repo.git_ok(["log", "-1", "--format=%B"])
+        .trim_end()
+        .to_string()
+}
+
+#[tokio::test]
+async fn folder_commit_each_uses_per_repo_messages() {
+    let core = core().await;
+    let (root, mut a, mut b) = two_repos("each");
+    let (sink, _rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+    let stage_both = |a: &mut TestRepo, b: &mut TestRepo, n: u32| {
+        a.write_file("a.txt", &format!("a{n}"));
+        a.stage(&["a.txt"]);
+        b.write_file("b.txt", &format!("b{n}"));
+        b.stage(&["b.txt"]);
+    };
+    let own = |path: PathBuf, message: &str| RepoCommitMessage {
+        path,
+        message: message.into(),
+    };
+
+    // a 는 자기 메시지(본문 포함), b 는 공통 메시지. 경로는 정규화하지 않은 그대로 넘겨도 맞춘다
+    stage_both(&mut a, &mut b, 1);
+    let r = core
+        .folder_commit_each(
+            fid,
+            &[],
+            "공통 제목",
+            &[own(root.join("a"), "a 전용\n\n본문 줄")],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.succeeded, 2, "{r:?}");
+    assert_eq!(last_message(&mut a), "a 전용\n\n본문 줄");
+    assert_eq!(last_message(&mut b), "공통 제목");
+
+    // 공백뿐인 저장소별 메시지는 공통 메시지를 쓴다
+    stage_both(&mut a, &mut b, 2);
+    let r = core
+        .folder_commit_each(fid, &[], "둘째", &[own(root.join("b"), "  \n ")], false)
+        .await
+        .unwrap();
+    assert_eq!(r.succeeded, 2, "{r:?}");
+    assert_eq!(last_message(&mut a), "둘째");
+    assert_eq!(last_message(&mut b), "둘째");
+
+    // 공통 메시지가 비었는데 자기 메시지가 없는 대상(b)이 있으면 아무것도 커밋하지 않고 거부한다
+    stage_both(&mut a, &mut b, 3);
+    let before = (a.head(), b.head());
+    let err = core
+        .folder_commit_each(fid, &[], " ", &[own(root.join("a"), "a 만")], false)
+        .await;
+    assert!(err.is_err(), "{err:?}");
+    assert_eq!((a.head(), b.head()), before);
+
+    // 대상을 a 하나로 좁히면(이 저장소만 커밋) 공통 메시지가 비어도 자기 메시지로 커밋되고 b 는 그대로다
+    let r = core
+        .folder_commit_each(
+            fid,
+            &[root.join("a")],
+            "",
+            &[own(root.join("a"), "a 만")],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((r.succeeded, r.results.len()), (1, 1), "{r:?}");
+    assert_eq!(last_message(&mut a), "a 만");
+    assert_eq!(b.head(), before.1);
+    // 옛 호출(공통 메시지만)은 그대로 동작한다
+    let r = core.folder_commit(fid, &[], "셋째", false).await.unwrap();
+    assert_eq!((r.succeeded, r.skipped), (1, 1), "{r:?}");
+    assert_eq!(last_message(&mut b), "셋째");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -982,4 +1070,361 @@ async fn batch_delete_branch_requires_explicit_valid_targets() {
     assert!(!has_branch(&mut a, "done"));
     assert!(has_branch(&mut b, "done"));
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// 원격 `remote` 의 branch 가 가리키는 commit (`ls-remote`). 없으면 빈 문자열
+fn remote_branch(repo: &mut TestRepo, remote: &str, branch: &str) -> String {
+    repo.git_ok(["ls-remote", remote, &format!("refs/heads/{branch}")])
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 지금 HEAD commit
+fn head_of(repo: &mut TestRepo) -> String {
+    repo.git_ok(["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// 일괄 push 의 새 업스트림 (사용자 결정 "origin 자동 + 예외만 선택"): 일괄 branch 생성 → 일괄 commit → 일괄 push 가
+/// 업스트림이 없다고 끊기지 않는다. origin 이 있으면 `push -u origin`, origin 없이 원격이 여럿이면 고른 원격으로 보내고
+/// 고르지 않으면 건너뛴다. 원격이 없으면 건너뛰고, 업스트림이 있는 저장소는 예전처럼 그 업스트림으로 보낸다.
+/// 규칙 없이 부르면(예전 호출·서브모듈 일괄) 업스트림이 없는 저장소는 예전처럼 건너뛴다
+#[tokio::test]
+async fn batch_push_publishes_branches_without_upstream() {
+    let core = core().await;
+    let root = std::env::temp_dir().join(format!("mgit-batch-publish-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // solo: origin 만 있다 → 자동으로 origin
+    let mut solo = init_at(&root.join("solo"));
+    solo.commit("s1");
+    solo.add_bare_remote();
+    solo.git_ok(["push", "-q", "-u", "origin", "main"]);
+    // picked·unpicked: origin 없이 원격이 둘 → 고른 원격으로 / 고르지 않으면 건너뜀
+    let mut picked = init_at(&root.join("picked"));
+    picked.commit("p1");
+    picked.add_bare_remote_named("team");
+    picked.add_bare_remote_named("fork");
+    let mut unpicked = init_at(&root.join("unpicked"));
+    unpicked.commit("u1");
+    unpicked.add_bare_remote_named("team");
+    unpicked.add_bare_remote_named("fork");
+    // lonely: 원격이 없다 → 건너뜀
+    let mut lonely = init_at(&root.join("lonely"));
+    lonely.commit("l1");
+    // tracked: 업스트림이 있는 main 에 머문다 (branch 를 만들지 않는다) → 예전처럼 업스트림으로
+    let mut tracked = init_at(&root.join("tracked"));
+    tracked.commit("t1");
+    tracked.add_bare_remote();
+    tracked.git_ok(["push", "-q", "-u", "origin", "main"]);
+
+    let (sink, _rx) = collector();
+    let opened = core.open_folder(&root, sink).await.unwrap();
+    let fid = opened.session;
+    assert_eq!(opened.repos.len(), 5);
+    let path_of = |name: &str| {
+        opened
+            .repos
+            .iter()
+            .find(|r| r.path.ends_with(name))
+            .unwrap()
+            .path
+            .clone()
+    };
+    let publishing: Vec<PathBuf> = ["solo", "picked", "unpicked", "lonely"]
+        .into_iter()
+        .map(path_of)
+        .collect();
+
+    // 일괄 branch 생성 (새 branch 는 업스트림이 없다) → 일괄 commit
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::CreateBranch {
+                name: "feat-x".into(),
+                checkout: true,
+                start_point: None,
+            },
+            &publishing,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.succeeded, 4, "{r:?}");
+    for repo in [
+        &mut solo,
+        &mut picked,
+        &mut unpicked,
+        &mut lonely,
+        &mut tracked,
+    ] {
+        repo.write_file("work.txt", "w");
+    }
+    let r = core.folder_commit(fid, &[], "work", true).await.unwrap();
+    assert_eq!(r.succeeded, 5, "{r:?}");
+
+    // 요약: 업스트림이 없는 branch 만 원격 이름을 읽는다 (확인창이 새 업스트림의 원격을 미리 보인다)
+    let summaries = core.folder_summaries(fid, &[]).await.unwrap();
+    let remotes_of = |name: &str| {
+        let mut remotes = summaries
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .remotes
+            .clone();
+        if let Some(list) = remotes.as_mut() {
+            list.sort();
+        }
+        remotes
+    };
+    assert_eq!(remotes_of("solo"), Some(vec!["origin".to_string()]));
+    assert_eq!(
+        remotes_of("picked"),
+        Some(vec!["fork".to_string(), "team".to_string()])
+    );
+    assert_eq!(remotes_of("lonely"), Some(Vec::new()));
+    assert_eq!(remotes_of("tracked"), None);
+
+    // 규칙 없이 부르면 (예전 호출) 업스트림이 없는 저장소는 모두 예전처럼 건너뛴다
+    let r = core
+        .folder_batch(fid, BatchOp::Push { new_upstream: None }, &publishing)
+        .await
+        .unwrap();
+    assert!(
+        r.results
+            .iter()
+            .all(|x| x.skipped.as_deref() == Some("업스트림이 없습니다")),
+        "{r:?}"
+    );
+    assert_eq!(upstream_ref(&mut solo, "feat-x"), "");
+
+    // 새 업스트림 규칙: picked 만 fork 를 골랐다 (정규화하지 않은 경로로 넘겨도 맞춘다)
+    let plan = NewUpstream {
+        remotes: vec![PushRemote {
+            path: root.join("picked"),
+            remote: "fork".into(),
+        }],
+    };
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::Push {
+                new_upstream: Some(plan),
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    let row = |name: &str| r.results.iter().find(|x| x.name == name).unwrap().clone();
+    assert_eq!((r.succeeded, r.skipped, r.failed), (3, 2, 0), "{r:?}");
+
+    let solo_row = row("solo");
+    assert!(solo_row.ok && solo_row.skipped.is_none(), "{solo_row:?}");
+    assert_eq!(solo_row.upstream_set.as_deref(), Some("origin/feat-x"));
+    assert_eq!(upstream_of(&mut solo, "feat-x"), "origin/feat-x");
+    let solo_head = head_of(&mut solo);
+    assert_eq!(remote_branch(&mut solo, "origin", "feat-x"), solo_head);
+
+    let picked_row = row("picked");
+    assert!(
+        picked_row.ok && picked_row.skipped.is_none(),
+        "{picked_row:?}"
+    );
+    assert_eq!(picked_row.upstream_set.as_deref(), Some("fork/feat-x"));
+    assert_eq!(upstream_of(&mut picked, "feat-x"), "fork/feat-x");
+    let picked_head = head_of(&mut picked);
+    assert_eq!(remote_branch(&mut picked, "fork", "feat-x"), picked_head);
+    assert_eq!(remote_branch(&mut picked, "team", "feat-x"), "");
+
+    assert_eq!(
+        row("unpicked").skipped.as_deref(),
+        Some("origin 이 없어 보낼 원격을 골라야 합니다")
+    );
+    assert_eq!(upstream_ref(&mut unpicked, "feat-x"), "");
+    assert_eq!(remote_branch(&mut unpicked, "team", "feat-x"), "");
+    assert_eq!(remote_branch(&mut unpicked, "fork", "feat-x"), "");
+
+    assert_eq!(
+        row("lonely").skipped.as_deref(),
+        Some("원격 저장소가 없습니다. 먼저 원격 저장소를 추가하세요.")
+    );
+    assert_eq!(upstream_ref(&mut lonely, "feat-x"), "");
+
+    let tracked_row = row("tracked");
+    assert!(
+        tracked_row.ok && tracked_row.skipped.is_none(),
+        "{tracked_row:?}"
+    );
+    assert_eq!(tracked_row.upstream_set, None);
+    let tracked_head = head_of(&mut tracked);
+    assert_eq!(remote_branch(&mut tracked, "origin", "main"), tracked_head);
+
+    // 다시 보내면: 게시한 branch 는 이제 업스트림이 있어 보낼 commit 이 없다. 분리 HEAD 는 고른 원격이 있어도 건너뛴다
+    unpicked.git_ok(["checkout", "-q", "--detach"]);
+    let plan = NewUpstream {
+        remotes: vec![PushRemote {
+            path: path_of("unpicked"),
+            remote: "team".into(),
+        }],
+    };
+    let r = core
+        .folder_batch(
+            fid,
+            BatchOp::Push {
+                new_upstream: Some(plan),
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    let skipped = |name: &str| {
+        r.results
+            .iter()
+            .find(|x| x.name == name)
+            .unwrap()
+            .skipped
+            .clone()
+    };
+    for name in ["solo", "picked", "tracked"] {
+        assert_eq!(
+            skipped(name).as_deref(),
+            Some("푸시할 커밋이 없습니다"),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        skipped("unpicked").as_deref(),
+        Some("분리된 HEAD 상태에서는 푸시할 수 없습니다")
+    );
+    assert_eq!(remote_branch(&mut unpicked, "team", "feat-x"), "");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 일괄 작업 취소: 실행 중이던 push 는 멈춰 "실행 중에 취소" 로, 아직 시작하지 않은 저장소는 "취소됨" 으로 남고 둘 다
+/// 건너뜀·실패와 따로 센다. 멈춘 push 는 원격에 반영되지 않고, 오래 걸리는 훅이 끝나기를 기다리지 않는다
+#[cfg(unix)]
+#[tokio::test]
+async fn batch_cancel_stops_running_push_and_skips_pending_repos() {
+    let core = core().await;
+    let root = std::env::temp_dir().join(format!("mgit-batch-cancel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // 저장소 셋: 업스트림이 있고 보낼 commit 이 하나 있으며, pre-push 훅이 오래 걸린다
+    let mut repos = Vec::new();
+    let mut pushed = Vec::new();
+    for name in ["a", "b", "c"] {
+        let mut repo = init_at(&root.join(name));
+        repo.commit("first");
+        repo.add_bare_remote();
+        repo.git_ok(["push", "-q", "-u", "origin", "main"]);
+        pushed.push(repo.git_ok(["rev-parse", "HEAD"]).trim().to_string());
+        repo.commit("second");
+        repo.install_hook("pre-push", "#!/bin/sh\nsleep 30\n");
+        repos.push(repo);
+    }
+    let (sink, mut rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+    // 한 번에 하나씩 돌려 첫 저장소가 훅에서 기다리는 동안 나머지는 시작하지 않은 채로 둔다
+    core.set_folder_settings(
+        fid,
+        &FolderSettings {
+            concurrency: 1,
+            ..FolderSettings::default()
+        },
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let (result, ()) = tokio::join!(
+        core.folder_batch(fid, BatchOp::Push { new_upstream: None }, &[]),
+        async {
+            let events = wait_for(&mut rx, Duration::from_secs(10), |e| {
+                matches!(e, CoreEvent::OperationStarted { .. })
+            })
+            .await;
+            let op_id = events
+                .iter()
+                .find_map(|e| match e {
+                    CoreEvent::OperationStarted { op_id, .. } => Some(*op_id),
+                    _ => None,
+                })
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            assert!(core.cancel_operation(op_id));
+            // 끝난 뒤의 중복 취소는 아무 일도 하지 않는다 (아래 결과가 그대로다)
+            core.cancel_operation(op_id);
+        }
+    );
+    let r = result.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "훅(30초)을 기다리지 않아야 한다: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        (r.succeeded, r.skipped, r.failed, r.cancelled),
+        (0, 0, 0, 3),
+        "{r:?}"
+    );
+    assert!(r.results.iter().all(|x| x.cancelled && x.ok), "{r:?}");
+    let reasons: Vec<_> = r
+        .results
+        .iter()
+        .map(|x| x.skipped.clone().unwrap())
+        .collect();
+    assert_eq!(
+        reasons
+            .iter()
+            .filter(|why| why.as_str() == "실행 중에 취소했습니다 (반영 여부를 확인하세요)")
+            .count(),
+        1,
+        "{reasons:?}"
+    );
+    assert_eq!(
+        reasons
+            .iter()
+            .filter(|why| why.as_str() == "취소됨")
+            .count(),
+        2,
+        "{reasons:?}"
+    );
+    // 어느 저장소의 원격도 바뀌지 않았다
+    for (repo, before) in repos.iter_mut().zip(&pushed) {
+        let remote = repo.git_ok(["ls-remote", "origin", "refs/heads/main"]);
+        assert!(remote.starts_with(before.as_str()), "{remote}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 폴더 설정의 저장 키는 `folder:<정규화한 폴더 경로>` 그대로다 (MR-11 저장 형식): 이미 그 키에 저장된 설정을 읽고,
+/// 저장도 같은 키에 한다. 공백·한글이 든 경로와 정규화(macOS 임시 폴더의 `/private`)까지 본다
+#[tokio::test]
+async fn folder_settings_stay_under_the_folder_path_key() {
+    let core = core().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("작업 폴더");
+    std::fs::create_dir_all(&root).unwrap();
+    let key = format!("folder:{}", root.canonicalize().unwrap().display());
+    let saved = FolderSettings {
+        concurrency: 3,
+        ..FolderSettings::default()
+    };
+    core.store()
+        .setting_set(&key, &serde_json::to_string(&saved).unwrap())
+        .unwrap();
+
+    let (sink, _rx) = collector();
+    let fid = core.open_folder(&root, sink).await.unwrap().session;
+    assert_eq!(core.folder_settings(fid).unwrap().concurrency, 3);
+
+    core.set_folder_settings(
+        fid,
+        &FolderSettings {
+            concurrency: 5,
+            ..FolderSettings::default()
+        },
+    )
+    .unwrap();
+    let stored: FolderSettings =
+        serde_json::from_str(&core.store().setting_get(&key).unwrap().unwrap()).unwrap();
+    assert_eq!(stored.concurrency, 5);
 }

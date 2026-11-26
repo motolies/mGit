@@ -212,7 +212,7 @@ function localItems(target: Extract<RepoBranchTarget, { kind: 'local' }>, deps: 
       label: S.menu.mergeInto(name),
       disabled: needsOther,
       children: [
-        { label: 'merge', onSelect: () => void s.merge(name, 'default') },
+        { label: S.menu.mergeIntoDefault, onSelect: () => void s.merge(name, 'default') },
         { label: S.menu.mergeIntoNoFf, onSelect: () => void s.merge(name, 'noFf') },
         { label: S.menu.mergeIntoFfOnly, onSelect: () => void s.merge(name, 'ffOnly') },
         { label: S.menu.mergeIntoSquash, onSelect: () => void s.merge(name, 'squash') },

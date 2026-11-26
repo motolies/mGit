@@ -172,5 +172,28 @@ describe('buildStatusLookup (PT-06)', () => {
 
   it('변경 목록이 비면 아무것도 칠하지 않는다', () => {
     expect(buildStatusLookup(ROOT, [`${ROOT}/api`], []).get('api')).toBeNull();
+    expect(buildStatusLookup(ROOT, [`${ROOT}/api`], []).changed()).toEqual([]);
+  });
+
+  it('changed (R1 "변경된 파일만"): 상태 문자가 붙는 경로만, 통째로 untracked 인 디렉터리는 dir 로', () => {
+    const lookup = buildStatusLookup(
+      ROOT,
+      [`${ROOT}/api`],
+      [
+        repo('api', [
+          entry('src/Main.java', 'modified', 'unmodified'),
+          entry('scratch/', 'untracked', 'untracked'),
+          // 지운 파일은 디스크에 없어 빠진다
+          entry('gone.txt', 'unmodified', 'deleted'),
+        ]),
+      ],
+    );
+    const changed = [...lookup.changed()].sort((a, b) => a.path.localeCompare(b.path));
+    expect(changed).toEqual([
+      { path: 'api/scratch', dir: true },
+      { path: 'api/src/Main.java', dir: false },
+    ]);
+    // "안에 변경 있음" 디렉터리는 후보가 아니다
+    expect(changed.some((c) => c.path === 'api/src')).toBe(false);
   });
 });

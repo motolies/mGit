@@ -106,6 +106,12 @@ pub struct CoreInner {
     pub(crate) containing: crate::inspect::LatestRequests,
     /// 원격 tag 상태 캐시 (TG-08): 저장소(`common_dir`)·원격별, 메모리에만
     pub(crate) tag_cache: crate::tag_cache::TagCache,
+    /// 그룹 정의(설정 `groups`)의 읽고-고치고-쓰기와 그룹 세션 등록을 줄 세운다 (MR-13). await 를 넘겨 쥐지 않고, 쥔 채
+    /// 폴더 목록 잠금을 잡을 수 있다 (그 반대 순서는 없다)
+    pub(crate) groups_lock: Mutex<()>,
+    /// 저장소(`common_dir`)마다 마지막으로 `fetch --all` 에 성공한 시각. 여러 탭의 자동 fetch 가 같은 저장소를 간격마다
+    /// 한 번만 받게 한다 (MR-13 M5, `auto_fetch.rs`)
+    pub(crate) fetch_marks: crate::auto_fetch::FetchMarks,
 }
 
 impl CoreInner {
@@ -275,7 +281,7 @@ impl CoreInner {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .filter(|f| cwd.starts_with(&f.path))
+            .filter(|f| f.contains(cwd))
             .cloned()
             .collect();
         candidates
@@ -372,6 +378,8 @@ impl Core {
             next_auth_tag: AtomicU64::new(1),
             containing: crate::inspect::LatestRequests::default(),
             tag_cache: crate::tag_cache::TagCache::default(),
+            groups_lock: Mutex::new(()),
+            fetch_marks: crate::auto_fetch::FetchMarks::default(),
         });
         let hook: Weak<dyn CommandLogHook> = Arc::downgrade(&inner) as Weak<dyn CommandLogHook>;
         logged.set_hook(hook);
@@ -1046,13 +1054,26 @@ impl CoreInner {
         SessionId(self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// 같은 경로의 폴더 세션
+    /// 같은 경로의 폴더 세션. 루트 경로로 연 스캔 원천만 찾는다 (둘 다 정규화해 비교)
     pub(crate) fn folders_find(&self, path: &Path) -> Option<Arc<crate::folder::FolderSession>> {
         self.folders
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .find(|f| same_dir(&f.path, path))
+            .find(|f| f.scan_root().is_some_and(|root| same_dir(root, path)))
+            .cloned()
+    }
+
+    /// 그 그룹을 연 폴더 세션 (그룹은 경로가 아니라 id 로 찾는다)
+    pub(crate) fn folders_find_group(
+        &self,
+        id: &crate::group::GroupId,
+    ) -> Option<Arc<crate::folder::FolderSession>> {
+        self.folders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .find(|f| f.group_id() == Some(id))
             .cloned()
     }
 

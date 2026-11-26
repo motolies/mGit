@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { Button } from './Button';
 import styles from './ConfirmDialog.module.css';
 import { DialogItems } from './DialogItems';
@@ -21,7 +21,10 @@ export interface PromptField {
    * `note` 로 보인다
    */
   disabled?: boolean;
-  /** 칸 옆에 흐리게 붙는 보조 글자 (끈 칸의 사유 등). 그 칸의 설명(`aria-describedby`)이 된다 */
+  /**
+   * 칸 옆에 흐리게 붙는 보조 글자 (끈 칸의 사유 등). 그 칸의 설명(`aria-describedby`)이 된다. `checkbox` 는 글자 옆,
+   * `select` 는 고르는 칸 아래에 보인다. 다른 칸에는 그리지 않는다
+   */
   note?: string;
   /**
    * 필드 묶음의 제목 (W19). 같은 제목이 이어지는 필드를 제목이 있는 구획(`fieldset`)으로 묶는다 — 옵션 칸과 대상 목록을
@@ -33,6 +36,11 @@ export interface PromptField {
    * 값이 입력(앞뒤 공백 제외)과 다를 때만 칸 아래에 `preview(다듬은 값)` 을 보인다. 없으면 입력 그대로 (지금까지의 동작)
    */
   normalize?: PromptNormalize;
+  /**
+   * 글자 칸의 제안 목록 (최근 입력 등). 칸에 붙은 네이티브 목록(`<datalist>`)으로 보여 입력하거나 고를 수 있다. 비었으면
+   * 붙이지 않는다
+   */
+  suggestions?: readonly string[];
 }
 
 /** 입력 다듬기 규칙 (`PromptField.normalize`) */
@@ -150,6 +158,11 @@ function initialValue(f: PromptField): string | boolean {
   return f.initial ?? (f.type === 'checkbox' ? false : '');
 }
 
+/** 필드들의 처음 값 (열 때·열린 채 필드 내용이 바뀔 때 채운다) */
+function initialValues(fields: readonly PromptField[]): Record<string, string | boolean> {
+  return Object.fromEntries(fields.map((f) => [f.key, initialValue(f)]));
+}
+
 /**
  * 확인 결과로 넘길 값: 끈 칸의 값은 뺀다 (체크할 수 없던 것은 고른 것이 아니다). 다듬기 규칙(`normalize`)이 있는 글자
  * 칸은 다듬은 값을 넣는다
@@ -198,22 +211,22 @@ export function PromptDialog({
   const { ref, dialogProps } = useNativeDialog(open, onCancel);
   const titleId = useId();
   const messageId = useId();
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
-  const fieldsRef = useRef(fields);
-  fieldsRef.current = fields;
   // 호출자가 인라인 배열을 넘겨도 입력 중에 값이 지워지지 않게 내용으로 비교한다
   const fieldsKey = JSON.stringify(fields.map((f) => [f.key, f.type, f.initial, f.disabled]));
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fieldsKey 가 fields 내용을 대신한다
-  useEffect(() => {
+  // 열 때와 열린 채 필드 내용이 바뀔 때 처음 값으로 되돌린다. 효과가 아니라 렌더 중에 맞춰(React 는 이 렌더를 버리고
+  // 곧바로 다시 그린다) 열린 첫 화면부터 처음 값이 보인다 — 효과에서 채우면 빈 값으로 열린 화면이 한 번 그려진다.
+  // 닫을 때는 값을 그대로 두고 표지만 바꾼다
+  const resetKey = open ? fieldsKey : null;
+  const [values, setValues] = useState<Record<string, string | boolean>>(() =>
+    open ? initialValues(fields) : {},
+  );
+  const [valuesFor, setValuesFor] = useState<string | null>(resetKey);
+  if (valuesFor !== resetKey) {
+    setValuesFor(resetKey);
     if (open) {
-      const init: Record<string, string | boolean> = {};
-      for (const f of fieldsRef.current) {
-        init[f.key] = initialValue(f);
-      }
-      setValues(init);
+      setValues(initialValues(fields));
     }
-  }, [open, fieldsKey]);
+  }
 
   const filled = fields.every((f) => {
     if (!f.required || f.type === 'checkbox') {
@@ -253,6 +266,8 @@ export function PromptDialog({
     const id = `pf-${f.key}`;
     const noteId = `${id}-note`;
     const previewId = `${id}-preview`;
+    const listId = `${id}-suggestions`;
+    const suggestions = f.suggestions ?? [];
     // 다듬은 값 미리보기 (글자 칸만). 입력 칸의 설명이 되고, 칸의 이름에 섞이지 않게 label 밖 바로 아래에 둔다
     const preview =
       f.type === undefined || f.type === 'text' ? normalizedPreview(f, values[f.key]) : null;
@@ -294,6 +309,7 @@ export function PromptDialog({
                 <select
                   id={id}
                   className={styles.input}
+                  aria-describedby={f.note ? noteId : undefined}
                   value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
                   onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
                 >
@@ -319,6 +335,7 @@ export function PromptDialog({
                   className={styles.input}
                   // biome-ignore lint/a11y/noAutofocus: 대화상자의 첫 입력 칸이다 (필드를 함수로 그려 린트가 <dialog> 조상을 보지 못한다)
                   autoFocus={index === 0}
+                  list={suggestions.length > 0 && f.type !== 'password' ? listId : undefined}
                   placeholder={f.placeholder}
                   aria-describedby={preview ? previewId : undefined}
                   value={typeof values[f.key] === 'string' ? (values[f.key] as string) : ''}
@@ -334,6 +351,20 @@ export function PromptDialog({
             </>
           )}
         </label>
+        {/* 글자 칸의 제안 목록 (네이티브 자동 완성 목록) */}
+        {suggestions.length > 0 && (f.type === undefined || f.type === 'text') ? (
+          <datalist id={listId}>
+            {suggestions.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
+        ) : null}
+        {/* 고르는 칸의 보조 글자: 칸의 이름에 섞이지 않게 label 밖 바로 아래에 두고 설명으로 잇는다 */}
+        {f.type === 'select' && f.note ? (
+          <span id={noteId} className={styles.fieldNote}>
+            {f.note}
+          </span>
+        ) : null}
         {preview ? (
           <span id={previewId} className={styles.preview} data-role="normalized-preview">
             {preview}

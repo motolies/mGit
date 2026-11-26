@@ -1,0 +1,130 @@
+.dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0;
+  width: 720px;
+  max-width: 92vw;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  font-size: 12px;
+  max-height: 86vh;
+  overflow: auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  font-weight: 600;
+  font-size: var(--font-size-title);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field input {
+  flex: 1 1 auto;
+}
+
+.tools {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.member {
+  display: grid;
+  grid-template-columns: minmax(80px, 160px) 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.member:first-child {
+  border-top: 0;
+}
+
+.alias {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aliasInput {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.aliasInput[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.path {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 8px;
+  color: var(--fg-muted);
+}
+
+.note {
+  color: var(--fg-muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.skipped {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--fg-muted);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

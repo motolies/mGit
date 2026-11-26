@@ -15,21 +15,29 @@ import {
   lineNumbers,
 } from '@codemirror/view';
 import { codeHighlighter, loadLanguage } from '@mgit/diff-view';
-import type { BlameLine, SessionId } from '@mgit/ipc';
+import type { FsEncoding, HeadState, SessionId } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { registerCommand } from '../../command-registry';
 import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
 import { useRovingToolbar } from '../../components/roving';
 import { useAppStore } from '../../store';
-import { useEditorPreferences } from '../../store/editor-preferences';
+import { getEditorPreferences, useEditorPreferences } from '../../store/editor-preferences';
 import { type EditorFile, fileEditors } from '../../store/file-editor-store';
 import { getFolderStore, getSessionStore } from '../../store/session-registry';
 import { openFileComparison } from '../history/comparison';
-import { annotationExtension, type ChangePreview } from './editor/annotations';
+import { EncodingMenu, encodingName } from './EncodingMenu';
+import {
+  annotationExtension,
+  type ChangePreview,
+  type GitBase,
+  setGitBase,
+} from './editor/annotations';
+import { editingAssist } from './editor/editing-assist';
 import { editorContextItems } from './editor/editor-context';
 import { formatText } from './editor/formatter';
 import { formatterParser } from './editor/formatter-language';
+import { indentUnitFor } from './editor/indentation';
 import styles from './FileEditor.module.css';
 import { canHighlight, type FileViewRepoTools } from './FileView';
 import { MarkdownPreview, type PreviewSource } from './markdown/MarkdownPreview';
@@ -71,20 +79,83 @@ const theme = EditorView.theme({
   '.cm-searchMatch': { backgroundColor: 'color-mix(in srgb, var(--accent) 30%, transparent)' },
 });
 
-/** 일반 파일 편집기 확장. 저장과 조합 이벤트는 문서 저장소에 전달한다. */
-function extensions(doc: EditorFile): Extension {
+/** 문서마다 들여쓰기 추정을 한 번만 한다. 원문 교체(generation)나 이름 변경(path) 뒤에만 다시 훑는다. */
+const indentCache = new WeakMap<EditorFile, { generation: number; path: string; unit: string }>();
+
+/** 공유 문서의 들여쓰기 단위. 입력 중에는 바꾸지 않아 Tab 의 동작이 타이핑 도중 달라지지 않는다. */
+function documentIndent(doc: EditorFile): string {
+  const cached = indentCache.get(doc);
+  if (cached && cached.generation === doc.generation && cached.path === doc.path)
+    return cached.unit;
+  const unit = indentUnitFor(doc.path, doc.state.doc.toString());
+  indentCache.set(doc, { generation: doc.generation, path: doc.path, unit });
+  return unit;
+}
+
+/** HEAD 가 가리키는 곳을 비교할 값 (branch·commit). refs 를 다시 읽어 객체가 새로 와도 같은 곳이면 같다 */
+export function headKeyOf(head: HeadState | null | undefined): string {
+  if (!head) return '';
+  switch (head.state) {
+    case 'attached':
+      return `attached:${head.branch}:${head.oid}`;
+    case 'detached':
+      return `detached:${head.oid}`;
+    case 'unborn':
+      return `unborn:${head.branch}`;
+  }
+}
+
+/**
+ * 찾기·바꾸기 패널과 줄로 이동 패널의 CodeMirror 문구를 앱 언어로 바꾼다 (접기 문구와 같은 `EditorState.phrases` 방식).
+ * 열쇠는 `@codemirror/search` 가 `state.phrase()` 로 묻는 영어 원문이고, `$` 자리에는 CodeMirror 가 수·줄 번호를 넣는다
+ */
+export function searchPhrases(): Record<string, string> {
+  const p = S.fileEditor.findPanel;
+  return {
+    Find: p.find,
+    Replace: p.replace,
+    next: p.next,
+    previous: p.previous,
+    all: p.all,
+    'match case': p.matchCase,
+    regexp: p.regexp,
+    'by word': p.byWord,
+    replace: p.replaceOne,
+    'replace all': p.replaceAll,
+    close: p.close,
+    'current match': p.currentMatch,
+    'on line': p.onLine,
+    'replaced $ matches': p.replacedMatches,
+    'replaced match on line $': p.replacedOnLine,
+    'Go to line': p.goToLine,
+    go: p.go,
+  };
+}
+
+/** 위 줄에 보일 들여쓰기 이름 (`탭`·`공백 2칸`) */
+function indentLabel(unit: string): string {
+  return unit.startsWith('\t') ? S.fileEditor.indentTabs : S.fileEditor.indentSpaces(unit.length);
+}
+
+/**
+ * 일반 파일 편집기 확장. 저장과 조합 이벤트는 문서 저장소에 전달한다. 편집 보조(`editingAssist`)의 키 묶음은
+ * 기본 keymap 보다 앞에 둔다(Backspace 의 괄호 쌍 지우기가 먼저)
+ */
+function extensions(doc: EditorFile, autoCloseBrackets: boolean): Extension {
+  const readOnly = doc.mutationLocked === true;
   return [
     theme,
-    EditorState.readOnly.of(doc.mutationLocked === true),
-    EditorView.editable.of(doc.mutationLocked !== true),
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
     lineNumbers(),
     drawSelection(),
     highlightActiveLine(),
     indentOnInput(),
     search({ top: true }),
+    EditorState.phrases.of(searchPhrases()),
     highlightSelectionMatches(),
     syntaxHighlighting(codeHighlighter),
-    EditorState.tabSize.of(4),
+    editingAssist({ autoCloseBrackets, readOnly, indentUnit: documentIndent(doc) }),
     EditorView.contentAttributes.of({ 'aria-label': S.fileEditor.content, spellcheck: 'false' }),
     keymap.of([
       {
@@ -137,12 +208,15 @@ export function FileEditor({
   repoPath,
   source,
   refreshEpoch = 0,
+  onEncoding,
 }: {
   doc: EditorFile;
   repoPath?: string | null;
   source?: PreviewSource;
   refreshEpoch?: number;
   repoTools?: FileViewRepoTools | null;
+  /** 머리줄 인코딩 단추에서 고른 인코딩으로 다시 연다 (R2). 주지 않으면 인코딩은 글자로만 보인다 */
+  onEncoding?: (encoding: FsEncoding | null) => void;
 }) {
   const editTools = useRovingToolbar<HTMLDivElement>('horizontal');
   const viewTools = useRovingToolbar<HTMLDivElement>('horizontal');
@@ -163,12 +237,11 @@ export function FileEditor({
   const [formatting, setFormatting] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [gitSession, setGitSession] = useState<SessionId | null>(null);
-  const [gitEpoch, setGitEpoch] = useState(0);
-  const [annotation, setAnnotation] = useState<{
-    lines: BlameLine[];
-    head: string | null;
-    sequence: number;
-  } | null>(null);
+  // HEAD 가 바뀐 횟수 (commit·checkout·reset 등). blame·HEAD 원문은 이때만 다시 조회한다 (N6)
+  const [headEpoch, setHeadEpoch] = useState(0);
+  // 조회가 필요해진 횟수와 마지막으로 결과를 넣은 횟수. 둘이 다르면 입력이 멈춘 뒤 조회한다
+  const [queryEpoch, setQueryEpoch] = useState(0);
+  const [loadedEpoch, setLoadedEpoch] = useState(-1);
   const [changePreview, setChangePreview] = useState<ChangePreview | null>(null);
   const formatBusy = useRef(false);
   const canFormat = formatterParser(source?.path ?? doc.path) !== null;
@@ -269,7 +342,6 @@ export function FileEditor({
   useEffect(() => {
     let live = true;
     setGitSession(null);
-    setAnnotation(null);
     if (!source || !repoTools) return;
     if (getSessionStore(source.session)) setGitSession(source.session);
     else if (repoPath)
@@ -280,41 +352,60 @@ export function FileEditor({
       live = false;
     };
   }, [source?.session, repoPath, repoTools?.path]);
+  // HEAD 가 가리키는 곳이 바뀔 때만 다시 조회한다. 상태(stage·작업 트리)나 원격 ref 변화로는 blame·HEAD 원문이
+  // 바뀌지 않는다 (자동 저장마다 오는 status 갱신으로 다시 조회하던 것을 없앴다, N6)
   useEffect(() => {
     if (gitSession === null) return;
     return getSessionStore(gitSession)?.subscribe((now, before) => {
-      if (now.refs !== before.refs || now.status !== before.status)
-        setGitEpoch((epoch) => epoch + 1);
+      if (headKeyOf(now.refs.head) !== headKeyOf(before.refs.head))
+        setHeadEpoch((epoch) => epoch + 1);
     });
   }, [gitSession]);
-  // 입력이 멈춘 뒤 초안을 조회한다. 늦은 응답은 행 번호가 달라진 화면에 적용하지 않는다.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sequence·generation이 공유 문서 변경과 교체를 식별한다.
+  const annotating = !!repoTools && (prefs.currentBlame || prefs.allBlame || prefs.changeMarkers);
+  // 다시 조회할 때: 저장소 세션이 정해짐, 원문 교체(다시 읽기), HEAD 변경, 새로고침, 주석을 켬. 입력으로는 조회하지 않고
+  // 조회해 둔 blame 을 편집에 맞춰 옮긴다 (`annotations.ts` `mapBlame`)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 조회가 필요해진 신호만 센다.
   useEffect(() => {
-    if (
-      !source ||
-      !repoTools ||
-      gitSession === null ||
-      doc.composing ||
-      !(prefs.currentBlame || prefs.allBlame || prefs.changeMarkers)
-    )
+    setQueryEpoch((epoch) => epoch + 1);
+  }, [
+    doc,
+    gitSession,
+    doc.generation,
+    headEpoch,
+    refreshEpoch,
+    prefs.currentBlame,
+    prefs.allBlame,
+    prefs.changeMarkers,
+  ]);
+  const needsQuery = loadedEpoch !== queryEpoch;
+  // 조회는 입력이 0.5초 멈춘 뒤 한 번 한다. 응답이 오기 전에 원문이 바뀌었으면 버리고 다음 멈춤에 다시 한다 (조회한
+  // 원문과 맞지 않는 blame 을 넣지 않는다). 조회할 것이 없는 동안에는 원문 변경을 보지 않는다
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 조회가 필요할 때만 sequence 를 본다.
+  useEffect(() => {
+    if (!needsQuery || !source || !repoTools || gitSession === null || doc.composing) return;
+    if (!annotating) {
+      setLoadedEpoch(queryEpoch);
       return;
+    }
     let live = true;
     const sequence = doc.sequence;
+    const epoch = queryEpoch;
     const timer = setTimeout(() => {
+      const text = doc.state.doc.toString();
       void Promise.all([
         prefs.currentBlame || prefs.allBlame
-          ? source.client
-              .blameContents(gitSession, repoTools.path, doc.state.doc.toString(), false)
-              .catch(() => [])
+          ? source.client.blameContents(gitSession, repoTools.path, text, false).catch(() => [])
           : Promise.resolve([]),
         prefs.changeMarkers
           ? source.client
               .revisionFileContent(gitSession, 'HEAD', repoTools.path)
-              .then((text) => text ?? '')
+              .then((head) => head ?? '')
               .catch(() => null)
           : Promise.resolve(null),
       ]).then(([lines, head]) => {
-        if (live && doc.sequence === sequence) setAnnotation({ lines, head, sequence });
+        if (!live || doc.sequence !== sequence || doc.composing) return;
+        installGitBase({ lines, head });
+        setLoadedEpoch(epoch);
       });
     }, 500);
     return () => {
@@ -322,55 +413,56 @@ export function FileEditor({
       clearTimeout(timer);
     };
   }, [
-    gitSession,
-    doc.sequence,
-    doc.generation,
+    needsQuery,
+    queryEpoch,
+    needsQuery ? doc.sequence : -1,
     doc.composing,
-    gitEpoch,
-    refreshEpoch,
-    prefs.currentBlame,
-    prefs.allBlame,
-    prefs.changeMarkers,
+    gitSession,
+    annotating,
   ]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sequence는 편집 상태 변경을 나타내고 compartment는 문서 동안 고정된다.
+  /** 조회 결과를 문서 상태에 넣는다. 화면이 이 문서를 보이고 있으면 화면으로, 아니면 공유 상태에 바로 넣는다 */
+  const installGitBase = (base: GitBase) => {
+    const view = viewRef.current;
+    if (view && view.state === doc.state) view.dispatch({ effects: setGitBase.of(base) });
+    else fileEditors.update(doc, doc.state.update({ effects: setGitBase.of(base) }).state);
+  };
+  // 주석 표시는 설정·세션이 바뀌거나 원문이 교체됐을 때만 다시 구성한다. 글자를 칠 때마다 다시 만들지 않는다 —
+  // blame·변경 표시는 문서 상태 안에서 편집을 따라 바뀐다 (N6)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 표시 설정과 원문 교체만 다시 구성할 신호다.
   useLayoutEffect(() => {
     const view = viewRef.current;
     if (!view || !doc.annotations) return;
     if (view.state !== doc.state) view.setState(doc.state);
     view.dispatch({
       effects: doc.annotations.reconfigure(
-        repoTools && annotation
-          ? annotationExtension(
-              {
-                lines: annotation.lines,
-                head: annotation.head,
-                current: prefs.currentBlame,
-                all: prefs.allBlame,
-                changes: prefs.changeMarkers,
-                pending: annotation.sequence !== doc.sequence,
-                openCommit: (oid) => {
-                  const folder = source ? getFolderStore(source.session) : undefined;
-                  if (folder && repoPath) folder.getState().revealTimelineCommit(repoPath, oid);
-                  else if (gitSession !== null)
-                    void getSessionStore(gitSession)?.getState().jumpToCommit(oid);
-                  const app = useAppStore.getState();
-                  if (app.dock.tool !== 'git' || app.dock.gitTab !== 'log')
-                    app.toggleDock('git', 'log');
-                },
-                preview: setChangePreview,
+        annotating
+          ? annotationExtension({
+              current: prefs.currentBlame,
+              all: prefs.allBlame,
+              changes: prefs.changeMarkers,
+              openCommit: (oid) => {
+                const folder = source ? getFolderStore(source.session) : undefined;
+                if (folder && repoPath) folder.getState().revealTimelineCommit(repoPath, oid);
+                else if (gitSession !== null)
+                  void getSessionStore(gitSession)?.getState().jumpToCommit(oid);
+                const app = useAppStore.getState();
+                if (app.dock.tool !== 'git' || app.dock.gitTab !== 'log')
+                  app.toggleDock('git', 'log');
               },
-              doc.state.doc.toString(),
-            )
+              preview: setChangePreview,
+            })
           : [],
       ),
     });
   }, [
-    annotation,
-    doc.sequence,
+    doc,
+    doc.generation,
+    annotating,
     prefs.currentBlame,
     prefs.allBlame,
     prefs.changeMarkers,
     gitSession,
+    repoPath,
   ]);
 
   const [wrap, setWrap] = useState(doc.wrap);
@@ -448,7 +540,9 @@ export function FileEditor({
       },
     });
     viewRef.current = view;
-    view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
+    view.dispatch({
+      effects: doc.controls.reconfigure(extensions(doc, getEditorPreferences().autoCloseBrackets)),
+    });
     view.scrollDOM.scrollTop = doc.scrollTop;
     view.scrollDOM.scrollLeft = doc.scrollLeft;
     return () => {
@@ -466,7 +560,11 @@ export function FileEditor({
     const view = viewRef.current;
     if (view && view.state !== doc.state) {
       view.setState(doc.state);
-      view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
+      view.dispatch({
+        effects: doc.controls.reconfigure(
+          extensions(doc, getEditorPreferences().autoCloseBrackets),
+        ),
+      });
     }
     const focus = doc.revealFocus;
     const ownsReveal = !focus || (source?.session === focus.session && source.path === focus.path);
@@ -490,8 +588,10 @@ export function FileEditor({
     const view = viewRef.current;
     if (!view) return;
     doc.wrap = wrap;
-    view.dispatch({ effects: doc.controls.reconfigure(extensions(doc)) });
-  }, [doc, wrap, doc.mutationLocked]);
+    view.dispatch({
+      effects: doc.controls.reconfigure(extensions(doc, prefs.autoCloseBrackets)),
+    });
+  }, [doc, wrap, doc.mutationLocked, prefs.autoCloseBrackets]);
 
   // 언어 파서는 파일명으로 늦게 읽으며 큰 문서는 편집을 유지하고 강조만 끈다.
   // biome-ignore lint/correctness/useExhaustiveDependencies: generation은 원문 교체 뒤 언어 확장을 다시 적용하는 신호다.
@@ -541,7 +641,23 @@ export function FileEditor({
           {source?.path ?? doc.path}
         </span>
         <span className={styles.meta}>
-          {doc.bom ? 'UTF-8 BOM' : 'UTF-8'} · {doc.lineEnding.toUpperCase()}
+          {onEncoding ? (
+            <EncodingMenu
+              encoding={doc.encoding}
+              bom={doc.bom}
+              guessed={doc.guessed}
+              chosen={doc.readAs !== null}
+              locked={
+                doc.dirty || doc.inflight || doc.composing || doc.mutationLocked
+                  ? S.fileEditor.encodingLocked
+                  : null
+              }
+              onChoose={onEncoding}
+            />
+          ) : (
+            `${encodingName(doc.encoding)}${doc.bom ? ' BOM' : ''}`
+          )}{' '}
+          · {doc.lineEnding.toUpperCase()} · {indentLabel(documentIndent(doc))}
         </span>
         {!highlighting ? <span className={styles.meta}>{S.fileEditor.noHighlight}</span> : null}
         <span className={styles.meta}>{S.fileEditor.autoSave}</span>
@@ -681,7 +797,8 @@ export function FileEditor({
               text={previewText}
               source={source}
               viewState={viewState}
-              refreshKey={`${refreshEpoch}-${doc.imageEpoch}`}
+              refreshKey={String(refreshEpoch)}
+              checkKey={doc.imageEpoch}
             />
           </div>
         ) : null}

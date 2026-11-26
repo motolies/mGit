@@ -41,6 +41,7 @@ export function defaultShortcut(id: string, fallback?: string, mac = isMac()): s
     'diff.previousHunk': 'shift+f7',
     'branch.create': undefined,
     'editor.format': 'mod+alt+l',
+    'workspace.recentFiles': 'mod+e',
     'editor.zoomIn': 'mod+=',
     'editor.zoomOut': 'mod+-',
   };
@@ -76,6 +77,12 @@ export const COMMAND_SCOPES: Record<string, CommandScope> = {
   'editor.zoomIn': 'editor',
   'editor.zoomOut': 'editor',
   'editor.zoomReset': 'editor',
+  // 편집기 분할 (R3): 지금 편집기 그룹에 대고 실행한다. 기본 키는 없다 (IntelliJ 도 Split Right·Move to Opposite
+  // Group·Unsplit 에 기본 키가 없다)
+  'editor.splitRight': 'editor',
+  'editor.moveToOppositeGroup': 'editor',
+  'editor.unsplit': 'editor',
+  'editor.focusOtherGroup': 'editor',
 };
 
 /** 함께 활성화될 수 있는 영역만 충돌로 취급한다. 에디터는 diff를 포함한다. */

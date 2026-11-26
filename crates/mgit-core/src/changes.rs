@@ -888,29 +888,51 @@ impl Core {
         if !src.is_file() {
             return Ok(None);
         }
-        let root: PathBuf = self
-            .config()
-            .backup_dir
-            .clone()
-            .unwrap_or_else(|| std::env::temp_dir().join("mgit-backups"));
+        self.store_backup(&s.info.work_tree, rel, reason, |dest| {
+            std::fs::copy(&src, dest).map(|_| ())
+        })
+        .map(Some)
+    }
+
+    /// 확인을 마친 원문을 폐기 백업으로 남긴다 (여러 파일 바꾸기의 이유 `replace`). 디스크를 다시 복사하지 않고
+    /// revision 을 확인한 원문 그대로 쓰므로, 같은 revision 으로 저장에 성공하면 사본이 덮어쓴 원문과 같다
+    pub(crate) fn backup_text(
+        &self,
+        work_tree: &Path,
+        rel: &str,
+        reason: &str,
+        text: &str,
+    ) -> Result<u64, CoreError> {
+        self.store_backup(work_tree, rel, reason, |dest| std::fs::write(dest, text))
+    }
+
+    /// 사본 자리 `<백업 루트>/<저장소 키>/<시각-순번>/<상대 경로>` 를 만들어 `write` 로 채우고 색인을 남긴다
+    fn store_backup(
+        &self,
+        work_tree: &Path,
+        rel: &str,
+        reason: &str,
+        write: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<u64, CoreError> {
+        let root: PathBuf = crate::backup_cleanup::backup_root(self.config());
         let seq = BACKUP_SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = root
-            .join(repo_key(&s.info.work_tree))
+            .join(repo_key(work_tree))
             .join(format!("{}-{seq}", now_millis()));
         let dest = dir.join(rel);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(mgit_model::StoreError::Io)?;
         }
-        std::fs::copy(&src, &dest).map_err(mgit_model::StoreError::Io)?;
+        write(&dest).map_err(mgit_model::StoreError::Io)?;
         let id = self.store().backup_add(&BackupRecord {
             id: 0,
-            repo: s.info.work_tree.clone(),
+            repo: work_tree.to_path_buf(),
             rel_path: rel.to_string(),
             saved_at: now_millis(),
             blob_path: dest,
             reason: reason.to_string(),
         })?;
-        Ok(Some(id))
+        Ok(id)
     }
 }
 

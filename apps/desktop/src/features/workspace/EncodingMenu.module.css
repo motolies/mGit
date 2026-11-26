@@ -1,0 +1,26 @@
+/* 인코딩 단추 (R2): 머리줄의 흐린 글자와 같은 모양에 점선 밑줄로 누를 수 있음을 알린다 */
+.button {
+  padding: 0 var(--space-1);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--bg-hover);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.button[aria-disabled="true"] {
+  cursor: default;
+  text-decoration: none;
+}

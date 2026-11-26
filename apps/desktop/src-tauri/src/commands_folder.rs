@@ -105,7 +105,11 @@ pub enum BatchOpDto {
         prune: bool,
     },
     Pull,
-    Push,
+    /// 업스트림으로 push. `newUpstream` 이 있으면 업스트림이 없는 branch 를 새 업스트림으로 게시한다 (없으면 건너뜀)
+    Push {
+        #[serde(default)]
+        new_upstream: Option<NewUpstreamDto>,
+    },
     CreateBranch {
         name: String,
         checkout: bool,
@@ -135,6 +139,56 @@ pub enum BatchOpDto {
         from: String,
         to: String,
     },
+    /// 변경이 있는 저장소마다 stash 저장. 메시지 끝에 묶음 표시 `[mgit-batch:<batch>]` 를 붙인다. 미추적 파일은
+    /// `includeUntracked` 일 때만
+    StashPush {
+        batch: String,
+        #[serde(default)]
+        message: Option<String>,
+        include_untracked: bool,
+    },
+    /// 묶음 `batch` 의 stash 항목을 저장소마다 찾아 적용 후 지운다. 충돌이면 항목을 남긴다
+    StashPop {
+        batch: String,
+    },
+    /// 저장소마다 그 작업 트리에서 git 명령 하나를 실행한다 (MR-14). `args` 는 `git` 뒤의 인자 배열이고 셸을 거치지
+    /// 않는다. 종료 코드가 0 이 아니면 실패다
+    RunCommand {
+        args: Vec<String>,
+    },
+}
+
+/// 일괄 push 의 새 업스트림 게시 규칙. 고르지 않은 저장소는 `origin` 이 있으면 그것으로 보낸다
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewUpstreamDto {
+    /// 저장소별로 고른 원격 (`origin` 이 없는 저장소의 예외 선택)
+    #[serde(default)]
+    pub remotes: Vec<PushRemoteDto>,
+}
+
+/// 저장소 하나에 새 업스트림으로 쓸 원격
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PushRemoteDto {
+    pub path: String,
+    pub remote: String,
+}
+
+impl From<NewUpstreamDto> for mgit_core::NewUpstream {
+    /// wire → 코어 (경로 문자열을 경로로)
+    fn from(plan: NewUpstreamDto) -> Self {
+        mgit_core::NewUpstream {
+            remotes: plan
+                .remotes
+                .into_iter()
+                .map(|choice| mgit_core::PushRemote {
+                    path: PathBuf::from(choice.path),
+                    remote: choice.remote,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl From<BatchOpDto> for BatchOp {
@@ -164,7 +218,9 @@ impl From<BatchOpDto> for BatchOp {
             BatchOpDto::DeleteBranch { name } => BatchOp::DeleteBranch { name },
             BatchOpDto::Fetch { prune } => BatchOp::Fetch { prune },
             BatchOpDto::Pull => BatchOp::Pull,
-            BatchOpDto::Push => BatchOp::Push,
+            BatchOpDto::Push { new_upstream } => BatchOp::Push {
+                new_upstream: new_upstream.map(Into::into),
+            },
             BatchOpDto::CreateBranch {
                 name,
                 checkout,
@@ -189,6 +245,48 @@ impl From<BatchOpDto> for BatchOp {
             },
             BatchOpDto::UpdateBranch { name } => BatchOp::UpdateBranch { name },
             BatchOpDto::RenameBranch { from, to } => BatchOp::RenameBranch { from, to },
+            BatchOpDto::StashPush {
+                batch,
+                message,
+                include_untracked,
+            } => BatchOp::StashPush {
+                batch,
+                message,
+                include_untracked,
+            },
+            BatchOpDto::StashPop { batch } => BatchOp::StashPop { batch },
+            BatchOpDto::RunCommand { args } => BatchOp::RunCommand { args },
+        }
+    }
+}
+
+/// 일괄 명령(MR-14)을 실행한 저장소 하나의 종료 코드·소요 시간·출력
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandOutputDto {
+    /// 종료 코드. 시그널로 끝났거나 취소했으면 null
+    pub status: Option<i32>,
+    pub elapsed_ms: u32,
+    /// stdout 앞부분 (저장소마다 1 MiB 까지, URL 자격 증명 가림)
+    pub stdout: String,
+    /// stdout 이 상한을 넘어 뒷부분을 버렸다
+    pub stdout_truncated: bool,
+    /// stderr 끝부분 (64 KiB 까지, URL 자격 증명 가림)
+    pub stderr: String,
+    /// stderr 앞부분이 잘렸을 수 있다
+    pub stderr_truncated: bool,
+}
+
+impl From<mgit_core::CommandOutput> for CommandOutputDto {
+    /// 코어 → wire (소요 시간은 u32 밀리초로 자른다)
+    fn from(c: mgit_core::CommandOutput) -> Self {
+        CommandOutputDto {
+            status: c.status,
+            elapsed_ms: c.elapsed_ms.min(u64::from(u32::MAX)) as u32,
+            stdout: c.stdout,
+            stdout_truncated: c.stdout_truncated,
+            stderr: c.stderr,
+            stderr_truncated: c.stderr_truncated,
         }
     }
 }
@@ -235,6 +333,22 @@ pub struct RepoResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
     pub integration: Option<IntegrationOutcome>,
+    /// 일괄 push 가 새로 지정한 업스트림 (`<원격>/<branch>`). 업스트림이 없던 branch 를 게시했을 때만
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub upstream_set: Option<String>,
+    /// 일괄 작업을 취소해 끝내지 못한 저장소 (시작 전 취소, 또는 실행 중 멈춤)면 true. 건너뜀·실패와 따로 센다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub cancelled: Option<bool>,
+    /// 커밋하지 않은 변경이 있어 건너뛰었으면 true (pull·checkout·branch 업데이트). 결과 알림이 stash 후 다시 실행을 안내한다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub skipped_dirty: Option<bool>,
+    /// 일괄 명령(MR-14)의 종료 코드·소요 시간·출력. 명령을 실행했을 때만
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub command: Option<CommandOutputDto>,
 }
 
 /// 일괄 작업 결과
@@ -244,8 +358,13 @@ pub struct BatchResult {
     pub label: String,
     pub results: Vec<RepoResult>,
     pub succeeded: u32,
+    /// 건너뛴 저장소 (취소된 것은 빼고 `cancelled` 로 센다)
     pub skipped: u32,
     pub failed: u32,
+    /// 취소돼 끝내지 못한 저장소 수 (0 이면 빠진다). TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드 없이 만들기 때문이다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub cancelled: Option<u32>,
 }
 
 impl From<mgit_core::BatchResult> for BatchResult {
@@ -265,11 +384,16 @@ impl From<mgit_core::BatchResult> for BatchResult {
                     moved: r.moved.map(Into::into),
                     branch_deletion: r.branch_deletion.map(Into::into),
                     integration: r.integration,
+                    upstream_set: r.upstream_set,
+                    cancelled: r.cancelled.then_some(true),
+                    skipped_dirty: r.skipped_dirty.then_some(true),
+                    command: r.command.map(Into::into),
                 })
                 .collect(),
             succeeded: b.succeeded,
             skipped: b.skipped,
             failed: b.failed,
+            cancelled: (b.cancelled > 0).then_some(b.cancelled),
         }
     }
 }
@@ -330,6 +454,90 @@ pub async fn folder_batch(
         .folder_batch(SessionId(session), op.into(), &paths)
         .await?
         .into())
+}
+
+/// 폴더 하위 저장소마다 하루 한 번 백업 정리 (#18·#26). 저장소 세션 없이 낮은 동시성으로 돈다
+#[tauri::command]
+#[specta::specta]
+pub async fn folder_prune_backups_daily(
+    state: State<'_, AppState>,
+    session: u32,
+) -> Result<crate::commands_changes::BackupPruneDto, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .folder_prune_backups_daily(SessionId(session))
+        .await?
+        .into())
+}
+
+/// 일괄 stash 묶음에서 저장소 하나의 항목
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StashBatchRepoDto {
+    pub path: String,
+    pub name: String,
+    /// 지금 `stash@{n}` 의 n (꺼낼 때는 묶음 표시로 다시 찾는다)
+    pub index: u32,
+    /// 저장할 때의 branch (분리 HEAD 면 null)
+    pub branch: Option<String>,
+    /// 만든 시각 (epoch 초)
+    #[specta(type = specta_typescript::Number)]
+    pub time: i64,
+}
+
+/// 저장소들의 stash 목록에서 모은 일괄 stash 묶음
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StashBatchDto {
+    pub id: String,
+    /// 사용자 메시지 (묶음 표시를 뺀 것, 없으면 빈 문자열)
+    pub message: String,
+    /// 가장 최근 항목의 시각 (epoch 초)
+    #[specta(type = specta_typescript::Number)]
+    pub time: i64,
+    pub repos: Vec<StashBatchRepoDto>,
+}
+
+impl From<mgit_core::StashBatch> for StashBatchDto {
+    /// 코어 → wire (경로를 문자열로)
+    fn from(b: mgit_core::StashBatch) -> Self {
+        StashBatchDto {
+            id: b.id,
+            message: b.message,
+            time: b.time,
+            repos: b
+                .repos
+                .into_iter()
+                .map(|r| StashBatchRepoDto {
+                    path: r.path.display().to_string(),
+                    name: r.name,
+                    index: r.index,
+                    branch: r.branch,
+                    time: r.time,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// 일괄 stash 묶음 목록 (최근 묶음부터). 저장소마다 stash 목록에서 묶음 표시를 모은다. `repos` 가 비어 있으면 전부
+#[tauri::command]
+#[specta::specta]
+pub async fn folder_stash_batches(
+    state: State<'_, AppState>,
+    session: u32,
+    repos: Vec<String>,
+) -> Result<Vec<StashBatchDto>, IpcError> {
+    let paths: Vec<PathBuf> = repos.into_iter().map(PathBuf::from).collect();
+    Ok(state
+        .core()?
+        .core
+        .folder_stash_batches(SessionId(session), &paths)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
 }
 
 /// 변경이 있는 저장소의 상태 (MR-08). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다 (PF-02)
@@ -465,7 +673,26 @@ pub async fn folder_unstage(
         .into())
 }
 
-/// 일괄 commit (MR-08)
+/// 일괄 commit 에서 공통 메시지 대신 쓸 저장소 하나의 메시지. 비었거나 공백뿐이면 공통 메시지를 쓴다
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCommitMessageDto {
+    pub path: String,
+    pub message: String,
+}
+
+impl From<RepoCommitMessageDto> for mgit_core::RepoCommitMessage {
+    /// wire → 코어 (경로 문자열을 경로로)
+    fn from(m: RepoCommitMessageDto) -> Self {
+        mgit_core::RepoCommitMessage {
+            path: PathBuf::from(m.path),
+            message: m.message,
+        }
+    }
+}
+
+/// 일괄 commit (MR-08). `repoMessages` 의 저장소는 자기 메시지로, 나머지는 공통 `message` 로 커밋한다. 빠뜨리면
+/// (옛 호출) 모두 공통 메시지다
 #[tauri::command]
 #[specta::specta]
 pub async fn folder_commit(
@@ -474,12 +701,18 @@ pub async fn folder_commit(
     repos: Vec<String>,
     message: String,
     stage_all: bool,
+    repo_messages: Option<Vec<RepoCommitMessageDto>>,
 ) -> Result<BatchResult, IpcError> {
     let paths: Vec<PathBuf> = repos.into_iter().map(PathBuf::from).collect();
+    let per_repo: Vec<mgit_core::RepoCommitMessage> = repo_messages
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect();
     Ok(state
         .core()?
         .core
-        .folder_commit(SessionId(session), &paths, &message, stage_all)
+        .folder_commit_each(SessionId(session), &paths, &message, &per_repo, stage_all)
         .await?
         .into())
 }

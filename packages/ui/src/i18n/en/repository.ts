@@ -109,6 +109,7 @@ export const enRepository: Pick<
     resetHard: 'Hard (discard all changes)',
     rebaseOnto: 'Rebase current branch onto here',
     mergeInto: (name: string) => `Merge ${name} into current branch`,
+    mergeIntoDefault: 'Merge',
     mergeIntoNoFf: 'Merge (--no-ff)',
     mergeIntoFfOnly: 'Merge (--ff-only)',
     mergeIntoSquash: 'Merge (--squash)',
@@ -146,6 +147,7 @@ export const enRepository: Pick<
       `${items} — if you push only the superproject, others won't be able to get those commits.`,
     submoduleUnpushedFirst: 'Push submodules first',
     submoduleUnpushedAnyway: 'Push anyway',
+    submoduleUnpushedCancelled: 'Submodule push was canceled, so the superproject was not pushed',
     reapplyTitle: 'Saved resolutions found',
     reapplyMessage: (n: number) =>
       `Reapply the results for ${formatNumber(n)} ${plural(n, 'file', 'files')} you resolved earlier in the same operation?`,
@@ -235,9 +237,10 @@ export const enRepository: Pick<
       "This branch isn't linked to a remote branch. Push it under the same name and set the upstream?",
     pushSetUpstream: 'Push and set upstream',
     hookFailed: 'Rejected by a hook',
+    // 커밋이 아닌 작업(merge·rebase·continue 등)이 hook 에 거부됐다: 알리기만 한다. 커밋 폼의 커밋은 hook 거부를 폼 아래
+    // 오류 줄로 보이고, 건너뛰기는 그 폼의 체크 칸이다
     hookFailedMessage:
-      'Check the hook output. If you know the cause, you can skip hooks and try again.',
-    retryNoVerify: 'Skip hooks and commit',
+      'Check the hook output in the Git console. Skipping hooks (--no-verify) is available only when committing from the commit form.',
     nothingToCommit: 'Nothing to commit',
     nothingToCommitMessage: 'Stage files first.',
     delete: 'Delete',
@@ -573,6 +576,7 @@ export const enRepository: Pick<
     title: 'Start',
     open: 'Open repository…',
     clone: 'Clone…',
+    cloneMany: 'Clone multiple…',
     init: 'New repository…',
     scan: 'Scan folder…',
     scanTitle: 'Choose a folder to scan for repositories',
@@ -599,6 +603,35 @@ export const enRepository: Pick<
     button: 'Clone',
     running: (label: string) => `${label}…`,
     pickParent: 'Choose the parent folder to clone into',
+    many: {
+      title: 'Clone multiple repositories',
+      note: 'One repository per line. Add a space and a folder name after the URL to use that name; anything after # is ignored',
+      urls: 'Repository URLs (one per line)',
+      placeholder:
+        'https://github.com/team/app.git\ngit@github.com:team/api.git api-server\n# comment',
+      count: (n: number, duplicates: number) =>
+        duplicates > 0
+          ? `${formatNumber(n)} ${plural(n, 'repository', 'repositories')} (${formatNumber(duplicates)} duplicate ${plural(duplicates, 'line', 'lines')} left out)`
+          : `${formatNumber(n)} ${plural(n, 'repository', 'repositories')}`,
+      errors: {
+        badUrl: (line: number) => `Line ${formatNumber(line)}: a URL can't start with -`,
+        badName: (line: number) => `Line ${formatNumber(line)}: invalid folder name`,
+        tooManyParts: (line: number) =>
+          `Line ${formatNumber(line)}: only a URL and a folder name are allowed`,
+      },
+      nameClash: (names: string) =>
+        `The same folder name is used more than once: ${names}. Add a different folder name after the URL`,
+      noTargets: 'No URLs to clone',
+      next: 'Next',
+      pickParent: 'Choose the parent folder to clone the repositories into',
+      confirmTitle: (n: number) =>
+        `Clone ${formatNumber(n)} ${plural(n, 'repository', 'repositories')}`,
+      confirmNote:
+        'Folders that already exist are skipped. Two repositories are cloned at a time, and this folder opens as a folder tab when done',
+      group: (n: number) => `Targets (${formatNumber(n)})`,
+      target: (name: string, url: string) => `${name} ← ${url}`,
+      noneChecked: 'Check at least one repository to clone',
+    },
   },
   init: {
     title: 'New repository',
@@ -665,6 +698,9 @@ export const enRepository: Pick<
       all: 'All',
       changed: 'Changed',
       behind: 'Behind',
+      ahead: 'To push',
+      noUpstream: 'No upstream',
+      stashed: 'Has stashes',
       inProgress: 'In progress',
     },
     columns: {
@@ -673,6 +709,9 @@ export const enRepository: Pick<
       branch: 'Branch',
       changed: 'Changes',
       sync: 'Ahead/behind',
+      stash: 'Stashes',
+      stashTip:
+        'Number of stash entries. A worktree shares the stash list with its main repository and shows the same number',
       op: 'In progress',
       lastFetch: 'Last fetch',
     },
@@ -773,10 +812,22 @@ export const enRepository: Pick<
         `${name}: ${formatNumber(n)} ${plural(n, 'commit', 'commits')}`,
       pushSkip: (name: string, why: string) => `${name}: skipped (${why})`,
       pushUnknown: (name: string) => `${name}: status not known yet (checked on run)`,
+      // 업스트림이 없는 브랜치 (사용자 결정 "origin 자동 + 예외만 선택"): origin 이 있으면 그것을 새 업스트림으로 보이고,
+      // origin 이 없으면 바로 아래 고르는 칸에서 원격을 고른다 (원격이 하나뿐이면 미리 골라 둔다)
+      pushPublish: (name: string, target: string) => `${name}: set upstream → ${target}`,
+      pushChoose: (name: string, branch: string) => `${name}: set upstream (${branch})`,
+      pushRemote: (name: string) => `${name}: remote to push to`,
+      pushRemoteNone: 'None (skip)',
+      pushRemoteNote:
+        'No origin remote. Creates the same-named branch on the chosen remote; skipped if none is chosen',
+      pushPublishNote:
+        'Branches without an upstream are created on the remote with the same name and set as upstream',
       // 꺼진 칸의 사유 (요약을 아직 못 읽었거나 읽지 못한 저장소)
       unknownState: 'Status not known yet',
       noUpstream: 'No upstream',
       nothingToPush: 'No commits to push',
+      detached: 'Detached HEAD',
+      noRemotes: 'No remotes',
       excluded: 'Excluded (folder settings)',
       // 저장소 체크 목록의 묶음 제목과, 하나도 체크하지 않았을 때 확인을 끄는 사유 (W19 — push·checkout·새 branch)
       repoGroup: (n: number) =>
@@ -788,6 +839,17 @@ export const enRepository: Pick<
       running: (label: string, phase: string) => (phase ? `${label}: ${phase}` : label),
       result: (s: number, k: number, f: number) =>
         `${formatNumber(s)} succeeded · ${formatNumber(k)} skipped · ${formatNumber(f)} failed`,
+      // push 가 업스트림이 없던 브랜치를 게시한 결과: 성공 중 업스트림을 새로 지정한 수를 따로 보인다
+      resultPublished: (s: number, published: number, k: number, f: number) =>
+        `${formatNumber(s)} succeeded (${formatNumber(published)} upstream set) · ${formatNumber(k)} skipped · ${formatNumber(f)} failed`,
+      upstreamSet: (target: string) => `Upstream set: ${target}`,
+      // 일괄 작업 취소: 시작하지 않은 저장소는 취소됨, 실행 중인 fetch·push 는 멈춘다. 취소됨은 건너뜀·실패와 따로 센다
+      cancel: 'Cancel batch operation',
+      cancelTip:
+        'Cancel the batch operation — repositories not started yet are skipped and running fetch/push are stopped. Other running steps finish',
+      cancelling: 'Canceling…',
+      cancelledState: 'Canceled',
+      withCancelled: (summary: string, n: number) => `${summary} · ${formatNumber(n)} canceled`,
       resultMoved: (updated: number, upToDate: number, done: number, k: number, f: number) =>
         [
           `${formatNumber(updated)} updated`,
@@ -797,9 +859,43 @@ export const enRepository: Pick<
           `${formatNumber(f)} failed`,
         ].join(' · '),
       openWorktrees: 'Open the created worktree folders?',
+      openWorktreesRun: 'Open folder',
+      // 편집기 초안 확인: 작업 트리 파일을 바꾸는 일괄 작업은 대상 저장소에 저장하지 않은 편집이 있으면 실행하지 않는다
+      draftsBlockedTitle: 'Batch operation not run: unsaved edits',
+      draftsBlocked: (names: string) => `${names}: run again after the edited files finish saving`,
+      draftsNote: (names: string) =>
+        `Repositories with unsaved edits: ${names}. Run after saving finishes`,
       ok: 'Done',
       skipped: 'Skipped',
       failed: 'Failed',
+      // 일괄 스태시 (셋째 묶음 G)
+      stashSave: 'Stash changes…',
+      stashPop: 'Pop stash…',
+      stashSaveTitle: 'Stash changes in each repository',
+      stashSaveMessage: (scope: string) =>
+        `${scope}. Stashes uncommitted changes in each repository as one batch. Repositories with no changes or an operation in progress are skipped`,
+      stashUntrackedNote: 'Batch pull and checkout do not skip repositories for untracked files',
+      stashSaveRun: 'Stash',
+      stashPickTitle: 'Choose a batch stash to pop',
+      stashPickMessage:
+        'Most recent batches first. Pops the stash of the chosen batch in each repository',
+      stashPickNext: 'Next',
+      stashBatch: 'Batch',
+      stashBatchOption: (name: string, repos: number, time: string) =>
+        `${name} — ${formatNumber(repos)} ${plural(repos, 'repository', 'repositories')} · ${time}`,
+      stashBatchUnnamed: (id: string) => `No message (${id})`,
+      stashPopTitle: (name: string) => `Pop batch stash: ${name}`,
+      stashPopMessage:
+        'Applies and drops the stash of this batch in each checked repository. If a repository has conflicts, its stash is kept',
+      stashPopRepo: (name: string, index: number, branch: string | null) =>
+        branch === null ? `${name}: stash@{${index}}` : `${name}: stash@{${index}} (${branch})`,
+      stashPopRun: 'Pop',
+      stashNone: 'No batch stashes to pop',
+      stashBatchGone: 'No stashes from this batch remain',
+      stashListFailed: "Couldn't read the batch stashes",
+      // 커밋하지 않은 변경으로 건너뛴 저장소가 있을 때 결과 알림 끝에 붙는 안내
+      dirtyHint: (n: number) =>
+        `${formatNumber(n)} ${plural(n, 'repository', 'repositories')} skipped for uncommitted changes — use 'Stash changes…', run again, then 'Pop stash…' to restore them`,
     },
     settings: {
       // 폴더 설정 대화상자 (W12: 개요의 설정 보기를 옮겼다)
@@ -830,6 +926,15 @@ export const enRepository: Pick<
       repeat: (n: number) => `×${formatNumber(n)}`,
       repeatTip: (n: number) => `Same result ${formatNumber(n)} times in a row`,
       notRun: "Couldn't run",
+      // 실패하거나 취소된 저장소만 다시 실행 (작업 기록 줄의 단추)
+      retryFailed: (n: number) =>
+        `Retry failed only (${formatNumber(n)} ${plural(n, 'repository', 'repositories')})`,
+      retryDirectTip:
+        'Runs the same operation again right away in the failed or canceled repositories',
+      retryConfirmTip:
+        'Reopens the same confirmation, narrowed to the failed or canceled repositories',
+      popBatch: 'Pop this batch',
+      popBatchTip: 'Pops the stashes made by this batch in each repository (opens a confirmation)',
       ops: {
         fetch: 'Batch fetch',
         pull: 'Batch pull',
@@ -845,8 +950,54 @@ export const enRepository: Pick<
         deleteRemoteBranch: 'Batch delete remote branch',
         deleteBranch: 'Batch delete local branch',
         deleteLocalBranches: 'Batch force-delete local branches',
+        stashPush: 'Batch stash',
+        stashPop: 'Batch stash pop',
         commit: 'Batch commit',
+        runCommand: 'Batch command',
       },
+    },
+    command: {
+      button: 'Run command…',
+      title: 'Run git command',
+      note: "Runs git in each repository's folder. It doesn't go through a shell, so pipes, redirection and multiple commands aren't available",
+      label: 'git command',
+      placeholder: 'git status -sb',
+      run: 'Run',
+      errors: {
+        empty: 'Enter a command after git',
+        unclosedQuote: 'A quote is not closed',
+        shellSyntax:
+          "Pipes, redirection, multiple commands and variables aren't available. Only one git command runs",
+      },
+      dangerNotice: (reasons: string) =>
+        `Caution: ${reasons}. You'll be asked again before it runs`,
+      dangerTitle: 'This command may be hard to undo',
+      dangerMessage: (command: string, targets: string) => `${command}\n${targets}\nRun it anyway?`,
+      dangerRun: 'Run anyway',
+      danger: {
+        discardChanges: 'It can discard uncommitted changes, untracked files or stashes',
+        forcePush: 'It can force-overwrite remote branches',
+        remoteDelete: 'It can delete remote branches or tags',
+        deleteRefs: 'It can delete branches, tags, settings or objects',
+        rewriteHistory: 'It rewrites commit history',
+        runsProgram: 'It runs an external program or shell command',
+        otherPath: 'It targets another path (the same place in every repository)',
+        unknownCommand: "Unknown command or alias, so what it does can't be checked",
+      },
+      exit: (code: number) => `Exit code ${formatNumber(code)}`,
+      noExit: 'No exit code (signal or canceled)',
+      elapsed: (ms: number) =>
+        ms < 1000 ? `${formatNumber(ms)} ms` : `${(ms / 1000).toFixed(1)} s`,
+      stdout: 'Standard output',
+      stderr: 'Standard error',
+      noOutput: 'No output',
+      stdoutTruncated: 'The output was too long; only the first 1 MiB was kept',
+      stderrTruncated: 'The beginning may be cut off (the last 64 KiB is kept)',
+      showOutput: 'Show output',
+      hideOutput: 'Hide output',
+      copy: 'Copy output',
+      copyAll: 'Copy output of all repositories',
+      outputsDropped: 'Output was removed from this older entry',
     },
   },
   submodule: {

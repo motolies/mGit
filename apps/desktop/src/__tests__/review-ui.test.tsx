@@ -185,6 +185,53 @@ describe('연속 대화상자', () => {
   });
 });
 
+/** React 가 바뀜으로 알아보게 입력 칸 값을 네이티브 setter 로 바꾼다 (`fireEvent` 는 act 로 감싸 경합을 지운다) */
+function setNativeValue(input: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+describe('PR 만들기 본문 템플릿', () => {
+  /**
+   * 문서 그림 촬영에서 본문이 빈 채로 찍힌 경합: 대화상자가 열린(`open`) 바로 다음, 앱이 다음 렌더를 그리기 전에 다른 칸
+   * 입력이 들어온다. 처음 값을 효과에서 채우던 때(14bacde 이전)는 그 입력이 빈 값 위에서 처리되어 본문 템플릿을 지웠다.
+   * act 없이 실제 스케줄러로 돌리고, 열림을 지켜보는 MutationObserver(마이크로태스크)에서 곧바로 head 를 입력한다
+   */
+  it('대화상자가 열리자마자 다른 칸을 입력해도 본문 템플릿이 남는다', async () => {
+    const body = '## 변경 내용\n\n## 확인 방법\n';
+    render(<PrFlow templates={[{ name: 'pull_request_template.md', body }]} />);
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnv = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      const typed = new Promise<void>((resolve) => {
+        const observer = new MutationObserver(() => {
+          const head = document.querySelector<HTMLInputElement>('dialog[open] #pf-head');
+          if (!head) return;
+          observer.disconnect();
+          setNativeValue(head, 'feature/search-filters');
+          resolve();
+        });
+        observer.observe(document.body, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['open'],
+        });
+      });
+      screen.getByText('go').click();
+      await typed;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = actEnv;
+    }
+    expect(document.querySelector<HTMLInputElement>('dialog[open] #pf-head')?.value).toBe(
+      'feature/search-filters',
+    );
+    expect(document.querySelector<HTMLTextAreaElement>('dialog[open] #pf-body')?.value).toBe(body);
+    expect(document.querySelector<HTMLInputElement>('dialog[open] #pf-title')?.value).toBe('main');
+  });
+});
+
 /** 단추로 두 갈래(`confirm`)·세 갈래(`confirmChoice`) 확인을 열고 결과를 글자로 남긴다 */
 function ConfirmHarness() {
   const d = useDialogs();
@@ -469,6 +516,22 @@ describe('힌트 대화상자의 push 경로', () => {
     });
     render(<HintDialogs />);
     expect(screen.queryByText(S.tag.exists.replace)).toBeNull();
+  });
+
+  it('hook 거부(커밋이 아닌 작업, #33)는 안내만 한다: 확인 하나, commit 을 다시 하지 않고 hook 건너뛰기를 켜지 않는다', async () => {
+    const s = session({ kind: 'hookFailed' }, { setCommitNoVerify: vi.fn() });
+    render(<HintDialogs />);
+    expect(document.querySelector('dialog h2')?.textContent).toBe(S.dialog.hookFailed);
+    expect(document.querySelector('dialog p')?.textContent).toBe(S.dialog.hookFailedMessage);
+    expect([...document.querySelectorAll('dialog button')].map((b) => b.textContent)).toEqual([
+      S.confirm.cancel,
+      S.confirm.ok,
+    ]);
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    await tick();
+    expect(s.dismissHint).toHaveBeenCalled();
+    expect(s.commit).not.toHaveBeenCalled();
+    expect(s.setCommitNoVerify).not.toHaveBeenCalled();
   });
 
   it('pull 이 실패하면 push 하지 않는다', async () => {

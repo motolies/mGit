@@ -9,6 +9,7 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::app_events::AppEvent;
+use crate::commands_group::GroupInfo;
 use crate::dto::{RepoOpened, RepoSessionRelease};
 use crate::error::IpcError;
 use crate::events::{ChannelSink, SessionEvent};
@@ -78,13 +79,29 @@ impl From<mgit_core::FoundRepo> for FoundRepo {
     }
 }
 
-/// 폴더 세션 열기 결과
+/// 폴더 세션 열기 결과 (`open_folder`·`open_group`). 그룹이면 `path` 가 세션 키 `mgit-group:<id>` 이고 `group` 에 멤버
+/// 상태가 있다. 폴더면 `group` 이 빠진다 (TS 선택 필드)
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderOpened {
     pub session: u32,
     pub path: String,
     pub repos: Vec<FoundRepo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub group: Option<GroupInfo>,
+}
+
+impl From<mgit_core::FolderOpened> for FolderOpened {
+    /// 경로를 문자열로
+    fn from(o: mgit_core::FolderOpened) -> Self {
+        FolderOpened {
+            session: o.session.0,
+            path: o.path.display().to_string(),
+            repos: o.repos.into_iter().map(Into::into).collect(),
+            group: o.group.map(Into::into),
+        }
+    }
 }
 
 /// 대시보드 한 줄
@@ -106,6 +123,16 @@ pub struct RepoSummary {
     #[specta(type = f64)]
     pub last_fetch: Option<i64>,
     pub error: Option<String>,
+    /// 등록된 원격 이름. 업스트림이 없는 branch 에서만 읽는다 (일괄 push 의 새 업스트림 후보). TS 선택 필드인 것은
+    /// 기존 프런트 코드·목이 이 필드 없이 `RepoSummary` 를 만들기 때문이다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub remotes: Option<Vec<String>>,
+    /// stash 항목 수 (0 이면 빠진다). 워크트리는 주 저장소와 같은 수다. TS 선택 필드인 것은 기존 프런트 코드·목이 이 필드
+    /// 없이 `RepoSummary` 를 만들기 때문이다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub stash_count: Option<u32>,
 }
 
 impl From<mgit_core::RepoSummary> for RepoSummary {
@@ -125,6 +152,8 @@ impl From<mgit_core::RepoSummary> for RepoSummary {
             op: s.op.map(Into::into),
             last_fetch: s.last_fetch,
             error: s.error,
+            remotes: s.remotes,
+            stash_count: (s.stash_count > 0).then_some(s.stash_count),
         }
     }
 }
@@ -187,6 +216,54 @@ pub struct CloneRequest {
     pub single_branch: bool,
 }
 
+/// 여러 저장소 clone 의 대상 하나: URL 과 상위 폴더 아래에 만들 폴더 이름
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneTargetDto {
+    pub url: String,
+    pub name: String,
+}
+
+/// 여러 저장소 clone 요청. 서브모듈·경량 복제 옵션은 모든 대상에 같게 건다
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneBatchRequest {
+    /// 대상 폴더들을 만들 상위 폴더 (있어야 한다)
+    pub parent: String,
+    pub targets: Vec<CloneTargetDto>,
+    pub recurse_submodules: bool,
+    pub depth: Option<u32>,
+    pub blobless: bool,
+    pub single_branch: bool,
+    /// 동시 clone 수 (1~4). 빠뜨리면 2
+    #[serde(default)]
+    pub concurrency: Option<u32>,
+}
+
+impl From<CloneBatchRequest> for mgit_core::CloneBatch {
+    /// wire → 코어 (경로 문자열을 경로로, 동시 clone 수 기본값)
+    fn from(r: CloneBatchRequest) -> Self {
+        mgit_core::CloneBatch {
+            parent: PathBuf::from(r.parent),
+            targets: r
+                .targets
+                .into_iter()
+                .map(|t| mgit_core::CloneTarget {
+                    url: t.url,
+                    name: t.name,
+                })
+                .collect(),
+            recurse_submodules: r.recurse_submodules,
+            depth: r.depth,
+            blobless: r.blobless,
+            single_branch: r.single_branch,
+            concurrency: r
+                .concurrency
+                .unwrap_or(mgit_core::CLONE_CONCURRENCY_DEFAULT),
+        }
+    }
+}
+
 /// 서브모듈 상태
 #[derive(Debug, Clone, Copy, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -240,11 +317,7 @@ pub async fn open_folder(
         .core
         .open_folder(Path::new(&path), sink)
         .await?;
-    Ok(FolderOpened {
-        session: opened.session.0,
-        path: opened.path.display().to_string(),
-        repos: opened.repos.into_iter().map(Into::into).collect(),
-    })
+    Ok(opened.into())
 }
 
 /// 대시보드 요약 (MR-02). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다 (PF-02)
@@ -357,6 +430,24 @@ pub async fn clone_repo(
         )
         .await?;
     Ok(dest.display().to_string())
+}
+
+/// 여러 저장소를 한 상위 폴더 아래에 clone 한다. 진행률은 세션 0 의 operation 이벤트(저장소 하나가 끝날 때마다)로
+/// 오고 `cancel_operation` 으로 취소한다. 이미 있는 폴더는 건너뛰고, 실패·취소한 clone 은 만들던 폴더를 지운다
+#[tauri::command]
+#[specta::specta]
+pub async fn clone_many(
+    state: State<'_, AppState>,
+    request: CloneBatchRequest,
+    on_event: Channel<SessionEvent>,
+) -> Result<crate::commands_folder::BatchResult, IpcError> {
+    let sink: Arc<dyn EventSink> = Arc::new(ChannelSink(on_event));
+    Ok(state
+        .core()?
+        .core
+        .clone_many(request.into(), sink)
+        .await?
+        .into())
 }
 
 /// 새 저장소 초기화 (REPO-04)

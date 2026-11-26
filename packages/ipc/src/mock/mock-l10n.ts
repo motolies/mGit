@@ -25,6 +25,24 @@ export const mockReason = {
   alreadyOnBranch: () => pick('이미 그 branch', 'Already on that branch'),
   /** push 할 commit 이 없다 */
   nothingToPush: () => pick('보낼 commit 없음', 'No commits to push'),
+  /** push 의 새 업스트림: 분리 HEAD 라 보낼 branch 가 없다 (코어 `reason::detached`) */
+  detached: () =>
+    pick('분리된 HEAD 상태에서는 푸시할 수 없습니다', 'Cannot push from a detached HEAD'),
+  /** push 의 새 업스트림: 원격이 하나도 없다 (코어 `messages::no_remotes`) */
+  noRemotes: () =>
+    pick(
+      '원격 저장소가 없습니다. 먼저 원격 저장소를 추가하세요.',
+      'No remotes. Add a remote first',
+    ),
+  /** push 의 새 업스트림: origin 이 없는데 원격을 고르지 않았다 (코어 `reason::remote_not_chosen`) */
+  remoteNotChosen: () =>
+    pick(
+      'origin 이 없어 보낼 원격을 골라야 합니다',
+      'No origin remote. Choose a remote to push to',
+    ),
+  /** push 의 새 업스트림: 고른 원격이 없다 (코어 `messages::unknown_remote`) */
+  unknownRemote: (name: string) =>
+    pick(`등록된 원격 저장소가 없습니다: ${name}`, `No such remote: ${name}`),
   /** 원격 브랜치가 없다 (`origin/x`) */
   remoteBranchMissing: (tracking: string) =>
     pick(`원격 branch 가 없음: ${tracking}`, `Remote branch not found: ${tracking}`),
@@ -47,4 +65,14 @@ export const mockReason = {
       `갈라져 갱신하지 않음 (⇡${ahead} ⇣${behind})`,
       `Diverged, not updated (⇡${ahead} ⇣${behind})`,
     ),
+  /** 일괄 stash 저장: 저장할 변경이 없다 (코어 `folder_stash::why::no_changes`) */
+  noStashChanges: () => pick('스태시할 변경이 없습니다', 'No changes to stash'),
+  /** 일괄 stash 저장: 미추적 파일만 있는데 넣지 않기로 했다 (코어 `why::untracked_only`) */
+  untrackedOnly: () =>
+    pick(
+      '미추적 파일만 있습니다 (미추적 파일 포함을 켜면 저장합니다)',
+      'Only untracked files (turn on Include untracked files to stash them)',
+    ),
+  /** 일괄 stash 꺼내기: 그 묶음의 항목이 없다 (코어 `why::no_batch_stash`) */
+  noBatchStash: () => pick('이 묶음의 스태시가 없습니다', 'No stash from this batch'),
 };

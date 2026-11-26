@@ -43,6 +43,14 @@ pub struct RepoSummary {
     pub last_fetch: Option<i64>,
     /// 상태를 못 읽었으면 그 이유
     pub error: Option<String>,
+    /// 등록된 원격 이름. 업스트림이 없는 branch 에서만 읽는다 — 일괄 push 가 새 업스트림을 둘 원격을 미리 보일 때 쓴다.
+    /// 업스트림이 있거나 분리 HEAD 이거나 원격 목록을 읽지 못했으면 `None` (빈 목록은 원격이 하나도 없다는 뜻)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remotes: Option<Vec<String>>,
+    /// stash 항목 수. 요약이 이미 돌리는 `git status --show-stash` 의 `# stash <N>` 머리를 그대로 쓴다 (명령을 더 돌리지
+    /// 않는다). git 이 `refs/stash` 의 reflog 항목을 세는 값이라 `git stash list` 의 줄 수와 같고, 워크트리끼리는 함께
+    /// 쓰는 목록이라 같은 수가 나온다. 상태를 못 읽었으면 0
+    pub stash_count: u32,
 }
 
 /// 서브모듈 상태 (`git submodule status` 접두 + status v2 의 `S` 필드)

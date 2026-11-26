@@ -60,6 +60,7 @@ export const ko = {
 
   workspaceSearch: {
     quickOpen: '파일 빠른 열기',
+    recentFiles: '최근 파일',
     title: '워크스페이스 검색',
     close: '닫기',
     query: '검색어',
@@ -78,6 +79,45 @@ export const ko = {
     cancel: '취소',
     results: (n: number) => `${n}개 결과`,
     skipped: (n: number) => ` · 건너뜀 ${n}개`,
+    // 여러 파일 바꾸기
+    replaceWith: '바꿀 내용',
+    replacePlaceholder: '바꿀 내용 (정규식이면 $1 로 묶음)',
+    replaceOpen: '바꾸기…',
+    replaceTitle: '여러 파일 바꾸기',
+    replaceLoading: '바꿀 곳을 찾는 중…',
+    replaceNone: '바꿀 곳이 없습니다.',
+    replaceTotals: (files: number, matches: number) => `파일 ${files}개 · 일치 ${matches}개`,
+    replaceApply: (files: number, matches: number) => `바꾸기 (${files}개 파일, ${matches}개)`,
+    replaceFile: (path: string) => `${path} 바꾸기`,
+    replaceMatchCount: (n: number) => `일치 ${n}개`,
+    replaceMatch: (before: string, after: string) => `${before} → ${after}`,
+    replaceBefore: '바꾸기 전',
+    replaceAfter: '바꾼 뒤',
+    replaceHiddenInLine: (n: number) => `잘려 보이지 않는 일치 ${n}개는 파일 체크를 따릅니다.`,
+    replaceHiddenLines: (n: number) => `나머지 ${n}줄은 파일 체크를 따릅니다.`,
+    replaceUnreadable: (n: number) =>
+      `텍스트로 읽지 못한 파일 ${n}개(1 MiB 초과·바이너리·UTF-8 아님)는 찾지 않았습니다.`,
+    replaceTruncated: (n: number) =>
+      `파일이 많아 처음 ${n}개만 보입니다. 범위를 좁혀 나머지를 다시 바꾸세요.`,
+    replaceExcluded: '바꾸지 않는 파일',
+    replaceReasons: {
+      draft: '편집기에 저장하지 않은 변경이 있습니다',
+      mixedLineEndings: '줄 끝(LF·CRLF)이 섞여 있습니다',
+      outsideRepository: 'Git 저장소 밖 파일입니다',
+      changed: '미리본 뒤 파일이 바뀌었습니다',
+      unchanged: '바꿀 일치가 없습니다',
+    },
+    replaceDone: (files: number, matches: number) =>
+      `${files}개 파일에서 ${matches}개를 바꿨습니다.`,
+    replaceBackupNote: '원본은 폐기 백업(이유 replace)에 남아 있습니다.',
+    replaceSkippedTitle: '건너뛴 파일',
+    replaceFailedTitle: '실패한 파일',
+    replaceUndo: '되돌리기',
+    replaceUndone: (n: number) => `${n}개 파일을 되돌렸습니다.`,
+    replaceUndoChanged:
+      '바꾼 뒤 또 바뀐 파일은 되돌리지 않았습니다. 폐기 백업에서 복구할 수 있습니다.',
+    replaceClose: '닫기',
+    replaceWorking: '파일을 쓰는 중…',
   },
 
   projectEdit: koProjectEdit,
@@ -214,6 +254,18 @@ export const ko = {
     overview: '개요',
     closeTab: (title: string) => `${title} 닫기`,
     pinHint: '더블클릭하면 탭을 고정합니다.',
+    // 편집기 분할 (R3): 탭 우클릭 메뉴의 분할·옮기기, 두 그룹의 이름, 경계 폭 조절, 파일이 아닌 탭의 까닭
+    split: {
+      right: '오른쪽으로 분할',
+      moveRight: '오른쪽 그룹으로 옮기기',
+      moveLeft: '왼쪽 그룹으로 옮기기',
+      unsplit: '분할 해제',
+      mainGroup: '왼쪽 편집기',
+      sideGroup: '오른쪽 편집기',
+      resize: '편집기 분할 폭 조절',
+      fileOnly: '파일 탭만 분할할 수 있습니다.',
+      notSplit: '편집기가 분할되어 있지 않습니다.',
+    },
     // 커밋 파일 diff 탭 (ED-02): 제목은 파일 이름과 해시, 툴팁은 어느 저장소의 어느 경로인지
     commitDiffTitle: (name: string, hash: string) => `${name} @${hash}`,
     commitDiffTip: (repo: string, path: string, hash: string) => `${repo}: ${path} @${hash}`,
@@ -454,6 +506,19 @@ export const ko = {
     unopenable: '이름이 너무 길어 열 수 없습니다.',
     // 머리줄의 폴더 설정 (대화상자를 연다)
     settings: '폴더 설정…',
+    // 트리 위 거르기 줄 (R1): 이름 필터 칸과 "변경된 파일만" 단추, 그 아래 안내 한 줄
+    filter: {
+      label: '이름으로 거르기',
+      placeholder: '이름으로 거르기',
+      hint: '이름 일부를 적으면 맞는 파일·폴더와 그 상위 폴더만 보입니다. .gitignore 로 무시된 파일은 펼쳐 둔 폴더에서만 찾습니다.',
+      changedOnly: '변경된 파일만 보기',
+      loading: '전체 파일 목록을 읽는 중… 펼쳐 둔 폴더에서 먼저 찾았습니다.',
+      noMatch: '이름이 맞는 항목이 없습니다.',
+      noChanges: '변경된 파일이 없습니다.',
+      limited: (n: number) =>
+        `맞는 항목이 많아 ${formatNumber(n)}개까지만 보입니다. 이름을 더 적어 주세요.`,
+      partial: '전체 파일 목록을 다 읽지 못해 일부만 찾았습니다.',
+    },
     // 저장소 탭 트리의 모듈·서브모듈·하위 저장소 (W25, PT-13): 머리의 메뉴 단추와 묶음 이름, 행 아이콘의 뜻, 범위 띠
     structure: {
       menu: '모듈·서브모듈·하위 저장소',
@@ -547,6 +612,37 @@ export const ko = {
     currentBlame: '현재 줄 수정 이력',
     allBlame: '전체 줄 수정 이력',
     changeMarkers: '편집기 변경 표시',
+    autoCloseBrackets: '괄호·따옴표 자동 닫기',
+    // 위 줄의 들여쓰기 표시 (파일 내용으로 추정, 탭이 필요한 Makefile 등은 늘 탭)
+    indentTabs: '탭',
+    indentSpaces: (n: number) => `공백 ${formatNumber(n)}칸`,
+    // 접기 여백·접힌 자리 표시의 툴팁과 화면 읽기 프로그램 알림 (CodeMirror 문구)
+    foldLine: '접기',
+    unfoldLine: '펼치기',
+    foldedCode: '접힌 코드',
+    foldedLines: '접은 줄',
+    unfoldedLines: '펼친 줄',
+    foldRangeTo: '~',
+    // 편집기 찾기·바꾸기 패널(⌘F)과 줄로 이동 패널(⌘⌥G)의 글자·화면 읽기 프로그램 알림 (CodeMirror 문구, `$` 는 수·줄 번호)
+    findPanel: {
+      find: '찾기',
+      replace: '바꿀 내용',
+      next: '다음',
+      previous: '이전',
+      all: '모두 선택',
+      matchCase: '대소문자 구분',
+      regexp: '정규식',
+      byWord: '단어 단위',
+      replaceOne: '바꾸기',
+      replaceAll: '모두 바꾸기',
+      close: '닫기',
+      currentMatch: '현재 일치 항목',
+      onLine: '줄',
+      replacedMatches: '$개를 바꿨습니다',
+      replacedOnLine: '$번째 줄의 일치 항목을 바꿨습니다',
+      goToLine: '이동할 줄',
+      go: '이동',
+    },
     localChange: '로컬 변경',
     uncommitted: '아직 커밋되지 않음',
     editorDefaults: '전역 설정 따르기',
@@ -577,8 +673,41 @@ export const ko = {
     reloadUnreadable: '현재 파일을 편집 가능한 텍스트로 읽을 수 없습니다.',
     overwriteUnreadable: '현재 파일을 읽을 수 없어 덮어쓸 수 없습니다.',
     editedSinceConfirm: '확인 이후 새 입력이 있어 초안을 유지했습니다. 다시 확인하세요.',
-    mixedLineEndings:
-      '혼합 줄바꿈 파일은 편집할 수 없습니다. LF 또는 CRLF 형식으로 변환한 뒤 다시 여세요.',
+    // 줄 끝이 섞인 파일 (LF·CRLF·단독 CR): 읽기 전용으로 보이고, 확인 뒤 한 형식으로 통일해 저장하면 편집할 수 있다
+    lineEndingCounts: (lf: number, crlf: number, cr: number) =>
+      [
+        `LF ${formatNumber(lf)}줄`,
+        `CRLF ${formatNumber(crlf)}줄`,
+        ...(cr > 0 ? [`단독 CR ${formatNumber(cr)}개`] : []),
+      ].join(' · '),
+    mixedReadOnly: (counts: string) =>
+      `이 파일은 줄 끝이 섞여 있어(${counts}) 편집할 수 없습니다. 읽기 전용으로 보입니다.`,
+    normalizeLf: 'LF로 통일해 편집',
+    normalizeCrlf: 'CRLF로 통일해 편집',
+    normalizeTitle: (target: string) => `줄 끝을 ${target}로 통일`,
+    normalizeMessage: (target: string, counts: string, changed: number, cr: number) =>
+      `지금 줄 끝은 ${counts}입니다. 파일 전체의 줄 끝을 ${target}로 바꿔 저장한 뒤 편집합니다. 줄 끝이 바뀌는 ${formatNumber(changed)}줄이 diff에 변경으로 잡히고, 많으면 파일 전체가 바뀐 것처럼 보입니다.${cr > 0 ? ' 단독 CR도 줄 끝으로 보고 바꿉니다.' : ''}`,
+    normalizeAction: (target: string) => `${target}로 통일`,
+    normalizeConflict:
+      '파일이 그사이 바뀌어 통일하지 않았습니다. 다시 읽었으니 확인한 뒤 다시 시도하세요.',
+    normalizeFailed: (message: string) => `줄 끝을 통일하지 못했습니다: ${message}`,
+    // 인코딩 (R2): 머리줄의 인코딩 단추와 그 메뉴, 다시 쓸 수 없는 파일·읽지 못한 파일의 안내
+    encoding: (name: string) => `인코딩: ${name}`,
+    encodingTitle: '인코딩입니다. 누르면 다른 인코딩으로 다시 열 수 있습니다.',
+    encodingGuessed: (name: string) =>
+      `UTF-8로 읽을 수 없어 ${name} 인코딩으로 추정했습니다. 글자가 깨져 보이면 다른 인코딩을 고르세요.`,
+    encodingGuessedTag: '추정',
+    encodingPick: '인코딩 골라 열기…',
+    encodingReopen: '다른 인코딩으로 다시 열기',
+    encodingAuto: '자동으로 알아내기',
+    encodingLocked:
+      '저장하지 않은 편집이 있어 인코딩을 바꿀 수 없습니다. 저장하거나 되돌린 뒤 바꾸세요.',
+    lossyMalformed: (name: string) =>
+      `${name} 인코딩으로 읽을 수 없는 바이트가 있어 �로 보입니다. 편집하면 원래 바이트를 잃으므로 읽기 전용입니다.`,
+    lossyIrreversible: (name: string) =>
+      `${name} 인코딩으로 다시 저장하면 원래와 다른 바이트가 되는 글자가 있어 읽기 전용입니다.`,
+    notUtf8Hint:
+      'UTF-8·EUC-KR·Shift_JIS 어느 것으로도 읽을 수 없습니다. 머리줄의 인코딩 단추로 다른 인코딩을 고르거나 다른 앱에서 확인하세요.',
     closeTitle: '미저장 변경이 있습니다.',
     closeMessage: '저장하지 못한 파일이 있습니다. 다시 저장하거나 변경을 폐기한 뒤 닫으세요.',
     discardChanges: '미저장 변경 폐기',
@@ -600,6 +729,8 @@ export const ko = {
     },
     missing: '파일이 없습니다 (지워졌거나 옮겨졌습니다)',
     denied: '권한이 없어 파일을 읽지 못했습니다.',
+    // 위 안내 위의 띠: 외부 편집기·Finder 단추 앞 글
+    openOutside: '다른 앱에서 확인하세요.',
     failed: (message: string) => `파일을 읽지 못했습니다: ${message}`,
     retry: '다시 시도',
     bom: 'UTF-8 BOM',
@@ -622,9 +753,6 @@ export const ko = {
     diffError: (repo: string, message: string) => `${repo}: ${message}`,
     // 폴더 탭에 보이는 힌트 대화상자 (W15): 제목 앞에 어느 저장소의 것인지
     hintTitle: (repo: string, title: string) => `${repo}: ${title}`,
-    // 폴더 탭에서는 알리기만 하는 hook 거부 (재시도는 저장소 탭의 커밋 폼 동작이다)
-    hookFailedInfo:
-      '훅 출력을 확인하세요. 훅을 건너뛰고 다시 하려면 이 저장소를 저장소 탭으로 열어 하세요.',
   },
   // 작업 진행 띠 (WS-10, W15): 진행 중인 merge·rebase 등이 있는 저장소. 버튼 글자는 저장소 탭 배너(`op`)와 같다
   opBand: {
@@ -632,7 +760,7 @@ export const ko = {
     more: (n: number) => `진행 중인 저장소 ${n}개 — 스크롤해서 모두 볼 수 있습니다.`,
     resolve: '충돌 해결',
     resolveOne: '충돌 파일을 병합 편집기 탭으로 엽니다',
-    resolveMany: (n: number) => `충돌 파일 ${n}개를 커밋 도구 창에 표시됩니다.`,
+    resolveMany: (n: number) => `충돌 파일 ${n}개를 커밋 도구 창에 표시합니다.`,
     conflicts: (n: number) => `충돌 ${n}`,
     continueBlocked: (n: number) => `충돌 파일 ${n}개를 먼저 해결해야 계속 진행할 수 있습니다.`,
     running: '실행 중…',
@@ -735,6 +863,17 @@ export const ko = {
     skippedSummary: (n: number) => `커밋되지 않을 저장소 ${n}개`,
     // 변경 목록 | 커밋 영역 분할선 (W19)
     resize: '변경 목록·커밋 영역 높이 조절',
+    // 저장소별 메시지: 대상 줄을 펼쳐 저장소마다 공통 메시지를 덮어쓰고, 한 저장소만 커밋한다
+    ownMessages: (n: number) => `저장소별 메시지 ${n}개`,
+    ownMessageLine: (repo: string, line: string) => `${repo}: ${line}`,
+    repoMessagesLabel: '저장소별 커밋 메시지',
+    repoMessagesTip: '눌러서 저장소마다 메시지를 따로 쓰거나 한 저장소만 커밋합니다.',
+    repoMessagesHint: '비워 두면 공통 메시지로 커밋합니다.',
+    repoMessage: (repo: string) => `${repo} 커밋 메시지`,
+    commonMessage: (line: string) => `공통 메시지: ${line}`,
+    commonMessageEmpty: '공통 메시지가 비어 있습니다.',
+    commitOnly: '이 저장소만 커밋',
+    commitOnlyAndPush: '이 저장소만 커밋 후 푸시…',
     // 저장소 탭 Commit 도구 창의 탭 (W23): 변경 목록 | Stash
     tabs: {
       changes: '변경',
@@ -900,7 +1039,7 @@ export const ko = {
     containing: (n: number) => `브랜치 ${n}개에 포함:`,
     containingList: '이 커밋을 포함하는 브랜치',
     containingLoading: '포함 브랜치 불러오는 중…',
-    containingNone: '어느 브랜치 에도 없음',
+    containingNone: '어느 브랜치에도 없음',
     containingMore: (n: number) => `외 ${n}개`,
     containingLess: '접기',
     containingTimedOut: '시간이 오래 걸려 포함 브랜치를 읽지 못했습니다.',
@@ -965,6 +1104,8 @@ export const ko = {
     resetHard: 'hard (변경 내용 모두 버리기)',
     rebaseOnto: '현재 브랜치를 여기로 리베이스',
     mergeInto: (name: string) => `${name} → 현재 브랜치 병합`,
+    // 병합 하위 메뉴의 첫 항목 (기본 병합: fast-forward 할 수 있으면 앞으로, 아니면 병합 커밋)
+    mergeIntoDefault: '병합',
     mergeIntoNoFf: '병합 (--no-ff)',
     mergeIntoFfOnly: '병합 (--ff-only)',
     mergeIntoSquash: '병합 (--squash)',
@@ -1002,13 +1143,14 @@ export const ko = {
       `${items} — 상위 저장소만 푸시하면 다른 사람이 그 커밋을 받을 수 없습니다.`,
     submoduleUnpushedFirst: '서브모듈 먼저 푸시',
     submoduleUnpushedAnyway: '상위 저장소만 푸시',
+    submoduleUnpushedCancelled: '서브모듈 푸시를 취소해 상위 저장소는 푸시하지 않았습니다.',
     reapplyTitle: '보관된 해결이 있습니다.',
     reapplyMessage: (n: number) =>
       `같은 작업에서 전에 해결했던 파일 ${n}개의 결과를 다시 적용할까요?`,
     reapplyYes: '재적용',
     syntaxTitle: '구문 오류가 새로 생겼습니다.',
     syntaxMessage: (n: number, line: number | null, lang: string) =>
-      `${lang} 파싱에서 오류 ${n}개가 났습니다.${line ? ` (첫 오류 ${line}줄)` : ''}. 양쪽 원본에는 없던 오류입니다. 그래도 저장할까요?`,
+      `${lang} 파싱에서 오류 ${n}개가 났습니다${line ? ` (첫 오류 ${line}줄)` : ''}. 양쪽 원본에는 없던 오류입니다. 그래도 저장할까요?`,
     syntaxSaveAnyway: '그래도 저장',
     tagSign: '서명 태그 (-s)',
     createBranch: '새 브랜치',
@@ -1029,19 +1171,19 @@ export const ko = {
       '병합되지 않은 커밋이 있습니다. 삭제하면 그래프에서 사라지고 reflog로만 되찾을 수 있습니다.',
     deleteRemoteBranch: (remote: string, name: string) =>
       `원격 ${remote}에서 브랜치 '${name}'을(를) 지울까요?`,
-    deleteRemoteBranchMessage: '다른 사람이 쓰는 브랜치 일 수 있습니다.',
+    deleteRemoteBranchMessage: '다른 사람이 쓰는 브랜치일 수 있습니다.',
     createTag: '새 태그',
     tagName: '태그 이름',
     tagMessage: '메시지 (입력하면 주석 태그)',
     deleteTag: (name: string) => `'${name}' 태그를 삭제할까요?`,
     setUpstream: '업스트림 지정',
     upstreamName: '업스트림 (예: origin/main)',
-    resetHard: (target: string) => `${target}으로 hard reset 할까요?`,
+    resetHard: (target: string) => `${target}으로 hard reset할까요?`,
     resetHardMessage:
-      '스테이징와 작업 트리의 변경이 모두 사라집니다. 커밋되지 않은 변경은 복구할 수 없습니다.',
+      '스테이징 영역과 작업 트리의 변경이 모두 사라집니다. 커밋되지 않은 변경은 복구할 수 없습니다.',
     dirtyCheckout: '로컬 변경이 있습니다.',
     dirtyCheckoutMessage:
-      '전환하면 덮어써질 파일이 있습니다. 변경을 스태시 해 두고 전환한 뒤 다시 적용하거나, 전환을 취소하세요.',
+      '전환하면 덮어써질 파일이 있습니다. 변경을 스태시해 두고 전환한 뒤 다시 적용하거나, 전환을 취소하세요.',
     stashAndSwitch: '스태시 후 전환',
     remoteBranchTaken: (local: string) => `로컬 브랜치 ${local}가 이미 있습니다.`,
     remoteBranchTakenMessage: (local: string, upstream: string | null, target: string) =>
@@ -1052,7 +1194,7 @@ export const ko = {
     checkoutDetached: '커밋으로 전환 (분리된 HEAD)',
     branchElsewhere: '다른 워크트리에서 사용 중',
     branchElsewhereMessage: (path: string) =>
-      `이 브랜치는 ${path}에 사용 중이어서 있어 여기서는 전환할 수 없습니다. "워크트리 열기"로 그 탭을 여세요.`,
+      `이 브랜치는 ${path}에서 사용 중이라 여기서는 전환할 수 없습니다. "워크트리 열기"로 그 탭을 여세요.`,
     openWorktree: '워크트리 열기',
     nonFastForward: '원격에 새 커밋이 있습니다.',
     nonFastForwardMessage:
@@ -1078,22 +1220,23 @@ export const ko = {
     closeWithDraftsMessage: '저장하지 않은 충돌 편집이 있습니다. 탭을 닫으면 사라집니다.',
     closeWithDraftsConfirm: '닫기',
     restoreOtherBranchMessage:
-      '이 브랜치를 백업 시점으로 옮깁니다. 사용 중이어서 있지 않아 작업 트리는 바뀌지 않습니다.',
+      '이 브랜치를 백업 시점으로 옮깁니다. 현재 브랜치가 아니어서 작업 트리는 바뀌지 않습니다.',
     indexLock: 'index.lock이 남아 있습니다.',
     indexLockMessage:
       '다른 Git 프로세스가 비정상 종료하여 잠금 파일이 남았을 수 있습니다. 실행 중인 Git 명령이 없는지 확인한 뒤 삭제하세요.',
     removeLock: '잠금 파일 삭제',
     detachedHead: 'HEAD가 브랜치에서 분리되어 있습니다.',
     detachedHeadMessage:
-      '지금 커밋은 어느 브랜치 에도 속하지 않습니다. 여기서 브랜치를 만들면 작업이 보존됩니다.',
+      '지금 커밋은 어느 브랜치에도 속하지 않습니다. 여기서 브랜치를 만들면 작업이 보존됩니다.',
     noUpstream: '업스트림이 없습니다.',
     noUpstreamMessage:
       '현재 브랜치에 연결된 원격 브랜치가 없습니다. 같은 이름으로 푸시하고 업스트림을 지정할까요?',
     pushSetUpstream: '업스트림 지정 후 푸시',
     hookFailed: '훅이 거부했습니다.',
+    // 커밋이 아닌 작업(merge·rebase·continue 등)이 hook 에 거부됐다: 알리기만 한다. 커밋 폼의 커밋은 hook 거부를 폼 아래
+    // 오류 줄로 보이고, 건너뛰기는 그 폼의 체크 칸이다
     hookFailedMessage:
-      '훅 출력을 확인하세요. 문제를 알고 있다면 훅을 건너뛰고 다시 시도할 수 있습니다.',
-    retryNoVerify: '훅 건너뛰고 다시 커밋',
+      '훅 출력은 Git 콘솔에서 확인하세요. 훅 건너뛰기(--no-verify)는 커밋 폼으로 커밋할 때만 쓸 수 있습니다.',
     nothingToCommit: '커밋할 변경이 없습니다.',
     nothingToCommitMessage: '먼저 파일을 스테이징하세요.',
     delete: '삭제',
@@ -1449,6 +1592,7 @@ export const ko = {
     title: '시작',
     open: '저장소 열기…',
     clone: '복제…',
+    cloneMany: '여러 저장소 복제…',
     init: '새 저장소…',
     scan: '폴더 스캔…',
     scanTitle: '저장소를 찾을 폴더 선택',
@@ -1474,7 +1618,36 @@ export const ko = {
     recurse: '서브모듈도 함께 (--recurse-submodules)',
     button: '복제',
     running: (label: string) => `${label} 중…`,
-    pickParent: '복제 할 상위 폴더 선택',
+    pickParent: '복제할 상위 폴더 선택',
+    // 여러 저장소 한꺼번에 복제: URL 여러 줄 → 상위 폴더 → 대상 체크 목록
+    many: {
+      title: '여러 저장소 복제',
+      note: '한 줄에 저장소 하나를 적습니다. URL 뒤에 공백과 폴더 이름을 적으면 그 이름으로 만들고, # 뒤는 무시합니다.',
+      urls: '저장소 URL (한 줄에 하나)',
+      placeholder:
+        'https://github.com/team/app.git\ngit@github.com:team/api.git api-server\n# 주석',
+      count: (n: number, duplicates: number) =>
+        duplicates > 0
+          ? `저장소 ${formatNumber(n)}개 (겹친 줄 ${formatNumber(duplicates)}개는 뺍니다)`
+          : `저장소 ${formatNumber(n)}개`,
+      errors: {
+        badUrl: (line: number) => `${formatNumber(line)}번째 줄: URL 은 - 로 시작할 수 없습니다.`,
+        badName: (line: number) => `${formatNumber(line)}번째 줄: 쓸 수 없는 폴더 이름입니다.`,
+        tooManyParts: (line: number) =>
+          `${formatNumber(line)}번째 줄: URL 과 폴더 이름만 적을 수 있습니다.`,
+      },
+      nameClash: (names: string) =>
+        `같은 폴더 이름이 겹칩니다: ${names}. URL 뒤에 다른 폴더 이름을 적으세요.`,
+      noTargets: '복제할 URL 이 없습니다.',
+      next: '다음',
+      pickParent: '저장소들을 복제할 상위 폴더 선택',
+      confirmTitle: (n: number) => `저장소 ${formatNumber(n)}개 복제`,
+      confirmNote:
+        '이미 있는 폴더는 건너뜁니다. 한 번에 2개씩 복제하고, 끝나면 이 폴더를 폴더 탭으로 엽니다.',
+      group: (n: number) => `대상 (${formatNumber(n)}개)`,
+      target: (name: string, url: string) => `${name} ← ${url}`,
+      noneChecked: '복제할 저장소를 하나 이상 체크하세요.',
+    },
   },
   init: {
     title: '새 저장소',
@@ -1537,10 +1710,14 @@ export const ko = {
     repos: (n: number) => `저장소 ${n}개`,
     refresh: '새로고침',
     rescan: '다시 스캔',
+    // 대시보드 필터 (하나만 고른다): 보낼 것 있음 = 앞섬 1 이상, 업스트림 없음 = branch 는 있는데 업스트림이 없음
     filter: {
       all: '전체',
       changed: '변경 있음',
       behind: '뒤처짐',
+      ahead: '보낼 것 있음',
+      noUpstream: '업스트림 없음',
+      stashed: '스태시 있음',
       inProgress: '진행 중',
     },
     columns: {
@@ -1549,6 +1726,8 @@ export const ko = {
       branch: '브랜치',
       changed: '변경',
       sync: '앞섬 / 뒤처짐',
+      stash: '스태시',
+      stashTip: '스태시 항목 수. 워크트리는 주 저장소와 스태시 목록을 함께 써서 같은 수가 보입니다',
       op: '진행 중',
       lastFetch: '마지막 원격 정보 확인',
     },
@@ -1647,10 +1826,22 @@ export const ko = {
       pushCommits: (name: string, n: number) => `${name}: 커밋 ${n}개`,
       pushSkip: (name: string, why: string) => `${name}: 건너뜀 (${why})`,
       pushUnknown: (name: string) => `${name}: 상태를 아직 모름 (실행할 때 확인)`,
+      // 업스트림이 없는 브랜치 (사용자 결정 "origin 자동 + 예외만 선택"): origin 이 있으면 그것을 새 업스트림으로 보이고,
+      // origin 이 없으면 바로 아래 고르는 칸에서 원격을 고른다 (원격이 하나뿐이면 미리 골라 둔다)
+      pushPublish: (name: string, target: string) => `${name}: 업스트림 새로 지정 → ${target}`,
+      pushChoose: (name: string, branch: string) => `${name}: 업스트림 새로 지정 (${branch})`,
+      pushRemote: (name: string) => `${name}: 보낼 원격`,
+      pushRemoteNone: '고르지 않음 (건너뜀)',
+      pushRemoteNote:
+        'origin이 없어 고른 원격에 같은 이름의 브랜치를 만듭니다. 고르지 않으면 건너뜁니다.',
+      pushPublishNote:
+        '업스트림이 없는 브랜치는 원격에 같은 이름으로 만들고 업스트림으로 지정합니다.',
       // 꺼진 칸의 사유 (요약을 아직 못 읽었거나 읽지 못한 저장소)
       unknownState: '상태를 아직 모름',
       noUpstream: '업스트림 없음',
       nothingToPush: '보낼 커밋 없음',
+      detached: '분리된 HEAD',
+      noRemotes: '원격 없음',
       excluded: '제외됨 (폴더 설정)',
       // 저장소 체크 목록의 묶음 제목과, 하나도 체크하지 않았을 때 확인을 끄는 사유 (W19 — push·checkout·새 branch)
       repoGroup: (n: number) => `대상 저장소 ${n}개`,
@@ -1660,6 +1851,17 @@ export const ko = {
         `${mode} · 커밋하지 않은 변경·진행 중인 작업·업스트림이 없는 저장소는 건너뜁니다`,
       running: (label: string, phase: string) => (phase ? `${label}: ${phase}` : label),
       result: (s: number, k: number, f: number) => `성공 ${s} · 건너뜀 ${k} · 실패 ${f}`,
+      // push 가 업스트림이 없던 브랜치를 게시한 결과: 성공 중 업스트림을 새로 지정한 수를 따로 보인다
+      resultPublished: (s: number, published: number, k: number, f: number) =>
+        `성공 ${s} (업스트림 새로 지정 ${published}) · 건너뜀 ${k} · 실패 ${f}`,
+      upstreamSet: (target: string) => `업스트림 새로 지정: ${target}`,
+      // 일괄 작업 취소: 시작하지 않은 저장소는 취소됨, 실행 중인 fetch·push 는 멈춘다. 취소됨은 건너뜀·실패와 따로 센다
+      cancel: '일괄 작업 취소',
+      cancelTip:
+        '일괄 작업 취소 — 아직 시작하지 않은 저장소는 건너뛰고, 실행 중인 fetch·push는 멈춥니다. 그 밖의 실행 중 작업은 끝까지 둡니다',
+      cancelling: '취소하는 중…',
+      cancelledState: '취소됨',
+      withCancelled: (summary: string, n: number) => `${summary} · 취소됨 ${formatNumber(n)}`,
       // pull·branch 업데이트처럼 branch 를 옮기는 작업의 요약 (BR-09): 성공을 갱신·이미 최신으로 나눈다. `done` 은 옮긴 것을
       // 알 수 없는 성공 (0 이면 빠진다)
       resultMoved: (updated: number, upToDate: number, done: number, k: number, f: number) =>
@@ -1671,9 +1873,44 @@ export const ko = {
           `실패 ${f}`,
         ].join(' · '),
       openWorktrees: '만든 워크트리 폴더를 열까요?',
+      openWorktreesRun: '폴더 열기',
+      // 편집기 초안 확인: 작업 트리 파일을 바꾸는 일괄 작업(pull·checkout·branch 업데이트·스태시 등)은 대상 저장소에
+      // 저장하지 않은(또는 저장 중인) 편집이 있으면 실행하지 않는다
+      draftsBlockedTitle: '저장하지 않은 편집이 있어 일괄 작업을 실행하지 않았습니다.',
+      draftsBlocked: (names: string) => `${names}: 편집 내용의 저장이 끝난 뒤 다시 실행하세요.`,
+      draftsNote: (names: string) =>
+        `저장하지 않은 편집이 있는 저장소: ${names}. 저장이 끝난 뒤 실행하세요.`,
       ok: '완료',
       skipped: '건너뜀',
       failed: '실패',
+      // 일괄 스태시 (셋째 묶음 G): 저장은 변경이 있는 저장소마다 한 묶음으로, 꺼내기는 그 묶음의 스태시를 저장소마다 찾아
+      // 적용한 뒤 지운다. 충돌이 나면 그 저장소의 스태시는 남긴다
+      stashSave: '스태시 저장…',
+      stashPop: '스태시 꺼내기…',
+      stashSaveTitle: '저장소마다 변경을 스태시로 저장',
+      stashSaveMessage: (scope: string) =>
+        `${scope}. 커밋하지 않은 변경이 있는 저장소마다 한 묶음으로 저장합니다. 변경이 없거나 진행 중인 작업이 있는 저장소는 건너뜁니다.`,
+      stashUntrackedNote: '일괄 Pull·브랜치 전환은 미추적 파일 때문에 건너뛰지 않습니다',
+      stashSaveRun: '저장',
+      stashPickTitle: '꺼낼 일괄 스태시 고르기',
+      stashPickMessage: '최근 묶음부터 보입니다. 고른 묶음의 스태시를 저장소마다 꺼냅니다.',
+      stashPickNext: '다음',
+      stashBatch: '묶음',
+      stashBatchOption: (name: string, repos: number, time: string) =>
+        `${name} — 저장소 ${formatNumber(repos)}개 · ${time}`,
+      stashBatchUnnamed: (id: string) => `메시지 없음 (${id})`,
+      stashPopTitle: (name: string) => `일괄 스태시 꺼내기: ${name}`,
+      stashPopMessage:
+        '체크한 저장소마다 이 묶음의 스태시를 적용하고 지웁니다. 충돌이 나면 그 저장소의 스태시는 지우지 않고 남깁니다.',
+      stashPopRepo: (name: string, index: number, branch: string | null) =>
+        branch === null ? `${name}: stash@{${index}}` : `${name}: stash@{${index}} (${branch})`,
+      stashPopRun: '꺼내기',
+      stashNone: '꺼낼 일괄 스태시가 없습니다.',
+      stashBatchGone: '이 묶음의 스태시가 더 이상 남아 있지 않습니다.',
+      stashListFailed: '일괄 스태시 목록을 읽지 못했습니다.',
+      // 커밋하지 않은 변경으로 건너뛴 저장소가 있을 때 결과 알림 끝에 붙는 안내 (pull·브랜치 전환·업데이트)
+      dirtyHint: (n: number) =>
+        `커밋하지 않은 변경으로 건너뛴 저장소 ${formatNumber(n)}개 — '스태시 저장…' 후 다시 실행하고, 끝나면 '스태시 꺼내기…'로 되돌리세요`,
     },
     settings: {
       // 폴더 설정 대화상자 (W12: 개요의 설정 보기를 옮겼다)
@@ -1705,6 +1942,13 @@ export const ko = {
       repeat: (n: number) => `×${formatNumber(n)}`,
       repeatTip: (n: number) => `같은 결과가 ${formatNumber(n)}번 이어졌습니다.`,
       notRun: '실행하지 못함',
+      // 실패하거나 취소된 저장소만 다시 실행 (작업 기록 줄의 단추)
+      retryFailed: (n: number) => `실패한 저장소만 다시 실행 (${formatNumber(n)}개)`,
+      retryDirectTip: '실패하거나 취소된 저장소에서 같은 작업을 바로 다시 실행합니다',
+      retryConfirmTip: '실패하거나 취소된 저장소로 좁혀 같은 확인 창을 다시 엽니다',
+      // 일괄 스태시 저장 줄의 단추: 그 묶음을 꺼내는 확인 창을 연다
+      popBatch: '이 묶음 꺼내기',
+      popBatchTip: '이 일괄 저장으로 만든 스태시를 저장소마다 꺼냅니다 (확인 창이 열립니다)',
       // 실행하지 못한 일괄 작업의 라벨 (성공·부분 실패는 코어가 준 라벨을 쓴다)
       ops: {
         fetch: '일괄 원격 정보 가져오기',
@@ -1721,8 +1965,56 @@ export const ko = {
         deleteRemoteBranch: '일괄 원격 브랜치 삭제',
         deleteBranch: '로컬 브랜치 일괄 삭제',
         deleteLocalBranches: '일괄 로컬 브랜치 강제 삭제',
+        stashPush: '일괄 스태시 저장',
+        stashPop: '일괄 스태시 꺼내기',
         commit: '일괄 커밋',
+        runCommand: '일괄 명령 실행',
       },
+    },
+    // 선택한 저장소들에 git 명령 실행 (MR-14): 개요 일괄 줄의 단추, 입력 창, 위험 확인, 작업 기록의 저장소별 출력
+    command: {
+      button: '명령 실행…',
+      title: 'git 명령 실행',
+      note: '저장소마다 그 폴더에서 git 을 실행합니다. 셸을 거치지 않으므로 파이프·리디렉션·여러 명령은 쓸 수 없습니다.',
+      label: 'git 명령',
+      placeholder: 'git status -sb',
+      run: '실행',
+      errors: {
+        empty: 'git 다음에 실행할 명령을 입력하세요.',
+        unclosedQuote: '따옴표가 닫히지 않았습니다.',
+        shellSyntax: '파이프·리디렉션·여러 명령·변수는 쓸 수 없습니다. git 명령 하나만 실행합니다.',
+      },
+      // 입력 창 아래의 경고 한 줄과, 실행 전에 한 번 더 묻는 확인 창
+      dangerNotice: (reasons: string) => `주의: ${reasons}. 실행하기 전에 한 번 더 확인합니다.`,
+      dangerTitle: '되돌리기 어려울 수 있는 명령',
+      dangerMessage: (command: string, targets: string) =>
+        `${command}\n${targets}\n그래도 실행할까요?`,
+      dangerRun: '그래도 실행',
+      danger: {
+        discardChanges: '커밋하지 않은 변경이나 추적하지 않는 파일, 스태시를 버릴 수 있습니다',
+        forcePush: '원격 브랜치를 강제로 덮어쓸 수 있습니다',
+        remoteDelete: '원격의 브랜치·태그를 지울 수 있습니다',
+        deleteRefs: '브랜치·태그·설정·객체를 지울 수 있습니다',
+        rewriteHistory: '커밋 이력을 다시 씁니다',
+        runsProgram: '외부 프로그램이나 셸 명령을 실행합니다',
+        otherPath: '다른 경로를 대상으로 합니다 (모든 저장소에서 같은 곳에 실행됩니다)',
+        unknownCommand: '알 수 없는 명령이나 별칭이라 무엇을 하는지 확인할 수 없습니다',
+      },
+      // 작업 기록의 저장소별 결과
+      exit: (code: number) => `종료 코드 ${formatNumber(code)}`,
+      noExit: '종료 코드 없음 (신호 또는 취소)',
+      elapsed: (ms: number) =>
+        ms < 1000 ? `${formatNumber(ms)}ms` : `${(ms / 1000).toFixed(1)}초`,
+      stdout: '표준 출력',
+      stderr: '표준 오류',
+      noOutput: '출력 없음',
+      stdoutTruncated: '출력이 너무 길어 앞 1 MiB 까지만 남겼습니다.',
+      stderrTruncated: '앞부분이 잘렸을 수 있습니다 (끝 64 KiB 까지 남깁니다).',
+      showOutput: '출력 보기',
+      hideOutput: '출력 숨기기',
+      copy: '출력 복사',
+      copyAll: '모든 저장소 출력 복사',
+      outputsDropped: '오래된 기록이라 출력은 지웠습니다.',
     },
   },
   submodule: {
@@ -1842,6 +2134,11 @@ export const ko = {
     unstage: '스테이징 해제',
     discard: '변경 폐기',
     pin: '미리보기 탭 고정',
+    // 편집기 분할 (R3): 지금 편집기 그룹의 탭에 대고 실행한다
+    splitRight: '편집기: 오른쪽으로 분할',
+    moveToOppositeGroup: '편집기: 다른 쪽 그룹으로 옮기기',
+    unsplit: '편집기: 분할 해제',
+    focusOtherGroup: '편집기: 다른 쪽 그룹으로 이동',
     renameBranch: '브랜치 이름 변경',
     checkoutBranch: '브랜치 전환',
     openRepo: '저장소 열기…',
@@ -1864,6 +2161,10 @@ export const ko = {
     quickSwitch: '브랜치 전환…',
     createBranch: '브랜치 만들기…',
     stashSave: '스태시 저장',
+    // 폴더 탭: 개요 일괄 줄의 "명령 실행…" (고른 저장소, 없으면 전부)
+    runFolderCommand: '저장소에 git 명령 실행…',
+    // 여러 저장소 한꺼번에 복제 (폴더 탭에서 열면 상위 폴더 선택 창이 그 폴더에서 열린다)
+    cloneMany: '여러 저장소 복제…',
     // ⌘J = Git 도구 창의 콘솔 탭 (W19 폴더·W21 저장소 — 옛 아래 명령 로그 칸이 콘솔 탭이 됐다, 동작 id `view.log` 유지)
     toggleLog: 'Git 콘솔 열기/닫기',
     palette: '커맨드 팔레트',
@@ -1886,6 +2187,8 @@ export const ko = {
     // 영역 단축키 (W27 정리 — 사이드바는 W25 에서 비었고, 그래프·상세는 W21 부터 두 탭 모두 Git 도구 창 로그 탭에 있다).
     // ⌘1 은 ⌘0(Commit)과 같이 왼쪽 도구 창을 열고 포커스한다
     focusSidebar: '프로젝트 도구 창',
+    // 프로젝트 도구 창을 열고 트리 위 이름 필터 칸으로 간다 (R1)
+    projectFilter: '프로젝트 트리 이름 필터',
     focusEditor: '포커스: 편집기',
     focusGraph: '포커스: Git 로그',
     focusDetail: '포커스: Git 로그 상세',
@@ -1952,7 +2255,7 @@ export const ko = {
     backups: '백업',
     backupItem: (branch: string, when: string) => `${branch} · ${when}`,
     restoreAsBranch: '새 브랜치로 복원…',
-    restoreBranch: (b: string) => `${b} 를 이 시점으로 되돌리기`,
+    restoreBranch: (b: string) => `${b} 브랜치를 이 시점으로 되돌리기`,
     deleteBackup: '백업 삭제',
     restoreTitle: '백업 복원',
     restoreName: '새 브랜치 이름',
@@ -1981,6 +2284,23 @@ export const ko = {
     fileBackupRestoreTitle: (path: string) => `${path}을(를) 복구할까요?`,
     fileBackupRestoreMessage: '작업 트리의 현재 파일을 이 사본으로 덮어씁니다.',
     fileBackupRestored: (path: string) => `복구했습니다: ${path}`,
+    // 폐기 백업 정리 (#26): 보관 기간 자동 정리 안내, 하나 지우기, 오래된 것 한꺼번에 지우기 (모두 되돌릴 수 없다)
+    fileBackupsKeep: (days: number) =>
+      `${formatNumber(days)}일이 지난 사본은 저장소를 열 때 하루 한 번 저절로 지웁니다.`,
+    fileBackupDelete: '삭제…',
+    fileBackupDeleteTitle: (path: string) => `${path}의 폐기 백업을 지울까요?`,
+    fileBackupDeleteMessage: '지운 사본은 되돌릴 수 없습니다.',
+    fileBackupDeleteConfirm: '삭제',
+    fileBackupsPrune: '오래된 백업 삭제…',
+    fileBackupsPruneTitle: '오래된 폐기 백업 삭제',
+    fileBackupsPruneMessage:
+      '정한 날 수보다 오래된 이 저장소의 사본을 모두 지웁니다. 지운 사본은 되돌릴 수 없습니다.',
+    fileBackupsPruneDays: '며칠보다 오래된 사본 (0 = 전부)',
+    fileBackupsPruneCount: (n: number, more: boolean) =>
+      more ? `지울 사본 ${formatNumber(n)}개 이상` : `지울 사본 ${formatNumber(n)}개`,
+    fileBackupsPruneNone: '지울 사본이 없습니다.',
+    fileBackupsPruneInvalid: '0 이상의 정수를 입력하세요.',
+    fileBackupsDeleted: (n: number) => `폐기 백업 ${formatNumber(n)}개를 지웠습니다.`,
     discardBackedUp: '폐기 백업에서 복구할 수 있습니다.',
   },
   rebase: {
@@ -2012,7 +2332,7 @@ export const ko = {
     /** 범위를 하나로 합치기 (MRG-07): 대화상자와 실행 전 검사의 사유 */
     squashRangeTitle: (n: number) => `커밋 ${n}개를 하나로 합치기`,
     squashRangeMessage: (older: string, newer: string) =>
-      `${older}부터 ${newer} 까지를 아래 메시지의 커밋 하나로 합칩니다. 작성자는 가장 오래된 커밋의 것을 남기고, 그 뒤 커밋들은 다시 쓰입니다.`,
+      `${older}부터 ${newer}까지를 아래 메시지의 커밋 하나로 합칩니다. 작성자는 가장 오래된 커밋의 것을 남기고, 그 뒤 커밋들은 다시 쓰입니다.`,
     squashRangeRun: '합치기',
     squashRangeMerges:
       '범위나 그 위(HEAD까지)에 병합 커밋이 있어 하나로 합칠 수 없습니다. 이력을 펼치지 않으려면 병합 커밋 위의 커밋만 선택하세요.',
@@ -2114,6 +2434,8 @@ export const ko = {
     // 폴더 탭에서 연 대화상자의 대상 저장소 (W13)
     inRepo: (repo: string) => `저장소 ${repo}`,
     renamedFrom: (p: string) => `(당시 경로 ${p})`,
+    // 파일 이력 줄 끝 단추: 그 커밋 시점의 줄별 수정 이력(blame)을 연다
+    blame: '줄별 수정 이력',
     limit: (n: number) => `${n}개`,
     compareTitle: '두 시점 비교',
     compareA: '기준 (A)',
@@ -2209,7 +2531,7 @@ export const ko = {
     heading: (theirs: string) => `${theirs} → 현재 브랜치`,
     wip: '커밋하지 않은 변경 포함',
     wipIncluded: '작업 트리 변경 포함',
-    clean: '충돌 없음 — 바로 병합 할 수 있습니다.',
+    clean: '충돌 없음 — 바로 병합할 수 있습니다.',
     cleanHint: '충돌이 없습니다.',
     conflicts: (n: number) => `충돌 파일 ${n}개`,
     simulate: '옵션 비교',
@@ -2232,11 +2554,11 @@ export const ko = {
     approximate: '앞 단계 충돌 뒤라 근사치',
     rebaseRun: '리베이스 실행',
     radar: '충돌 레이더',
-    radarConflict: (n: number) => `지금 병합 하면 충돌 ${n}개`,
-    radarClean: '지금 병합 해도 충돌 없음',
+    radarConflict: (n: number) => `지금 병합하면 충돌 ${n}개`,
+    radarClean: '지금 병합해도 충돌 없음',
     isolatedTitle: '격리 병합',
     isolatedConfirm: (name: string) =>
-      `${name}을(를) 임시 워크트리에서 병합 합니다. 작업 트리는 그대로 두고, 결과를 확인한 뒤 메인에 반영하거나 버릴 수 있습니다.`,
+      `${name}을(를) 임시 워크트리에서 병합합니다. 작업 트리는 그대로 두고, 결과를 확인한 뒤 메인에 반영하거나 버릴 수 있습니다.`,
     isolatedStart: '격리 병합 시작',
     isolatedBanner: (branch: string) => `격리 병합 중 (${branch})`,
     isolatedApply: '메인에 반영',
@@ -2245,8 +2567,8 @@ export const ko = {
     isolatedDiscardConfirm: '격리 워크트리와 임시 브랜치를 삭제합니다. 해결한 내용은 사라집니다.',
     isolatedApplied: '격리 병합 결과를 메인 브랜치에 반영했습니다.',
     isolatedDiscarded: '격리 병합을 버렸습니다.',
-    isolatedConflicts: '충돌이 있습니다. 새 탭에서 해결하고 커밋 한 뒤 반영하세요.',
-    isolatedClean: '충돌 없이 병합 됐습니다. 새 탭에서 확인한 뒤 반영하세요.',
+    isolatedConflicts: '충돌이 있습니다. 새 탭에서 해결하고 커밋한 뒤 반영하세요.',
+    isolatedClean: '충돌 없이 병합됐습니다. 새 탭에서 확인한 뒤 반영하세요.',
   },
   notify: {
     // 토스트 알림 영역의 이름 (보조 기술, W19 ③)
@@ -2407,6 +2729,9 @@ export const ko = {
     fork: '포크',
     noAccountHint: '먼저 호스팅 계정을 연결하세요 (팔레트: 호스팅 계정…)',
     loading: '불러오는 중…',
+    // 여러 저장소를 골라 한꺼번에 복제 (체크한 저장소의 URL 로 여러 저장소 복제 창을 연다)
+    pick: (name: string) => `${name} 고르기`,
+    cloneSelected: (n: number) => `고른 저장소 ${n}개 복제…`,
   },
   pr: {
     title: (kind: string) => (kind === 'gitlab' ? '병합 요청' : '풀 리퀘스트'),
@@ -2475,12 +2800,68 @@ export const ko = {
     nestedRepos: (paths: readonly string[]) => `하위 저장소가 있습니다: ${paths.join(', ')}`,
     localBranchTracksOther: (local: string) => `로컬 ${local}이(가) 다른 곳을 추적합니다.`,
     pushUpstreamMismatch: (local: string, remote: string, upstream: string) =>
-      `${local}의 업스트림은 ${remote}/${upstream} 입니다.`,
+      `${local}의 업스트림은 ${remote}/${upstream}입니다.`,
     reloadFailed: (message: string) => `그래프 갱신 실패: ${message}`,
     graphUnavailable:
       '폴더 화면이 연 저장소 세션은 그래프를 읽지 않습니다. 저장소 탭으로 열어 보세요.',
     lightSessionLimit: (limit: number) =>
       `폴더 하나에서 동시에 열 수 있는 저장소 세션은 ${limit}개입니다.`,
     unknown: '알 수 없는 오류',
+  },
+  // 가상 그룹 (MR-13): 흩어진 저장소를 묶어 폴더 탭처럼 여는 탭. 홈의 그룹 묶음·그룹 대화상자·팔레트·대시보드 누락 줄
+  group: {
+    kind: '그룹',
+    section: '그룹',
+    empty: '그룹이 없습니다. 여러 곳의 저장소를 한 탭에서 다루려면 새 그룹을 만드세요.',
+    create: '새 그룹…',
+    fromFolder: '이 폴더로 그룹 만들기…',
+    edit: '그룹 편집…',
+    openNamed: (name: string) => `그룹 열기: ${name}`,
+    editNamed: (name: string) => `그룹 편집: ${name}`,
+    remove: '그룹 지우기',
+    removeConfirm: (name: string) => `그룹 "${name}"을(를) 지울까요? 저장소는 그대로 남습니다.`,
+    memberCount: (n: number) => `저장소 ${n}개`,
+    tabTitle: (name: string) => `그룹: ${name}`,
+    rootDetail: (n: number) => `그룹 · 저장소 ${n}개`,
+    createTitle: '새 그룹',
+    editTitle: (name: string) => `그룹 편집: ${name}`,
+    name: '이름',
+    members: '저장소',
+    alias: '별칭',
+    path: '위치',
+    addRepo: '저장소 추가…',
+    addFromFolder: '폴더에서 추가…',
+    relocate: '위치 다시 지정…',
+    exclude: '빼기',
+    save: '저장',
+    createButton: '만들기',
+    cancel: '취소',
+    pickRepo: '그룹에 넣을 저장소 선택',
+    pickFolder: '저장소를 찾을 폴더 선택',
+    pickRelocate: (alias: string) => `${alias}의 새 위치 선택`,
+    noMembers: '저장소를 하나 이상 넣으세요.',
+    nameRequired: '이름을 입력하세요.',
+    skipped: (n: number) => `${n}개는 넣지 못했습니다.`,
+    issue: {
+      missing: '경로가 없습니다',
+      notRepo: '저장소가 아닙니다',
+      duplicate: '이미 그룹에 있습니다',
+      nested: '다른 저장소 안에 있거나 다른 저장소를 품습니다',
+    },
+    state: {
+      missing: '찾을 수 없음',
+      notRepo: '저장소 아님',
+    },
+    openNote: '열린 그룹은 탭을 연 채로 바뀝니다. 뺀 저장소의 파일 탭은 닫힙니다.',
+    missingTitle: '찾을 수 없는 저장소',
+    missingHint:
+      '그룹에는 남아 있지만 지금 그 자리에 저장소가 없습니다. 위치를 다시 지정하거나 빼세요.',
+    notRepoHint: '저장소가 아니라 펼칠 수 없습니다. 그룹 편집에서 위치를 다시 지정하거나 빼세요.',
+    updateFailed: '그룹을 바꾸지 못했습니다',
+    relocateNotRepo: '고른 폴더는 저장소의 맨 위가 아닙니다.',
+    topReadOnly: '그룹 맨 위에는 파일을 만들 수 없습니다. 저장소 행 안에서 만드세요.',
+    aliasInvalid: (alias: string) =>
+      `별칭으로 쓸 수 없는 이름입니다: "${alias}" (비었거나 / \\ 포함, ., .., .git, 255바이트 초과)`,
+    aliasDuplicate: (alias: string) => `별칭이 겹칩니다 (대소문자 무시): ${alias}`,
   },
 } as const;

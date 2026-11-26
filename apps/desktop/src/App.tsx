@@ -1,5 +1,5 @@
 import { RepositoryPaletteProvider, repositoryRosterKey, repositorySlotCount, S } from '@mgit/ui';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import styles from './App.module.css';
 import {
@@ -7,6 +7,8 @@ import {
   type ActionApp,
   type ActionSession,
   buildActions,
+  type FolderActions,
+  groupOpenActions,
   openTagsDoc,
   showCommitChanges,
   type TagsDocRequestInput,
@@ -25,10 +27,14 @@ import {
   RenameConflictDialog,
   ReviewDialog,
 } from './features/conflict/AssistDialogs';
+import { useBatchReport } from './features/folder/batch-report';
+import { useFolderBatchFlows } from './features/folder/FolderBatchBar';
+import { GroupDialog } from './features/group/GroupDialog';
 import { BlameDialog } from './features/history/BlameDialog';
 import { ComparisonLauncher } from './features/history/ComparisonDoc';
 import { FileHistoryDialog } from './features/history/FileHistoryDialog';
 import { columnsFlow, compareFlow } from './features/history/flows';
+import { batchCloneFlow } from './features/home/batch-clone';
 import { HomeScreen } from './features/home/HomeScreen';
 import { cloneFlow, createBranchFlow, initFlow } from './features/home/repo-flows';
 import { AccountsDialog } from './features/hosting/AccountsDialog';
@@ -72,7 +78,7 @@ import {
 } from './store';
 import { type AppStore, shownDock } from './store/app-store';
 import type { SessionState } from './store/session-store';
-import { allDocs } from './store/workspace-store';
+import { focusedEditorDoc } from './store/workspace-store';
 
 /** 열기 명령은 기존 탭을 보존하는 시작 화면으로 이동한다. */
 async function showHomeAction(): Promise<void> {
@@ -106,6 +112,7 @@ function pickApp(s: AppStore): ActionApp {
     openExternal: s.openExternal,
     setSettingsOpen: s.setSettingsOpen,
     setTheme: s.setTheme,
+    setGroupDialog: s.setGroupDialog,
   };
 }
 
@@ -148,6 +155,36 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
   const dialogs = useDialogs();
   const activeId = useAppStore((s) => s.activeSessionId);
   const openQuickSwitch = useCallback(() => setQuickSwitch(true), [setQuickSwitch]);
+  // 폴더 탭의 동기화·branch 단축키·팔레트 항목: 툴바·개요 탭 일괄 줄과 같은 일괄 흐름(대상 = 고른 저장소, 없으면 전부.
+  // push 는 체크 목록, branch 만들기·전환은 입력 창)과, 외부 앱으로 열 폴더 루트
+  const folderFlows = useFolderBatchFlows(useBatchReport());
+  const folderFlowsRef = useRef(folderFlows);
+  folderFlowsRef.current = folderFlows;
+  const folderRepoCount = useFolder((f) => f.repos.length) ?? 0;
+  // 외부 앱으로 열 곳: 폴더 탭은 폴더 루트, 가상 그룹(루트 디렉터리가 없다)은 활성 저장소 — 없으면 외부 열기만 꺼지고
+  // 일괄 동작은 그대로다 (MR-13)
+  const folderDir = useFolder((f) => f.space.dir);
+  const folderGroup = useFolder((f) => f.group?.id ?? null) ?? null;
+  const folderActiveRepo = useWorkspace((w) => w.activeRepo);
+  const folderLoaded = useFolder(() => true) ?? false;
+  const folderRoot = folderDir ?? folderActiveRepo ?? null;
+  const folder = useMemo<FolderActions | undefined>(
+    () =>
+      tabKind === 'folder' && folderLoaded
+        ? {
+            enabled: !folderFlows.running && folderRepoCount > 0,
+            root: folderRoot,
+            groupId: folderGroup,
+            fetch: () => void folderFlowsRef.current.fetch(),
+            pull: () => void folderFlowsRef.current.pull(),
+            push: () => void folderFlowsRef.current.push(),
+            createBranch: () => void folderFlowsRef.current.createBranch(),
+            checkout: () => void folderFlowsRef.current.checkout(),
+            runCommand: () => void folderFlowsRef.current.runCommand(),
+          }
+        : undefined,
+    [tabKind, folderLoaded, folderRoot, folderGroup, folderFlows.running, folderRepoCount],
+  );
   const startClone = useCallback(
     () =>
       void cloneFlow(dialogs, {
@@ -156,6 +193,17 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
       }),
     [dialogs, app.pickDirectory, app.cloneRepository],
   );
+  // 여러 저장소 clone: 폴더 탭에서 열면 상위 폴더 선택 창을 그 폴더에서 연다. 가상 그룹 탭은 폴더 디렉터리가 없어(활성
+  // 저장소 안에 clone 하지 않도록) 처음 위치를 주지 않는다
+  const startCloneMany = useCallback(() => {
+    const s = useAppStore.getState();
+    void batchCloneFlow(dialogs, {
+      pickDirectory: s.pickDirectory,
+      cloneRepositories: s.cloneRepositories,
+      notice: s.notice,
+      defaultParent: tabKind === 'folder' ? folderDir : null,
+    });
+  }, [dialogs, tabKind, folderDir]);
   const startInit = useCallback(
     () =>
       void initFlow(dialogs, {
@@ -188,12 +236,9 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
    * `closeDoc` 의 몫이다
    */
   const closeEditorDoc = useCallback(() => {
+    // 분할 중이면 지금 그룹의 문서를 닫는다 (R3)
     const ws = activeId === null ? undefined : getWorkspaceStore(activeId)?.getState();
-    if (!ws || ws.activeDocId === null) {
-      return false;
-    }
-    ws.closeDoc(ws.activeDocId);
-    return true;
+    return ws?.closeFocusedDoc() ?? false;
   }, [activeId]);
   /** 저장소 탭의 태그 문서를 연다 (팔레트 "tag 관리", C3a) */
   const openTagsDocAction = useCallback(
@@ -229,11 +274,13 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
         },
         startClone,
         startInit,
+        startCloneMany,
         promptBranch,
         promptCompare,
         promptColumns,
         closeEditorDoc,
         openTagsDoc: isRepoTab ? openTagsDocAction : undefined,
+        folder,
       }),
     [
       app,
@@ -243,14 +290,24 @@ function useActions(setQuickSwitch: (open: boolean) => void): {
       openQuickSwitch,
       startClone,
       startInit,
+      startCloneMany,
       promptBranch,
       promptCompare,
       promptColumns,
       closeEditorDoc,
       openTagsDocAction,
+      folder,
     ],
   );
-  return { actions, dialogElement: dialogs.element };
+  return {
+    actions,
+    dialogElement: (
+      <>
+        {dialogs.element}
+        {folderFlows.dialogs.element}
+      </>
+    ),
+  };
 }
 
 /**
@@ -265,20 +322,21 @@ function useGlobalShortcuts(actions: Action[]): void {
     searchOpen: st.search.open,
     setSearchOpen: st.setSearchOpen,
   }));
+  // Esc 가 보는 문서는 지금 편집기 그룹의 보고 있는 문서다 (R3)
   const ws = useWorkspace((w) => ({
-    doc: allDocs(w).find((d) => d.id === w.activeDocId),
-    closeDoc: w.closeDoc,
+    doc: focusedEditorDoc(w),
+    closeFocusedDoc: w.closeFocusedDoc,
   }));
   const searchOpen = isRepoTab && s.searchOpen;
   const activeDoc = editorKeyDoc(ws?.doc);
   const { setSearchOpen } = s;
   const docId = ws?.doc?.id ?? null;
-  const closeDoc = ws?.closeDoc;
+  const closeFocusedDoc = ws?.closeFocusedDoc;
   useEffect(() => {
     /** 활성 문서를 닫는다 (세션 문서는 워크스페이스가 그 문서의 세션 슬롯을 비운다 — 범위 세션의 화면이 아니라) */
     const closeActiveDoc = () => {
       if (docId !== null) {
-        closeDoc?.(docId);
+        closeFocusedDoc?.();
       }
     };
     const onKeyDown = (e: KeyboardEvent) =>
@@ -298,7 +356,7 @@ function useGlobalShortcuts(actions: Action[]): void {
       });
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [actions, setPaletteOpen, setSearchOpen, searchOpen, activeDoc, docId, closeDoc]);
+  }, [actions, setPaletteOpen, setSearchOpen, searchOpen, activeDoc, docId, closeFocusedDoc]);
 }
 
 /**
@@ -440,6 +498,14 @@ export function App() {
   const hasSession = useHasSession();
   const isRepoTab = useIsRepoTab();
   const isFolderTab = useActiveTab()?.kind === 'folder';
+  // 팔레트에는 그룹마다의 "그룹 열기" 를 더한다 (단축키 설정 목록에는 넣지 않는다)
+  const groups = useAppStore((s) => s.groups);
+  const openGroupAt = useAppStore((s) => s.openGroupAt);
+  const isOpening = useAppStore((s) => s.isOpening);
+  const paletteActions = useMemo(
+    () => [...actions, ...groupOpenActions(groups, (id) => void openGroupAt(id), !isOpening)],
+    [actions, groups, openGroupAt, isOpening],
+  );
   return (
     <ActiveRepositoryPalette>
       <div className={styles.app}>
@@ -467,12 +533,13 @@ export function App() {
         <ProfilesDialog />
         <SshKeysDialog />
         <RemoteReposDialog />
+        <GroupDialog />
         <WorkspaceSearch />
         <Toasts />
         {quickSwitch && isRepoTab ? (
           <BranchQuickSwitch onClose={() => setQuickSwitch(false)} />
         ) : null}
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={actions} />
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
         <CredentialDialog />
         <CloseSessionDialog />
         <FolderCloseDialog />

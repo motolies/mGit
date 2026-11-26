@@ -54,6 +54,20 @@ export type ExpandedSet = Readonly<Record<string, true>>;
 /** 고른 행들의 id (PT-07) */
 export type SelectionSet = Readonly<Record<string, true>>;
 
+/**
+ * Project 트리의 보기 거르기 (R1): 이름 필터 글자와 "변경된 파일만". 트리(탭)마다 따로 들고 저장하지 않는다 — 재시작하면
+ * 거르지 않은 트리로 돌아온다
+ */
+export interface ProjectFilter {
+  /** 이름 필터 글자 (입력 그대로). 낱말이 없으면 이름으로 거르지 않는다 */
+  query: string;
+  /** 변경된 파일과 그 상위 폴더만 보인다 */
+  changedOnly: boolean;
+}
+
+/** 거르지 않는 보기 */
+export const NO_PROJECT_FILTER: ProjectFilter = { query: '', changedOnly: false };
+
 /** 선택 상태 묶음: 고른 행 집합, 기준 행, 범위의 시작 행 */
 export interface SelectionState {
   selection: SelectionSet;
@@ -338,7 +352,11 @@ export interface FileTreeState extends SelectionState {
   epoch: number;
   /** "트리에서 찾기"(◎)로 고른 차례. 화면은 이 값이 바뀌면 고른 행으로 스크롤한다 */
   revealSeq: number;
+  /** 보기 거르기 (R1). 나열·펼침·선택은 그대로 두고 화면이 보일 행만 거른다 */
+  filter: ProjectFilter;
 
+  /** 보기 거르기의 일부를 바꾼다. 바뀐 것이 없으면 그대로 둔다 */
+  setFilter(patch: Partial<ProjectFilter>): void;
   /** 루트와, 보이는 펼친 디렉터리 중 아직 안 읽은 것을 읽는다 (트리가 처음 보일 때) */
   open(): void;
   /** 펼침을 뒤집는다 */
@@ -362,8 +380,11 @@ export interface FileTreeState extends SelectionState {
    * 않게). 돌려준 약속은 모두 끝났을 때 풀린다
    */
   reload(): Promise<void>;
-  /** 그 경로의 조상을 차례로 펼치고 그 행을 고른다 (트리에서 찾기). 없으면 남아 있는 가장 가까운 조상을 고른다 */
-  reveal(path: string): Promise<void>;
+  /**
+   * 그 경로의 조상을 차례로 펼치고 그 행을 고른다 (트리에서 찾기). 없으면 남아 있는 가장 가까운 조상을 고른다.
+   * `keepSelection` 이면 선택은 건드리지 않고 펼치고 스크롤만 한다 (보기 거르기를 끈 뒤 고른 행으로 돌아갈 때)
+   */
+  reveal(path: string, keepSelection?: boolean): Promise<void>;
   /** 파일 하나를 읽는다 (파일 보기 탭) */
   readFile(path: string): Promise<FsFile>;
   /** 트리의 스크롤 위치를 기억한다 (화면이 다시 붙을 때 돌아갈 자리). 다시 그릴 값이 아니라 구독 상태 밖에 둔다 */
@@ -531,6 +552,15 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
       anchor: null,
       epoch: 0,
       revealSeq: 0,
+      filter: NO_PROJECT_FILTER,
+
+      setFilter(patch) {
+        const prev = get().filter;
+        const next = { ...prev, ...patch };
+        if (next.query !== prev.query || next.changedOnly !== prev.changedOnly) {
+          set({ filter: next });
+        }
+      },
 
       open() {
         if (!disposed) {
@@ -643,7 +673,7 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
         return reloading;
       },
 
-      async reveal(path) {
+      async reveal(path, keepSelection = false) {
         for (const dir of ancestorDirs(path)) {
           if (disposed) {
             return;
@@ -657,11 +687,11 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
           const nextPath = childPath(dir, next);
           const isLast = nextPath === path;
           if (!hasEntry(get().dirs[dir]?.load, next, !isLast)) {
-            set({ ...only(dir), revealSeq: get().revealSeq + 1 });
+            set({ ...(keepSelection ? {} : only(dir)), revealSeq: get().revealSeq + 1 });
             return;
           }
         }
-        set({ ...only(path), revealSeq: get().revealSeq + 1 });
+        set({ ...(keepSelection ? {} : only(path)), revealSeq: get().revealSeq + 1 });
       },
 
       readFile(path) {

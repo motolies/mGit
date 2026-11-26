@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { type IpcClient, toIpcError } from '../client';
 import { createMockClient } from '../mock/mock-client';
+import { mockLineEndingCounts, mockNormalizeLineEndings } from '../mock/mock-fs';
 import type { MockSceneName } from '../mock/mock-workspace';
 import type { FsDirListing, FsEntry, FsFile, SessionId } from '../types';
 
@@ -380,6 +381,38 @@ describe('현재 파일 편집 API 목', () => {
       lineEnding: 'crlf',
       text,
     });
+  });
+
+  it('줄 끝이 섞인 표본은 원문·revision·줄 끝 수를 주고, 통일하면 그 줄 끝으로 저장해 편집할 수 있게 된다', async () => {
+    const { client, session } = await open('folder');
+    const path = 'samples/legacy-build.bat';
+    const mixed = await client.fsReadEditableFile(session, path);
+    if (mixed.kind !== 'mixedLineEndings') throw new Error(`섞인 줄 끝이어야 한다: ${mixed.kind}`);
+    expect(mixed).toMatchObject({ lf: 2, crlf: 4, cr: 0 });
+    expect(mixed.text).toBe(textOf(await client.fsReadFile(session, path)));
+    // 오래된 revision 은 거부하고 원문을 그대로 둔다
+    expect(await client.fsNormalizeLineEndings(session, path, 'stale', 'lf')).toEqual({
+      kind: 'conflict',
+    });
+    expect(await client.fsReadEditableFile(session, path)).toEqual(mixed);
+    const saved = await client.fsNormalizeLineEndings(session, path, mixed.revision, 'crlf');
+    expect(saved.kind).toBe('saved');
+    const now = await client.fsReadEditableFile(session, path);
+    expect(now).toMatchObject({
+      kind: 'text',
+      lineEnding: 'crlf',
+      text: mixed.text.replace(/\r?\n/g, '\r\n'),
+    });
+    if (now.kind !== 'text' || saved.kind !== 'saved') throw new Error('텍스트여야 한다');
+    expect(now.revision).toBe(saved.revision);
+  });
+
+  it('목의 줄 끝 세기·통일은 코어와 같다: 단독 CR 도 줄 끝이고 BOM·마지막 줄 끝 유무는 그대로다', () => {
+    const text = '\ufeff한글\r\nb\nc\rd\r\r\ne';
+    expect(mockLineEndingCounts(text)).toEqual({ lf: 1, crlf: 2, cr: 2 });
+    expect(mockNormalizeLineEndings(text, 'lf')).toBe('\ufeff한글\nb\nc\nd\n\ne');
+    expect(mockNormalizeLineEndings(text, 'crlf')).toBe('\ufeff한글\r\nb\r\nc\r\nd\r\n\r\ne');
+    expect(mockNormalizeLineEndings('a\nb', 'crlf')).toBe('a\r\nb');
   });
 
   it('용량·혼합 줄 끝·경로 제한을 유지하며 실패 시 원문을 보존한다', async () => {

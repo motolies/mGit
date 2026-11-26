@@ -13,6 +13,7 @@ mod commands_conflict;
 mod commands_folder;
 mod commands_fs;
 mod commands_fs_operations;
+mod commands_group;
 mod commands_history;
 mod commands_hosting;
 mod commands_lfs;
@@ -79,6 +80,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_changes::discard_lines,
             commands_changes::list_backups,
             commands_changes::restore_backup,
+            commands_changes::delete_file_backups,
+            commands_changes::delete_file_backups_before,
+            commands_changes::prune_backups_daily,
             commands_changes::verify_staged,
             commands_changes::commit,
             commands_changes::last_commit_message,
@@ -140,8 +144,15 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_repo::close_folder,
             commands_repo::folder_open_repo_session,
             commands_repo::folder_release_repo_session,
+            commands_group::groups_list,
+            commands_group::group_check_paths,
+            commands_group::group_create,
+            commands_group::group_update,
+            commands_group::group_delete,
+            commands_group::open_group,
             commands_repo::scan_repos,
             commands_repo::clone_repo,
+            commands_repo::clone_many,
             commands_repo::init_repo,
             commands_repo::gitignore_templates,
             commands_repo::recent_list,
@@ -259,6 +270,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_folder::folder_settings,
             commands_folder::folder_settings_set,
             commands_folder::folder_batch,
+            commands_folder::folder_stash_batches,
+            commands_folder::folder_prune_backups_daily,
             commands_folder::folder_integration_preview,
             commands_folder::folder_changes,
             commands_folder::folder_branches,
@@ -288,11 +301,17 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_fs_operations::fs_recovery_warnings,
             commands_search::workspace_search,
             commands_search::workspace_search_cancel,
+            commands_search::workspace_files,
+            commands_search::workspace_replace_preview,
+            commands_search::workspace_replace_apply,
+            commands_search::workspace_replace_undo,
             commands_fs::fs_list_dir,
             commands_fs::fs_read_file,
             commands_fs::fs_read_image,
             commands_fs::fs_read_editable_file,
+            commands_fs::fs_file_stamps,
             commands_fs::fs_save_file,
+            commands_fs::fs_normalize_line_endings,
             commands_submodule::submodule_pointer_log,
             commands_submodule::submodule_add,
             commands_submodule::submodule_adopt,

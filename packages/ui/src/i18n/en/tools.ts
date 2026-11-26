@@ -56,6 +56,10 @@ export const enTools: Pick<
     unstage: 'Unstage',
     discard: 'Discard changes',
     pin: 'Pin preview tab',
+    splitRight: 'Editor: Split Right',
+    moveToOppositeGroup: 'Editor: Move to Opposite Group',
+    unsplit: 'Editor: Unsplit',
+    focusOtherGroup: 'Editor: Go to Opposite Group',
     renameBranch: 'Rename branch',
     checkoutBranch: 'Checkout branch',
     openRepo: 'Open repository…',
@@ -75,6 +79,8 @@ export const enTools: Pick<
     quickSwitch: 'Switch branch…',
     createBranch: 'Create branch…',
     stashSave: 'Stash changes',
+    runFolderCommand: 'Run git command in repositories…',
+    cloneMany: 'Clone multiple repositories…',
     // ⌘J = Git 도구 창의 콘솔 탭 (동작 id `view.log` 유지)
     toggleLog: 'Toggle Git console',
     palette: 'Command palette',
@@ -95,6 +101,7 @@ export const enTools: Pick<
     repoSettings: 'Repository settings…',
     // 영역 단축키: ⌘1 은 ⌘0(Commit)과 같이 왼쪽 도구 창을 열고 포커스한다
     focusSidebar: 'Project tool window',
+    projectFilter: 'Filter Project tree by name',
     focusEditor: 'Focus: Editor',
     focusGraph: 'Focus: Git log',
     focusDetail: 'Focus: Git log details',
@@ -192,6 +199,23 @@ export const enTools: Pick<
     fileBackupRestoreMessage:
       'The current file in the working tree will be overwritten with this copy.',
     fileBackupRestored: (path: string) => `Restored: ${path}`,
+    fileBackupsKeep: (days: number) =>
+      `Copies older than ${formatNumber(days)} ${plural(days, 'day', 'days')} are deleted automatically, once a day when the repository opens.`,
+    fileBackupDelete: 'Delete…',
+    fileBackupDeleteTitle: (path: string) => `Delete the discard backup of ${path}?`,
+    fileBackupDeleteMessage: 'Deleted copies cannot be recovered.',
+    fileBackupDeleteConfirm: 'Delete',
+    fileBackupsPrune: 'Delete old backups…',
+    fileBackupsPruneTitle: 'Delete old discard backups',
+    fileBackupsPruneMessage:
+      "Deletes all of this repository's copies older than the given number of days. Deleted copies cannot be recovered.",
+    fileBackupsPruneDays: 'Older than (days, 0 = all)',
+    fileBackupsPruneCount: (n: number, more: boolean) =>
+      `${more ? 'At least ' : ''}${formatNumber(n)} ${plural(n, 'copy', 'copies')} to delete`,
+    fileBackupsPruneNone: 'No copies to delete',
+    fileBackupsPruneInvalid: 'Enter a whole number of 0 or more',
+    fileBackupsDeleted: (n: number) =>
+      `Deleted ${formatNumber(n)} discard ${plural(n, 'backup', 'backups')}`,
     discardBackedUp: 'Can be restored from discard backups',
   },
   rebase: {
@@ -325,6 +349,7 @@ export const enTools: Pick<
     // 폴더 탭에서 연 대화상자의 대상 저장소
     inRepo: (repo: string) => `Repository: ${repo}`,
     renamedFrom: (p: string) => `(formerly ${p})`,
+    blame: 'Blame',
     limit: (n: number) => `${formatNumber(n)} ${plural(n, 'commit', 'commits')}`,
     compareTitle: 'Compare two refs',
     compareA: 'Base (A)',
@@ -628,6 +653,8 @@ export const enTools: Pick<
     fork: 'fork',
     noAccountHint: 'Connect a hosting account first (palette: Hosting accounts…)',
     loading: 'Loading…',
+    pick: (name: string) => `Select ${name}`,
+    cloneSelected: (n: number) => `Clone ${n} selected…`,
   },
   pr: {
     title: (kind: string) => (kind === 'gitlab' ? 'Merge Requests' : 'Pull Requests'),

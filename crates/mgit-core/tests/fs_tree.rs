@@ -954,3 +954,71 @@ async fn images_use_repo_and_folder_session_roots() {
         ));
     }
 }
+
+/// 내용 검색·빠른 열기 목록도 세션의 루트 하나를 순회하고, 결과 경로는 그 루트 기준이다: 표준 트리의 파일이 모두
+/// 나오고 루트 밖·`.git` 안·링크 너머의 내용은 나오지 않는다 (두 루트 같은 결과). 모르는 세션은 `SessionNotFound`
+#[tokio::test]
+async fn workspace_search_and_files_stay_under_the_session_root() {
+    /// 글자 그대로의 내용 검색 질의
+    fn content_query(text: &str) -> mgit_core::WorkspaceSearchQuery {
+        mgit_core::WorkspaceSearchQuery {
+            text: text.into(),
+            content: true,
+            regex: false,
+            case_sensitive: false,
+            path_filter: String::new(),
+            scope: String::new(),
+            drafts: Vec::new(),
+        }
+    }
+    let cancel = mgit_model::CancelToken::new;
+    for root in roots().await {
+        let label = root.label;
+        let listed = root
+            .core
+            .workspace_files(root.session, cancel())
+            .await
+            .unwrap();
+        for marked in MARKED {
+            assert!(
+                listed.files.iter().any(|f| f == marked),
+                "{label}: {marked}"
+            );
+        }
+        for file in &listed.files {
+            assert!(!file.starts_with('/'), "{label}: {file}");
+            assert!(
+                !file.split('/').any(|p| p.eq_ignore_ascii_case(".git")),
+                "{label}: {file}"
+            );
+        }
+        assert!(listed.repos.iter().any(|r| r.is_empty()), "{label}");
+        assert!(listed.repos.iter().any(|r| r == "nested"), "{label}");
+
+        let found = root
+            .core
+            .workspace_search(root.session, content_query("MARK:src/main.rs"), cancel())
+            .await
+            .unwrap();
+        let paths: Vec<&str> = found.hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, ["src/main.rs"], "{label}");
+        let secrets = root
+            .core
+            .workspace_search(root.session, content_query("SECRET"), cancel())
+            .await
+            .unwrap();
+        assert!(secrets.hits.is_empty(), "{label}: {:?}", secrets.hits);
+
+        let unknown = SessionId(u32::MAX);
+        assert!(matches!(
+            root.core.workspace_files(unknown, cancel()).await,
+            Err(CoreError::SessionNotFound(_))
+        ));
+        assert!(matches!(
+            root.core
+                .workspace_search(unknown, content_query("MARK"), cancel())
+                .await,
+            Err(CoreError::SessionNotFound(_))
+        ));
+    }
+}

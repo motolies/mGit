@@ -28,6 +28,8 @@ ignore = "0.4"
 sha2 = "0.10"
 base64 = "0.22"
 quick-xml = "0.42"
+# 파일 편집의 UTF-8 이외 인코딩 (R2): 표준(WHATWG) 인코딩 표. 라이선스는 THIRD-PARTY-NOTICES.md
+encoding_rs = "0.8"
 tempfile.workspace = true
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 

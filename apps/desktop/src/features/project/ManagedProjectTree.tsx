@@ -5,13 +5,15 @@ import type {
   FsSource,
   SessionId,
 } from '@mgit/ipc';
-import { Button, ConfirmDialog, Icon } from '@mgit/ui';
-import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from 'react';
+import { Button, ConfirmDialog, Icon, isImeKey, S } from '@mgit/ui';
+import { type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
 import type { MenuItem } from '../../components/ContextMenu';
 import { TextContextMenu } from '../../components/TextContextMenu';
+import { ToolButton } from '../../layout/ToolButton';
 import { useAppStore } from '../../store';
-import { baseName, childPath, isWithin, parentDir, relativeTo } from '../../store/fs-path';
+import { baseName, childPath, isWithin, parentDir } from '../../store/fs-path';
+import { dirSpace, type RootSpace } from '../../store/root-space';
 import { menuTargets } from '../workspace/folder-tree-menu';
 import { FileConflictDialog } from './FileConflictDialog';
 import { executeFileOperation, prepareFileOperation } from './file-operation-coordinator';
@@ -19,6 +21,12 @@ import styles from './ProjectEditing.module.css';
 import { ProjectTree, type ProjectTreeProps } from './ProjectTree';
 import { projectEditStrings } from './project-edit-strings';
 import type { EntryRow, ProjectTreeRow, RootRow } from './project-tree-model';
+import type { ProjectFilterView } from './use-project-filter';
+
+/** 이벤트 대상이 트리(행 목록) 안인지 */
+function inTree(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-project-tree]') !== null;
+}
 
 const EDIT_ID = '\u0000project-new-entry';
 interface InlineEdit {
@@ -50,12 +58,26 @@ export function validProjectName(name: string): boolean {
   );
 }
 
-/** Project 트리에 파일 작업·인라인 입력·포인터 이동을 연결한다. */
+/**
+ * Project 트리에 파일 작업·인라인 입력·포인터 이동을 연결한다. `space` 는 트리의 경로 공간(클립보드·보호 경로의 절대
+ * 경로를 트리 경로로 바꾼다)이고, 주지 않으면 루트 행의 detail 디렉터리 하나다 (저장소 탭). `filter` 를 주면 트리 위에
+ * 거르기 줄(이름 필터 칸·"변경된 파일만" 단추, R1)을 놓는다 — 이때 `rows` 는 이미 거른 행이다
+ */
 export function ManagedProjectTree({
   session,
   protectedPaths = [],
+  space: givenSpace,
+  filter,
   ...props
-}: ProjectTreeProps & { session: SessionId; protectedPaths?: readonly string[] }) {
+}: ProjectTreeProps & {
+  session: SessionId;
+  protectedPaths?: readonly string[];
+  space?: RootSpace;
+  filter?: ProjectFilterView;
+}) {
+  const rootDir = props.root.detail;
+  // 공간이 바뀔 때만 새 객체가 되게 한다 (클립보드 표시를 다시 읽는 효과가 공간에 묶여 있다)
+  const space = useMemo(() => givenSpace ?? dirSpace(rootDir), [givenSpace, rootDir]);
   const client = useAppStore((state) => state.client);
   const t = projectEditStrings();
   const host = useRef<HTMLDivElement>(null);
@@ -152,10 +174,35 @@ export function ManagedProjectTree({
     };
   }, [client]);
   const rows = props.rows;
+  const filterInput = useRef<HTMLInputElement>(null);
+  const filtering = filter?.active === true;
+  /**
+   * 펼침을 뒤집는다. 거른 보기는 폴더를 모두 펼쳐 보이므로 바꾸지 않는다 — 실제 펼침 기록은 거르기를 끈 뒤의 트리 것이라
+   * 거른 행에서 건드리면 엉뚱한 폴더가 접힌다
+   */
+  const toggle = (path: string) => {
+    if (!filtering) props.onToggle(path);
+  };
+  /** 트리(행 목록)에 포커스를 준다 */
+  const focusTree = () => host.current?.querySelector<HTMLElement>('[data-project-tree]')?.focus();
+  /**
+   * 거르기 칸에서 트리로 들어간다 (↓·Enter): 고른 행이 맞은 항목으로 보이면 그대로, 아니면 첫 맞은 항목을 고른다.
+   * `open` 이면 그 항목이 파일일 때 고정 탭으로 연다 (트리의 Enter 와 같다)
+   */
+  const enterTree = (open: boolean) => {
+    const hits = filter?.hits;
+    const current = rows.find((row) => row.id === props.selected);
+    const target =
+      current && hits?.has(current.id) ? current : rows.find((row) => hits?.has(row.id));
+    if (target && target.id !== props.selected) props.onSelect(target.id);
+    focusTree();
+    if (open && target?.kind === 'entry' && target.openable && !target.expandable)
+      props.onOpenFile(target.path, 'pinned');
+  };
   const protectedSelection = (paths: readonly string[]) =>
     paths.some((path) =>
       protectedPaths.some((absolute) => {
-        const relative = relativeTo(props.root.detail, absolute);
+        const relative = space.toRel(absolute);
         return relative !== null && isWithin(relative, path);
       }),
     );
@@ -168,6 +215,11 @@ export function ManagedProjectTree({
           ? row.path
           : (parentDir(row.path) ?? '')
         : '';
+  /**
+   * 그 디렉터리 안에 만들거나 붙여넣을 수 있는지. 실제 디렉터리가 없는 맨 위(가상 그룹의 '' — 별칭만 놓인다)는 코어가
+   * 거부하므로 화면에서 먼저 막는다 (MR-13)
+   */
+  const writableDir = (dir: string) => dir !== '' || space.toAbs('') !== null;
   const targets = (row?: RootRow | EntryRow) =>
     normalizeProjectPaths(
       row
@@ -238,7 +290,7 @@ export function ManagedProjectTree({
             setCutPaths(
               value?.cut
                 ? value.paths.flatMap((absolute) => {
-                    const path = relativeTo(props.root.detail, absolute);
+                    const path = space.toRel(absolute);
                     return path === null ? [] : [path];
                   })
                 : [],
@@ -252,7 +304,7 @@ export function ManagedProjectTree({
       live = false;
       window.removeEventListener('focus', refresh);
     };
-  }, [client, props.root.detail]);
+  }, [client, space]);
 
   /** 생성 위치를 펼치고 임시 행에 포커스를 둔다. */
   const begin = (kind: InlineEdit['kind'], row = selectedRow) => {
@@ -260,11 +312,15 @@ export function ManagedProjectTree({
     const path = row?.kind === 'entry' ? row.path : '';
     if (kind === 'rename' && (!path || protectedSelection([path]))) return;
     const parent = kind === 'rename' ? (parentDir(path) ?? '') : directory(row);
+    if (kind !== 'rename' && !writableDir(parent)) {
+      setError(S.group.topReadOnly);
+      return;
+    }
     const parentRow = rows.find(
       (item) => (item.kind === 'root' || item.kind === 'entry') && item.path === parent,
     );
     if ((parentRow?.kind === 'root' || parentRow?.kind === 'entry') && !parentRow.expanded)
-      props.onToggle(parent);
+      toggle(parent);
     setError(null);
     setEdit({ kind, parent, path, name: kind === 'rename' ? baseName(path) : '' });
   };
@@ -331,7 +387,7 @@ export function ManagedProjectTree({
       setEdit(null);
       props.onSelect(path);
       if (edit.kind === 'createFile') props.onOpenFile(path, 'pinned');
-      if (edit.kind === 'createDirectory') props.onToggle(path);
+      if (edit.kind === 'createDirectory') toggle(path);
     }
   };
 
@@ -347,6 +403,10 @@ export function ManagedProjectTree({
   };
   /** 붙여넣기는 선택 파일의 부모 또는 선택 폴더를 목적지로 쓴다. */
   const paste = async (path = directory(selectedRow)) => {
+    if (!writableDir(path)) {
+      setError(S.group.topReadOnly);
+      return;
+    }
     try {
       const value = await client.fsClipboardRead();
       if (!value) return;
@@ -372,7 +432,7 @@ export function ManagedProjectTree({
           value.paths
             .filter((path) => !committed.includes(path))
             .flatMap((path) => {
-              const relative = relativeTo(props.root.detail, path);
+              const relative = space.toRel(path);
               return relative === null ? [] : [relative];
             }),
         );
@@ -387,23 +447,28 @@ export function ManagedProjectTree({
     const paths = targets(row);
     const protectedTarget = protectedSelection(paths);
     const editable = row.kind === 'entry' && (row.entryKind === 'file' || row.entryKind === 'dir');
+    const readOnlyTop = !writableDir(directory(row));
+    const topReason = readOnlyTop ? S.group.topReadOnly : undefined;
     const group: MenuItem[] = [
       {
         label: t.newFile,
         commandId: 'project.newFile',
-        disabled: busy,
+        disabled: busy || readOnlyTop,
+        disabledReason: topReason,
         onSelect: () => begin('createFile', row),
       },
       {
         label: t.newFolder,
         commandId: 'project.newFolder',
-        disabled: busy,
+        disabled: busy || readOnlyTop,
+        disabledReason: topReason,
         onSelect: () => begin('createDirectory', row),
       },
       {
         label: t.paste,
         commandId: 'project.paste',
-        disabled: busy,
+        disabled: busy || readOnlyTop,
+        disabledReason: topReason,
         onSelect: () => void paste(directory(row)),
       },
     ];
@@ -505,7 +570,10 @@ export function ManagedProjectTree({
     input.current?.setSelectionRange(0, end > 0 ? end : edit.name.length);
   }, [edit?.kind, edit?.path]);
 
-  /** 트리의 입력 중에는 이름 필드가 키를 독점한다. */
+  /**
+   * 트리의 입력 중에는 이름 필드가 키를 독점한다. 트리에서 글자를 치면 이름 필터 칸으로 가서 이어 적는다 (IntelliJ 의 speed
+   * search — 한글 조합 키는 칸으로 포커스만 옮긴다). 이름 필터가 걸린 트리의 Esc 는 필터를 지운다 (편집기 탭을 닫지 않는다)
+   */
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (
       event.target instanceof HTMLElement &&
@@ -515,7 +583,28 @@ export function ManagedProjectTree({
     if (event.key === 'Escape') {
       drag.current = null;
       setEdit(null);
+      if (filter && filter.query !== '' && inTree(event.target)) {
+        event.preventDefault();
+        filter.setQuery('');
+      }
       return;
+    }
+    if (
+      !filter ||
+      !inTree(event.target) ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      busy ||
+      edit
+    )
+      return;
+    if (isImeKey(event)) {
+      filterInput.current?.focus();
+    } else if (event.key.length === 1 && event.key !== ' ') {
+      event.preventDefault();
+      filter.setQuery(filter.query + event.key);
+      filterInput.current?.focus();
     }
   };
 
@@ -574,8 +663,7 @@ export function ManagedProjectTree({
       state.since = Date.now();
     } else if (state.target !== null && Date.now() - state.since > 600) {
       const row = rows.find((item) => item.id === state.target);
-      if ((row?.kind === 'root' || row?.kind === 'entry') && !row.expanded)
-        props.onToggle(row.path);
+      if ((row?.kind === 'root' || row?.kind === 'entry') && !row.expanded) toggle(row.path);
     }
     const tree = host.current?.querySelector<HTMLElement>('[data-project-tree]');
     if (tree) {
@@ -688,6 +776,9 @@ export function ManagedProjectTree({
       <ProjectTree
         {...props}
         rows={displayRows}
+        onToggle={toggle}
+        marks={filter?.marks}
+        filtered={filtering}
         focusSeq={focusSeq}
         cutPaths={cutPaths}
         inline={inline}
@@ -717,9 +808,11 @@ export function ManagedProjectTree({
               size="compact"
               title={t.collapse}
               aria-label={t.collapse}
+              // 거른 보기의 폴더는 늘 펼쳐 보인다 (접을 실제 펼침이 아니다)
+              disabled={filtering}
               onClick={() => {
                 for (const row of [...rows].reverse())
-                  if (row.kind === 'entry' && row.expanded) props.onToggle(row.path);
+                  if (row.kind === 'entry' && row.expanded) toggle(row.path);
               }}
             >
               −
@@ -728,6 +821,50 @@ export function ManagedProjectTree({
         }
         banner={
           <>
+            {filter ? (
+              <>
+                <div className={styles.filter}>
+                  <Icon name="search" />
+                  <input
+                    ref={filterInput}
+                    type="search"
+                    className={styles.filterInput}
+                    data-project-filter=""
+                    value={filter.query}
+                    placeholder={S.project.filter.placeholder}
+                    aria-label={S.project.filter.label}
+                    title={S.project.filter.hint}
+                    onChange={(e) => filter.setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      // 한글 조합 중의 Enter·Esc·↓ 는 입력기 몫이다
+                      if (isImeKey(e)) return;
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        if (filter.query !== '') filter.setQuery('');
+                        focusTree();
+                      } else if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        enterTree(false);
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        enterTree(true);
+                      }
+                    }}
+                  />
+                  <ToolButton
+                    icon="changedOnly"
+                    label={S.project.filter.changedOnly}
+                    pressed={filter.changedOnly}
+                    onClick={() => filter.setChangedOnly(!filter.changedOnly)}
+                  />
+                </div>
+                {filter.note ? (
+                  <div className={styles.filterNote} role="status">
+                    {filter.note}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
             {props.banner}
             {error ? (
               <div role="alert" className={styles.error}>

@@ -222,7 +222,7 @@ pub(crate) async fn execute(
         return result;
     }
     if cancel.is_cancelled() {
-        result.skip(crate::messages::cancelled());
+        result.cancel();
         return result;
     }
     if mode.is_none() {
@@ -256,7 +256,7 @@ pub(crate) async fn execute(
         }
     }
     if cancel.is_cancelled() {
-        result.skip(crate::messages::cancelled());
+        result.cancel();
         return result;
     }
     let mut args: Vec<String> = match mode {

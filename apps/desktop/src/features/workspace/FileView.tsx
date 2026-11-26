@@ -249,6 +249,10 @@ export interface FileViewProps {
   onScrollTopChange?: (top: number) => void;
   /** 저장소 안 파일이면 머리줄의 히스토리·Blame 버튼 (ED-04). 없으면 버튼이 없다 */
   repoTools?: FileViewRepoTools | null;
+  /** 머리줄 아래·본문 위의 안내 띠 (예: 줄 끝이 섞여 편집할 수 없다는 안내와 통일 단추). 없으면 그리지 않는다 */
+  banner?: ReactNode;
+  /** 머리줄 경로 뒤의 인코딩 단추 (R2 — 편집기로 열지 못한 텍스트 파일). 없으면 그리지 않는다 */
+  encoding?: ReactNode;
 }
 
 /**
@@ -263,6 +267,8 @@ export function FileView({
   initialScrollTop,
   onScrollTopChange,
   repoTools = null,
+  banner = null,
+  encoding = null,
 }: FileViewProps) {
   const file = load.state === 'loaded' ? load.file : null;
   const text = useMemo(() => (file?.kind === 'text' ? stripBom(file.text) : null), [file]);
@@ -317,6 +323,7 @@ export function FileView({
             </span>
           ))}
         </nav>
+        {encoding ? <span className={styles.size}>{encoding}</span> : null}
         {text?.bom ? <span className={styles.tag}>{S.fileView.bom}</span> : null}
         {largeText ? <span className={styles.tag}>{S.fileView.noHighlight}</span> : null}
         {size !== null ? <span className={styles.size}>{formatBytes(size)}</span> : null}
@@ -337,6 +344,7 @@ export function FileView({
           </span>
         ) : null}
       </header>
+      {banner}
       <div className={styles.body}>{body}</div>
     </div>
   );

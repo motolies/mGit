@@ -32,6 +32,7 @@ export const enWorkspace: Pick<
 > = {
   workspaceSearch: {
     quickOpen: 'Quick Open',
+    recentFiles: 'Recent Files',
     title: 'Workspace Search',
     close: 'Close',
     query: 'Search query',
@@ -50,6 +51,48 @@ export const enWorkspace: Pick<
     cancel: 'Cancel',
     results: (n: number) => `${n} results`,
     skipped: (n: number) => ` · ${n} skipped`,
+    replaceWith: 'Replace with',
+    replacePlaceholder: 'Replace with ($1 for groups in regex mode)',
+    replaceOpen: 'Replace…',
+    replaceTitle: 'Replace in Files',
+    replaceLoading: 'Finding matches…',
+    replaceNone: 'Nothing to replace.',
+    replaceTotals: (files: number, matches: number) =>
+      `${files} ${files === 1 ? 'file' : 'files'} · ${matches} ${matches === 1 ? 'match' : 'matches'}`,
+    replaceApply: (files: number, matches: number) =>
+      `Replace (${files} ${files === 1 ? 'file' : 'files'}, ${matches})`,
+    replaceFile: (path: string) => `Replace in ${path}`,
+    replaceMatchCount: (n: number) => `${n} ${n === 1 ? 'match' : 'matches'}`,
+    replaceMatch: (before: string, after: string) => `${before} → ${after}`,
+    replaceBefore: 'Before',
+    replaceAfter: 'After',
+    replaceHiddenInLine: (n: number) =>
+      `${n} ${n === 1 ? 'match' : 'matches'} cut off from view ${n === 1 ? 'follows' : 'follow'} the file checkbox.`,
+    replaceHiddenLines: (n: number) =>
+      `${n} more ${n === 1 ? 'line follows' : 'lines follow'} the file checkbox.`,
+    replaceUnreadable: (n: number) =>
+      `${n} ${n === 1 ? 'file' : 'files'} not readable as text (over 1 MiB, binary, or not UTF-8) ${n === 1 ? 'was' : 'were'} not searched.`,
+    replaceTruncated: (n: number) =>
+      `Too many files; only the first ${n} are shown. Narrow the scope and replace the rest again.`,
+    replaceExcluded: 'Files not replaced',
+    replaceReasons: {
+      draft: 'Has unsaved changes in the editor',
+      mixedLineEndings: 'Mixes line endings (LF and CRLF)',
+      outsideRepository: 'Outside any Git repository',
+      changed: 'Changed after the preview',
+      unchanged: 'No matches to replace',
+    },
+    replaceDone: (files: number, matches: number) =>
+      `Replaced ${matches} ${matches === 1 ? 'match' : 'matches'} in ${files} ${files === 1 ? 'file' : 'files'}.`,
+    replaceBackupNote: 'The originals are kept in the discard backups (reason replace).',
+    replaceSkippedTitle: 'Skipped files',
+    replaceFailedTitle: 'Failed files',
+    replaceUndo: 'Undo',
+    replaceUndone: (n: number) => `Restored ${n} ${n === 1 ? 'file' : 'files'}.`,
+    replaceUndoChanged:
+      'Files changed again after the replace were not restored. You can restore them from the discard backups.',
+    replaceClose: 'Close',
+    replaceWorking: 'Writing files…',
   },
   comparison: {
     resizeFiles: 'Resize file list',
@@ -197,6 +240,17 @@ export const enWorkspace: Pick<
     overview: 'Overview',
     closeTab: (title: string) => `Close ${title}`,
     pinHint: 'Double-click to pin the tab',
+    split: {
+      right: 'Split Right',
+      moveRight: 'Move to Right Group',
+      moveLeft: 'Move to Left Group',
+      unsplit: 'Unsplit',
+      mainGroup: 'Left editor',
+      sideGroup: 'Right editor',
+      resize: 'Resize editor split',
+      fileOnly: 'Only file tabs can be split',
+      notSplit: 'The editor is not split',
+    },
     commitDiffTitle: (name: string, hash: string) => `${name} @${hash}`,
     commitDiffTip: (repo: string, path: string, hash: string) => `${repo}: ${path} @${hash}`,
     worktreeDiffTip: (repo: string, path: string, area: string) => `${repo}: ${path} (${area})`,
@@ -401,6 +455,18 @@ export const enWorkspace: Pick<
     special: "Special file (FIFO, socket, device): can't be opened",
     unopenable: 'Name too long to open',
     settings: 'Folder settings…',
+    filter: {
+      label: 'Filter by name',
+      placeholder: 'Filter by name',
+      hint: 'Type part of a name to show only matching files and folders and their parent folders. Files ignored by .gitignore are found only in expanded folders',
+      changedOnly: 'Show changed files only',
+      loading: 'Reading the full file list… Expanded folders were searched first',
+      noMatch: 'No items match the name',
+      noChanges: 'No changed files',
+      limited: (n: number) =>
+        `Too many matches; showing only ${formatNumber(n)}. Type more of the name`,
+      partial: "Couldn't read the whole file list; only some items were searched",
+    },
     structure: {
       menu: 'Modules, submodules, nested repositories',
       counts: (parts: readonly string[]) => parts.join(' · '),
@@ -481,6 +547,37 @@ export const enWorkspace: Pick<
     currentBlame: 'Current line attribution',
     allBlame: 'All line attribution',
     changeMarkers: 'Editor change markers',
+    autoCloseBrackets: 'Auto-close brackets and quotes',
+    // 위 줄의 들여쓰기 표시 (파일 내용으로 추정, 탭이 필요한 Makefile 등은 늘 탭)
+    indentTabs: 'Tabs',
+    indentSpaces: (n: number) => `Spaces: ${formatNumber(n)}`,
+    // 접기 여백·접힌 자리 표시의 툴팁과 화면 읽기 프로그램 알림 (CodeMirror 문구)
+    foldLine: 'Fold line',
+    unfoldLine: 'Unfold line',
+    foldedCode: 'folded code',
+    foldedLines: 'Folded lines',
+    unfoldedLines: 'Unfolded lines',
+    foldRangeTo: 'to',
+    // 찾기·바꾸기 패널과 줄로 이동 패널의 글자 (CodeMirror 문구, `$` 는 수·줄 번호)
+    findPanel: {
+      find: 'Find',
+      replace: 'Replace',
+      next: 'next',
+      previous: 'previous',
+      all: 'all',
+      matchCase: 'match case',
+      regexp: 'regexp',
+      byWord: 'by word',
+      replaceOne: 'replace',
+      replaceAll: 'replace all',
+      close: 'close',
+      currentMatch: 'current match',
+      onLine: 'on line',
+      replacedMatches: 'replaced $ matches',
+      replacedOnLine: 'replaced match on line $',
+      goToLine: 'Go to line',
+      go: 'go',
+    },
     localChange: 'Local change',
     uncommitted: 'Not committed yet',
     editorDefaults: 'Use global settings',
@@ -513,8 +610,39 @@ export const enWorkspace: Pick<
     overwriteUnreadable: 'The current file cannot be read and cannot be overwritten.',
     editedSinceConfirm:
       'New input was entered after confirmation. Your draft is preserved; confirm again.',
-    mixedLineEndings:
-      'Files with mixed line endings cannot be edited. Convert to LF or CRLF and reopen.',
+    // 줄 끝이 섞인 파일 (LF·CRLF·단독 CR): 읽기 전용으로 보이고, 확인 뒤 한 형식으로 통일해 저장하면 편집할 수 있다
+    lineEndingCounts: (lf: number, crlf: number, cr: number) =>
+      [
+        `LF ${formatNumber(lf)}`,
+        `CRLF ${formatNumber(crlf)}`,
+        ...(cr > 0 ? [`lone CR ${formatNumber(cr)}`] : []),
+      ].join(' · '),
+    mixedReadOnly: (counts: string) =>
+      `This file mixes line endings (${counts}) and can't be edited. Shown read-only.`,
+    normalizeLf: 'Convert to LF and edit',
+    normalizeCrlf: 'Convert to CRLF and edit',
+    normalizeTitle: (target: string) => `Convert line endings to ${target}`,
+    normalizeMessage: (target: string, counts: string, changed: number, cr: number) =>
+      `Line endings now: ${counts}. Converts every line ending in the file to ${target}, saves it, then opens it for editing. ${formatNumber(changed)} ${plural(changed, 'line', 'lines')} will get a new line ending and appear in the diff; if that is many, the whole file may look changed.${cr > 0 ? ' Lone CRs are treated as line endings and converted too.' : ''}`,
+    normalizeAction: (target: string) => `Convert to ${target}`,
+    normalizeConflict:
+      'The file changed in the meantime, so nothing was converted. It was reloaded; check it and try again.',
+    normalizeFailed: (message: string) => `Couldn't convert line endings: ${message}`,
+    encoding: (name: string) => `Encoding: ${name}`,
+    encodingTitle: 'Encoding. Click to reopen the file in another encoding',
+    encodingGuessed: (name: string) =>
+      `Couldn't read it as UTF-8, so ${name} was guessed. If characters look garbled, pick another encoding`,
+    encodingGuessedTag: 'guessed',
+    encodingPick: 'Pick encoding…',
+    encodingReopen: 'Reopen with encoding',
+    encodingAuto: 'Detect automatically',
+    encodingLocked: "Can't change the encoding with unsaved edits. Save or revert them first",
+    lossyMalformed: (name: string) =>
+      `Some bytes can't be read as ${name} and show as �. Read-only, because editing would lose the original bytes.`,
+    lossyIrreversible: (name: string) =>
+      `Some characters would be saved as different bytes in ${name}, so the file is read-only.`,
+    notUtf8Hint:
+      "Couldn't read it as UTF-8, EUC-KR or Shift_JIS. Pick another encoding with the encoding button in the header, or check it in another app.",
     closeTitle: 'Unsaved changes',
     closeMessage: 'Some files could not be saved. Retry saving or discard changes before closing.',
     discardChanges: 'Discard unsaved changes',
@@ -535,6 +663,8 @@ export const enWorkspace: Pick<
     },
     missing: 'File not found (deleted or moved)',
     denied: "Couldn't read file: permission denied",
+    // 위 안내 위의 띠: 외부 편집기·Finder 단추 앞 글
+    openOutside: 'Check it in another app.',
     failed: (message: string) => `Couldn't read file: ${message}`,
     retry: 'Retry',
     bom: 'UTF-8 BOM',
@@ -554,8 +684,6 @@ export const enWorkspace: Pick<
       `Finish the dialog or operation in ${repo} before using features of another repository`,
     diffError: (repo: string, message: string) => `${repo}: ${message}`,
     hintTitle: (repo: string, title: string) => `${repo}: ${title}`,
-    hookFailedInfo:
-      'Check the hook output. To skip hooks and retry, open this repository in a repository tab and try again there.',
   },
   opBand: {
     label: 'Operations in progress',
@@ -661,6 +789,17 @@ export const enWorkspace: Pick<
     skippedSummary: (n: number) =>
       `${formatNumber(n)} ${plural(n, 'repository', 'repositories')} won't be committed`,
     resize: 'Resize change list and commit area',
+    ownMessages: (n: number) => `${formatNumber(n)} ${plural(n, 'own message', 'own messages')}`,
+    ownMessageLine: (repo: string, line: string) => `${repo}: ${line}`,
+    repoMessagesLabel: 'Per-repository commit messages',
+    repoMessagesTip:
+      'Click to write a separate message per repository or to commit just one repository',
+    repoMessagesHint: 'Leave empty to use the common message',
+    repoMessage: (repo: string) => `Commit message for ${repo}`,
+    commonMessage: (line: string) => `Common message: ${line}`,
+    commonMessageEmpty: 'The common message is empty',
+    commitOnly: 'Commit only this repository',
+    commitOnlyAndPush: 'Commit and push only this repository…',
     tabs: {
       changes: 'Changes',
       stash: 'Stash',

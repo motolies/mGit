@@ -205,7 +205,6 @@ describe('editor tools', () => {
               current: true,
               all: true,
               changes: true,
-              pending: false,
               openCommit,
               preview: vi.fn(),
             },

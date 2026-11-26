@@ -14,7 +14,7 @@ import { focusPanel } from '../../actions';
 import { registerCommand } from '../../command-registry';
 import { ContextMenuArea, type MenuItem } from '../../components/ContextMenu';
 import { GitLogSplit, isLogEnter, useGitLogSide } from '../../layout/GitLogSplit';
-import { getFolderStore, getSessionStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import { getSessionStore, repoNameOf, useAppStore, useFolder } from '../../store';
 import {
   sameSelection,
   type TimelineReveal,
@@ -24,6 +24,7 @@ import {
 } from '../../store/folder-store';
 import { readPref, writePref } from '../../store/prefs';
 import { requestRepoReword } from '../../store/reword-request';
+import { timelineRepoWidthKey } from '../../store/root-prefs';
 import { BranchToolbar } from '../branches/BranchToolbar';
 import { BranchTree } from '../branches/BranchTree';
 import { isFavorite, useBranchFavorites } from '../branches/branch-favorites';
@@ -41,7 +42,6 @@ import {
   headRevs,
   remoteBranchParts,
   revsAfterActivate,
-  revsAfterRename,
   sameRevs,
   selectedBranchNodeIds,
   selectedLocalBranch,
@@ -212,7 +212,7 @@ export function FolderTimeline() {
 
   const info = f?.timeline.info ?? null;
   const folderId = f?.id ?? null;
-  const repoWidthKey = `mgit.timeline.repoWidth:${f?.path ?? ''}`;
+  const repoWidthKey = timelineRepoWidthKey(f?.path ?? '');
   const [repoWidth, setRepoWidth] = useState(() => readPref(repoWidthKey, 180));
   useEffect(() => {
     setRepoWidth(readPref(repoWidthKey, 180));
@@ -410,34 +410,24 @@ export function FolderTimeline() {
   );
 
   /**
-   * 이름 변경 (로컬 branch): 새 이름과 그 branch 를 가진 저장소를 체크 목록으로 확인받고 폴더 일괄로 바꾼다. 바꾼 저장소가
-   * 있으면 로그 범위의 옛 이름을 새 이름으로 바꾼다(그대로 두면 사라진 이름으로 걸려 로그가 빈다). 범위는 일괄이 끝난
-   * 순간의 질의를 스토어에서 읽는다. 즐겨찾기는 저장소 탭의 이름 변경처럼 옮기지 않는다
+   * 이름 변경 (로컬 branch): 새 이름과 그 branch 를 가진 저장소를 체크 목록으로 확인받고 폴더 일괄로 바꾼다. 로그 범위의
+   * 옛 이름을 따라 바꾸는 일은 흐름(`useFolderBatchFlows.renameBranch`)이 한다 — 작업 기록의 다시 실행과 같은 길. 즐겨찾기는
+   * 저장소 탭의 이름 변경처럼 옮기지 않는다
    */
   const renameBranch = useCallback(
     async (branch: FolderBranch) => {
-      const done = await flowsRef.current.renameBranch(
+      await flowsRef.current.renameBranch(
         branch.name,
         branch.repos.map((r) => ({ path: r.path, name: repoNameIn(branchRepos, r.path) })),
       );
-      const renamed = done?.result?.results.filter((r) => r.ok && !r.skipped).length ?? 0;
-      const live = folderId === null ? undefined : getFolderStore(folderId)?.getState();
-      if (!done || renamed === 0 || !live) {
-        return;
-      }
-      const query = live.timeline.query;
-      const next = revsAfterRename(query.revs, branch.name, done.to, renamed < branch.repos.length);
-      if (!sameRevs(query.revs, next)) {
-        void live.setTimelineQuery({ ...query, revs: next });
-      }
     },
-    [branchRepos, folderId],
+    [branchRepos],
   );
 
-  /** 삭제 후 어느 저장소에도 남지 않은 브랜치만 로그 조건에서 제거한다. */
+  /** 로컬 branch 삭제. 어느 저장소에도 남지 않은 이름을 로그 범위에서 빼는 일은 흐름(`deleteBranch`)이 한다 */
   const deleteBranch = useCallback(
     async (branch: FolderBranch) => {
-      const result = await flowsRef.current.deleteBranch(
+      await flowsRef.current.deleteBranch(
         branch.name,
         branch.repos.map((repo) => ({
           path: repo.path,
@@ -445,30 +435,8 @@ export function FolderTimeline() {
           current: repo.current,
         })),
       );
-      const live = folderId === null ? undefined : getFolderStore(folderId)?.getState();
-      if (
-        !result?.succeeded ||
-        !live?.branches ||
-        live.branches.branches.some((item) => !item.remote && item.name === branch.name)
-      )
-        return;
-      const query = live.timeline.query;
-      const revs = query.revs;
-      const name = branch.name;
-      const next: GraphRevs =
-        revs.kind === 'solo' && (revs.name === name || revs.name === `refs/heads/${name}`)
-          ? headRevs()
-          : revs.kind === 'branches'
-            ? (() => {
-                const names = revs.names.filter(
-                  (value) => value !== name && value !== `refs/heads/${name}`,
-                );
-                return names.length > 0 ? { kind: 'branches' as const, names } : headRevs();
-              })()
-            : revs;
-      if (!sameRevs(revs, next)) void live.setTimelineQuery({ ...query, revs: next });
     },
-    [branchRepos, folderId],
+    [branchRepos],
   );
 
   /** 한 브랜치의 즐겨찾기를 뒤집는다 */

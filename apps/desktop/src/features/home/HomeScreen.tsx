@@ -1,8 +1,10 @@
-import type { RecentEntry } from '@mgit/ipc';
+import type { GroupListItem, RecentEntry } from '@mgit/ipc';
 import { Button, formatDateTime, Icon, S } from '@mgit/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDialogs } from '../../components/use-dialogs';
 import { useAppStore } from '../../store';
+import { GROUP_GLYPH, groupKey } from '../../store/root-space';
+import { batchCloneFlow } from './batch-clone';
 import styles from './HomeScreen.module.css';
 import { cloneFlow, initFlow } from './repo-flows';
 
@@ -21,12 +23,19 @@ export function HomeScreen() {
   const removeRecent = useAppStore((s) => s.removeRecent);
   const scanFolder = useAppStore((s) => s.scanFolder);
   const cloneRepository = useAppStore((s) => s.cloneRepository);
+  const cloneRepositories = useAppStore((s) => s.cloneRepositories);
+  const notice = useAppStore((s) => s.notice);
   const cancelClone = useAppStore((s) => s.cancelClone);
   const initRepository = useAppStore((s) => s.initRepository);
   const loadRecent = useAppStore((s) => s.loadRecent);
+  const groups = useAppStore((s) => s.groups);
+  const loadGroups = useAppStore((s) => s.loadGroups);
+  const openGroupAt = useAppStore((s) => s.openGroupAt);
+  const updateGroup = useAppStore((s) => s.updateGroup);
+  const setGroupDialog = useAppStore((s) => s.setGroupDialog);
   const dialogs = useDialogs();
   const [query, setQuery] = useState('');
-  const [kind, setKind] = useState<'all' | 'folder' | 'repo'>('all');
+  const [kind, setKind] = useState<'all' | 'folder' | 'repo' | 'group'>('all');
   const sessions = useAppStore((s) => s.sessions);
   const returnToWorkspace = useAppStore((s) => s.returnToWorkspace);
   const canReturn = useAppStore((s) => s.sessionOrder.length > 0);
@@ -38,7 +47,8 @@ export function HomeScreen() {
 
   useEffect(() => {
     void loadRecent();
-  }, [loadRecent]);
+    void loadGroups();
+  }, [loadRecent, loadGroups]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -48,20 +58,43 @@ export function HomeScreen() {
         (q === '' || r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)),
     );
   }, [recent, query, kind]);
-  const sections = [
-    {
-      title: S.home.favorites,
-      entries: filtered.filter((r) => r.pinned),
-      empty: S.home.noFavorites,
-    },
-    { title: S.home.recent, entries: filtered.filter((r) => !r.pinned), empty: S.home.empty },
-  ];
+  // 그룹 묶음 (MR-13): 코어가 고정 먼저, 그다음 최근에 연 순으로 준다. 이름·멤버 경로로 찾는다
+  const shownGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return groups.filter(
+      (g) =>
+        q === '' ||
+        g.name.toLowerCase().includes(q) ||
+        g.members.some((m) => m.path.toLowerCase().includes(q)),
+    );
+  }, [groups, query]);
+  const sections =
+    kind === 'group'
+      ? []
+      : [
+          {
+            title: S.home.favorites,
+            entries: filtered.filter((r) => r.pinned),
+            empty: S.home.noFavorites,
+          },
+          { title: S.home.recent, entries: filtered.filter((r) => !r.pinned), empty: S.home.empty },
+        ];
+  const showGroups = kind === 'all' || kind === 'group';
 
   /** clone 흐름 (공용 흐름 함수) */
   const clone = () => cloneFlow(dialogs, { pickDirectory, cloneRepository });
 
+  /** 여러 저장소 clone 흐름 (공용 흐름 함수): 끝나면 상위 폴더가 폴더 탭으로 열린다 */
+  const cloneMany = () => batchCloneFlow(dialogs, { pickDirectory, cloneRepositories, notice });
+
   /** init 흐름 (공용 흐름 함수) */
   const init = () => initFlow(dialogs, { pickDirectory, templates, initRepository });
+
+  /** 그룹 열기 (이미 열려 있으면 그 탭으로 간다) */
+  const openGroup = (g: GroupListItem) => {
+    if (useAppStore.getState().isOpening) return;
+    void openGroupAt(g.id);
+  };
 
   /** 최근 항목 열기 (폴더면 폴더 탭) */
   const open = (r: RecentEntry) => {
@@ -94,6 +127,12 @@ export function HomeScreen() {
         >
           {S.home.clone}
         </Button>
+        <Button
+          disabled={isOpening || (cloneOp !== null && !cloneOp.done)}
+          onClick={() => void cloneMany()}
+        >
+          {S.home.cloneMany}
+        </Button>
         <Button disabled={isOpening} onClick={() => void init()}>
           {S.home.init}
         </Button>
@@ -102,6 +141,9 @@ export function HomeScreen() {
         </Button>
         <Button disabled={isOpening} onClick={() => setAppDialog('remoteRepos')}>
           {S.home.browseRemote}
+        </Button>
+        <Button disabled={isOpening} onClick={() => setGroupDialog({ mode: 'create' })}>
+          {S.group.create}
         </Button>
       </div>
       {cloneOp && !cloneOp.done ? (
@@ -121,6 +163,7 @@ export function HomeScreen() {
           <option value="all">{S.home.all}</option>
           <option value="folder">{S.home.folder}</option>
           <option value="repo">{S.home.repo}</option>
+          <option value="group">{S.group.kind}</option>
         </select>
         <input
           ref={searchRef}
@@ -131,6 +174,80 @@ export function HomeScreen() {
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
+      {showGroups ? (
+        <section aria-label={S.group.section}>
+          <h2 className={styles.recentTitle}>
+            {S.group.section} <span className={styles.count}>{shownGroups.length}</span>
+          </h2>
+          {shownGroups.length === 0 ? (
+            <div className={styles.empty}>{query ? S.home.noMatches : S.group.empty}</div>
+          ) : (
+            <ul className={styles.list}>
+              {shownGroups.map((g) => {
+                const key = groupKey(g.id);
+                const lost = g.members.filter((m) => m.state !== 'present').length;
+                return (
+                  <li key={g.id} className={styles.item}>
+                    <button
+                      type="button"
+                      disabled={isOpening}
+                      className={styles.entry}
+                      onClick={() => openGroup(g)}
+                      title={g.members.map((m) => `${m.alias} — ${m.path}`).join('\n')}
+                    >
+                      <span className={styles.name}>
+                        <span aria-hidden="true" className={styles.typeIcon}>
+                          {GROUP_GLYPH}
+                        </span>
+                        <span className={styles.entryName}>{g.name}</span>
+                        <span className={styles.badges}>
+                          <span className={styles.kind}>{S.group.kind}</span>
+                          {lost > 0 ? (
+                            <span className={styles.kind}>{S.group.state.missing}</span>
+                          ) : null}
+                          {Object.values(sessions).some((session) => session.path === key) ? (
+                            <span className={styles.opened}>{S.home.opened}</span>
+                          ) : null}
+                        </span>
+                      </span>
+                      <span className={styles.path}>
+                        {S.group.memberCount(g.members.length)} ·{' '}
+                        {g.members.map((m) => m.alias).join(', ')}
+                      </span>
+                      <span className={styles.time}>
+                        {g.lastOpenedAt
+                          ? formatDateTime(Math.floor((g.lastOpenedAt ?? 0) / 1000))
+                          : ''}
+                      </span>
+                    </button>
+                    <span className={styles.itemActions}>
+                      <button
+                        type="button"
+                        className={styles.small}
+                        onClick={() => void updateGroup(g.id, { pinned: !g.pinned })}
+                        aria-label={`${g.pinned ? S.home.unpin : S.home.pin}: ${g.name}`}
+                        aria-pressed={g.pinned}
+                        title={g.pinned ? S.home.unpin : S.home.pin}
+                      >
+                        {g.pinned ? '★' : '☆'}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.small}
+                        onClick={() => setGroupDialog({ mode: 'edit', id: g.id })}
+                        aria-label={S.group.editNamed(g.name)}
+                        title={S.group.edit}
+                      >
+                        ✎
+                      </button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      ) : null}
       {sections.map((section) => (
         <section key={section.title} aria-label={section.title}>
           <h2 className={styles.recentTitle}>

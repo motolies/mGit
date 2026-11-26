@@ -1388,6 +1388,24 @@ function integrationRows(): Awaited<ReturnType<IpcClient['folderIntegrationPrevi
   ];
 }
 
+/**
+ * 병합·리베이스 확인창에서 처음부터 체크되는 저장소 칸(`label` 로 시작하는 이름)을 열린 대화상자에서 찾는다.
+ * 확인창(PromptDialog)은 칸을 먼저 그리고, 효과에서 연 뒤(showModal) 다음 렌더에서 초기값을 채운다. findByRole 은 닫힌
+ * <dialog> 안이나 초기값 전의 빈 칸에서도 끝나며, 그 뒤 효과·재렌더와 findBy 의 setTimeout(0) 차례가 부하에 따라
+ * 뒤바뀐다. 그래서 대화상자가 열리고 칸이 체크된 것(초기값이 들어간 것)까지 기다린다
+ */
+async function findCheckedRepo(label: string): Promise<HTMLInputElement> {
+  return waitFor(() => {
+    const open = dialog();
+    expect(open).not.toBeNull();
+    const box = within(open as HTMLDialogElement).getByRole<HTMLInputElement>('checkbox', {
+      name: (name) => name.startsWith(label),
+    });
+    expect(box.checked).toBe(true);
+    return box;
+  });
+}
+
 describe('멀티 저장소 병합·리베이스 확인', () => {
   it('현재 브랜치별 방향과 제외 사유를 보이고 선택한 스냅샷만 squash 실행한다', async () => {
     const rows = integrationRows().map((row) =>
@@ -1399,10 +1417,9 @@ describe('멀티 저장소 병합·리베이스 확인', () => {
     fireEvent.click(
       screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
     );
-    const enabled = await screen.findByRole('checkbox', {
-      name: (name) =>
-        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
-    });
+    const enabled = await findCheckedRepo(
+      S.folder.integration.mergeDirection('api', 'hotfix', 'development'),
+    );
     const disabled = screen.getByRole('checkbox', {
       name: (name) =>
         name.startsWith(S.folder.integration.mergeDirection('docs', 'hotfix', 'main')),
@@ -1450,19 +1467,15 @@ describe('멀티 저장소 병합·리베이스 확인', () => {
     fireEvent.click(
       screen.getByRole('menuitem', { name: S.folder.integration.rebaseMenu('origin/hotfix') }),
     );
-    const api = await screen.findByRole('checkbox', {
+    // 체크되지 않는 api 는 초기값 전에도 빈 칸이므로 체크되는 docs 로 초기값이 들어갔는지 기다린다
+    await findCheckedRepo(S.folder.integration.rebaseDirection('docs', 'main', 'origin/hotfix'));
+    const api = screen.getByRole('checkbox', {
       name: (name) =>
         name.startsWith(
           S.folder.integration.rebaseDirection('api', 'development', 'origin/hotfix'),
         ),
     });
     expect(api).toHaveProperty('checked', false);
-    expect(
-      screen.getByRole('checkbox', {
-        name: (name) =>
-          name.startsWith(S.folder.integration.rebaseDirection('docs', 'main', 'origin/hotfix')),
-      }),
-    ).toHaveProperty('checked', true);
     expect(
       screen.getByText(
         new RegExp(S.folder.integration.remoteSnapshot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -1497,10 +1510,7 @@ describe('멀티 저장소 병합·리베이스 확인', () => {
     fireEvent.click(
       screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
     );
-    await screen.findByRole('checkbox', {
-      name: (name) =>
-        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
-    });
+    await findCheckedRepo(S.folder.integration.mergeDirection('api', 'hotfix', 'development'));
     for (const checkbox of within(dialog() as HTMLElement).getAllByRole('checkbox'))
       fireEvent.click(checkbox);
     expect(screen.getByRole('button', { name: S.folder.integration.mergeRun })).toHaveProperty(
@@ -1592,8 +1602,16 @@ it('실행 가능한 저장소가 없으면 사유를 보이고 빈 대상으로
   fireEvent.click(
     screen.getByRole('menuitem', { name: S.folder.integration.rebaseMenu('hotfix') }),
   );
-  await screen.findByText(S.folder.integration.noneEligible);
-  const boxes = within(dialog() as HTMLElement).getAllByRole('checkbox');
+  // 확인창은 내용을 먼저 그리고 효과에서 연다(showModal). 글자 조회(findByText)는 아직 닫힌 <dialog> 안의 글자도 찾아
+  // 열리기 전에 끝날 수 있다 — React 의 효과 태스크와 findBy 의 setTimeout(0) 차례가 부하에 따라 뒤바뀐다. 열린
+  // 대화상자를 기다린다
+  const open = await waitFor(() => {
+    const found = dialog();
+    expect(found).not.toBeNull();
+    return found as HTMLDialogElement;
+  });
+  expect(within(open).getByText(S.folder.integration.noneEligible)).toBeTruthy();
+  const boxes = within(open).getAllByRole('checkbox');
   expect(boxes.every((box) => (box as HTMLInputElement).disabled)).toBe(true);
   submit();
   await tick();
@@ -1666,10 +1684,7 @@ it('확인창 이후 저장소 탭에서 생긴 초안은 다시 검사하여 �
     fireEvent.click(
       screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
     );
-    await screen.findByRole('checkbox', {
-      name: (name) =>
-        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
-    });
+    await findCheckedRepo(S.folder.integration.mergeDirection('api', 'hotfix', 'development'));
     await pendingIntegrationDraft(repoClient, opened.session, 'draft.ts');
     submit();
     await waitFor(() =>

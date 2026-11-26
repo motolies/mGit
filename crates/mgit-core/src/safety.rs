@@ -112,6 +112,62 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// 작업 트리에서 백업 ref 목록을 읽는다 (최근 순). 세션 쪽(`backup_refs`)과 세션 없는 정리(`backup_cleanup.rs`)가
+/// 함께 쓴다. 이름이 `refs/mgit/backup/<branch>/<초>[-<일련번호>]` 꼴이 아닌 ref 는 빼고 읽는다
+pub(crate) async fn list_backup_refs(
+    runner: &dyn mgit_model::GitRunner,
+    work_tree: &std::path::Path,
+) -> Result<Vec<BackupRef>, CoreError> {
+    let req = GitRequest::new(
+        work_tree,
+        [
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(contents:subject)",
+            BACKUP_NS.trim_end_matches('/'),
+        ],
+    )
+    .with_env(EnvProfile::ReadInteractive);
+    let out = runner.run(req).await?;
+    let mut list: Vec<BackupRef> = out
+        .stdout_lossy()
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split('\0');
+            let name = f.next()?.to_string();
+            let oid = Oid::from_hex(f.next()?.trim().as_bytes()).ok()?;
+            let rest = name.strip_prefix(BACKUP_NS)?;
+            let (branch, stamp) = rest.rsplit_once('/')?;
+            // `<초>-<일련번호>`. 일련번호가 없는 옛 이름도 읽는다
+            let ts = stamp.split('-').next()?;
+            Some(BackupRef {
+                name: name.clone(),
+                branch: branch.to_string(),
+                oid,
+                created_at: ts.parse().ok()?,
+                reason: String::new(),
+            })
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.name.cmp(&a.name))
+    });
+    Ok(list)
+}
+
+/// 만든 시각이 `cutoff`(epoch 초)보다 이른 백업 ref 만 남긴다
+pub(crate) fn expired_backup_refs(list: Vec<BackupRef>, cutoff: i64) -> Vec<BackupRef> {
+    list.into_iter().filter(|b| b.created_at < cutoff).collect()
+}
+
+/// 백업 ref 들을 한 번에 지우는 `update-ref --stdin` 입력
+pub(crate) fn delete_script(refs: &[BackupRef]) -> String {
+    refs.iter()
+        .map(|b| format!("delete {}\n", b.name))
+        .collect()
+}
+
 /// 옵션으로 오해될 수 없는 값인지
 fn check_arg(v: &str) -> Result<(), CoreError> {
     if v.is_empty() || v.starts_with('-') || v.contains('\0') || v.contains("..") {
@@ -311,42 +367,7 @@ impl Core {
     pub async fn backup_refs(&self, session: SessionId) -> Result<Vec<BackupRef>, CoreError> {
         let inner = self.inner_arc();
         let s = inner.get(session)?;
-        let req = GitRequest::new(
-            &s.info.work_tree,
-            [
-                "for-each-ref",
-                "--format=%(refname)%00%(objectname)%00%(contents:subject)",
-                BACKUP_NS.trim_end_matches('/'),
-            ],
-        )
-        .with_env(EnvProfile::ReadInteractive);
-        let out = inner.runner().run(req).await?;
-        let mut list: Vec<BackupRef> = out
-            .stdout_lossy()
-            .lines()
-            .filter_map(|line| {
-                let mut f = line.split('\0');
-                let name = f.next()?.to_string();
-                let oid = Oid::from_hex(f.next()?.trim().as_bytes()).ok()?;
-                let rest = name.strip_prefix(BACKUP_NS)?;
-                let (branch, stamp) = rest.rsplit_once('/')?;
-                // `<초>-<일련번호>`. 일련번호가 없는 옛 이름도 읽는다
-                let ts = stamp.split('-').next()?;
-                Some(BackupRef {
-                    name: name.clone(),
-                    branch: branch.to_string(),
-                    oid,
-                    created_at: ts.parse().ok()?,
-                    reason: String::new(),
-                })
-            })
-            .collect();
-        list.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.name.cmp(&a.name))
-        });
-        Ok(list)
+        list_backup_refs(inner.runner(), &s.info.work_tree).await
     }
 
     /// 백업을 브랜치로 되살린다 (`branch <name> <oid>`), 또는 `name` 이 없으면 원래 브랜치를 그 지점으로
@@ -425,20 +446,16 @@ impl Core {
         Ok(())
     }
 
-    /// 보관 기간이 지난 백업을 지운다 (세션 열 때). 지운 수를 돌려준다
+    /// 보관 기간이 지난 백업을 지금 바로 지운다 (하루 한 번 규칙 없이). 지운 수를 돌려준다. 앱은 세션·폴더를 열 때
+    /// 하루 한 번 규칙으로 정리한다 (`prune_backups_daily`, `backup_cleanup.rs`)
     pub async fn prune_backups(&self, session: SessionId) -> Result<usize, CoreError> {
         let keep = self.config().backup_keep_days;
         let cutoff = now_secs() - i64::from(keep) * 86_400;
-        let old: Vec<BackupRef> = self
-            .backup_refs(session)
-            .await?
-            .into_iter()
-            .filter(|b| b.created_at < cutoff)
-            .collect();
+        let old = expired_backup_refs(self.backup_refs(session).await?, cutoff);
         if old.is_empty() {
             return Ok(0);
         }
-        let script: String = old.iter().map(|b| format!("delete {}\n", b.name)).collect();
+        let script = delete_script(&old);
         self.run_write(
             session,
             WriteSpec::new(["update-ref", "--stdin"])

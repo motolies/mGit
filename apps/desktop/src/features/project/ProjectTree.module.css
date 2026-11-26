@@ -122,6 +122,17 @@
   font-weight: 600;
 }
 
+/* 이름 필터에 맞은 글자 (R1): 상태 색은 그대로 두고 굵게 + 강조색 밑줄 (선택 행 배경 위에서도 읽히게) */
+:is(.name, .nameBold) mark {
+  color: inherit;
+  background: transparent;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-text);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
 /* 이름 뒤 회색 글자 (루트의 경로). 자리가 모자라면 줄어든다 */
 .detail {
   flex: 0 0 auto;

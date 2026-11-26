@@ -1,6 +1,5 @@
 import type { GraphRangeCache, SessionId } from '@mgit/ipc';
 import { fileEditors } from './file-editor-store';
-import { joinRoot, relativeTo } from './fs-path';
 import type { SessionStore } from './session-store';
 import type { WorkspaceStore } from './workspace-store';
 
@@ -20,15 +19,18 @@ function refreshEditors(): void {
   }
 }
 
-/** 저장 성공 후 같은 실제 경로를 보는 모든 작업 트리 diff를 갱신한다. */
+/**
+ * 저장 성공 후 같은 실제 경로를 보는 모든 작업 트리 diff를 갱신한다. 저장한 세션의 경로 공간으로 실제 경로를 얻고, 저장소
+ * 세션마다 그 작업 트리 기준 경로로 되돌린다
+ */
 export async function refreshEditedFile(id: SessionId, path: string): Promise<void> {
-  const root = registry.get(id)?.store.getState().path ?? folders.get(id)?.getState().path;
-  if (!root) return;
-  const absolute = joinRoot(root, path);
+  const space = registry.get(id)?.store.getState().space ?? folders.get(id)?.getState().space;
+  const absolute = space?.toAbs(path);
+  if (!absolute) return;
   await Promise.all(
     [...registry.values()].map(({ store }) => {
       const state = store.getState();
-      const relative = relativeTo(state.path, absolute);
+      const relative = state.space.toRel(absolute);
       return relative === null ? Promise.resolve() : state.reloadWorkingFile(relative);
     }),
   );
@@ -125,9 +127,13 @@ export function registerWorkspace(id: SessionId, store: WorkspaceStore): void {
   workspaceWatches.set(
     id,
     store.subscribe((now, before) => {
-      if (now.docs === before.docs) return;
-      for (const doc of before.docs) {
-        if (doc.kind === 'file' && !now.docs.some((item) => item.id === doc.id)) {
+      if (now.docs === before.docs && now.split === before.split) return;
+      // 두 편집기 그룹(R3) 어디에도 남지 않은 파일 탭만 편집 문서를 놓는다
+      const open = (id: string) =>
+        now.docs.some((item) => item.id === id) ||
+        (now.split?.docs.some((item) => item.id === id) ?? false);
+      for (const doc of [...before.docs, ...(before.split?.docs ?? [])]) {
+        if (doc.kind === 'file' && !open(doc.id)) {
           fileEditors.release(id, doc.path);
         }
       }
@@ -147,7 +153,10 @@ export function disposeWorkspace(id: SessionId): void {
   workspaces.delete(id);
 }
 
-/** 파일 작업이 모든 열린 Project의 문서와 트리를 함께 갱신할 때 사용하는 세션 목록이다. */
+/**
+ * 파일 작업이 모든 열린 Project의 문서와 트리를 함께 갱신할 때 사용하는 세션 목록이다. `root` 는 세션 키(디렉터리 탭은 루트
+ * 절대 경로)이고, 경로 변환은 그 키의 공간(`tabSpace`)으로 한다
+ */
 export function fileWorkspaceSessions() {
   return [...workspaces.entries()].flatMap(([id, workspace]) => {
     const repo = registry.get(id)?.store.getState();

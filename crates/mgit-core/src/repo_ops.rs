@@ -67,7 +67,7 @@ pub fn gitignore_body(id: &str) -> Option<&'static str> {
 }
 
 /// 옵션으로 오해될 수 없는 값인지
-fn check_arg(v: &str) -> Result<(), CoreError> {
+pub(crate) fn check_arg(v: &str) -> Result<(), CoreError> {
     if v.is_empty() || v.starts_with('-') || v.contains('\0') {
         return Err(CoreError::Invalid(messages::bad_value(v)));
     }
@@ -79,6 +79,35 @@ fn name_of(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// `git clone` 인자 (단일·일괄 clone 공용, REPO-02·03): 진행률, 브랜치, 서브모듈, 경량 복제 옵션 뒤에
+/// `--end-of-options <url> <dest>`. URL·브랜치가 옵션으로 오해될 수 있으면 거부한다
+pub(crate) fn clone_args(spec: &CloneSpec) -> Result<Vec<String>, CoreError> {
+    check_arg(&spec.url)?;
+    let mut args: Vec<String> = vec!["clone".into(), "--progress".into()];
+    if let Some(b) = &spec.branch {
+        check_arg(b)?;
+        args.push("--branch".into());
+        args.push(b.clone());
+    }
+    if spec.recurse_submodules {
+        args.push("--recurse-submodules".into());
+    }
+    // 경량 복제 (REPO-03)
+    if let Some(d) = spec.depth {
+        args.push(format!("--depth={}", d.max(1)));
+    }
+    if spec.blobless {
+        args.push("--filter=blob:none".into());
+    }
+    if spec.single_branch || spec.depth.is_some() {
+        args.push("--single-branch".into());
+    }
+    args.push("--end-of-options".into());
+    args.push(spec.url.clone());
+    args.push(spec.dest.to_string_lossy().into_owned());
+    Ok(args)
 }
 
 impl Core {
@@ -111,29 +140,7 @@ impl Core {
                 )
             })?
             .to_path_buf();
-        let dest_str = spec.dest.to_string_lossy().into_owned();
-        let mut args: Vec<String> = vec!["clone".into(), "--progress".into()];
-        if let Some(b) = &spec.branch {
-            check_arg(b)?;
-            args.push("--branch".into());
-            args.push(b.clone());
-        }
-        if spec.recurse_submodules {
-            args.push("--recurse-submodules".into());
-        }
-        // 경량 복제 (REPO-03)
-        if let Some(d) = spec.depth {
-            args.push(format!("--depth={}", d.max(1)));
-        }
-        if spec.blobless {
-            args.push("--filter=blob:none".into());
-        }
-        if spec.single_branch || spec.depth.is_some() {
-            args.push("--single-branch".into());
-        }
-        args.push("--end-of-options".into());
-        args.push(spec.url.clone());
-        args.push(dest_str);
+        let args = clone_args(&spec)?;
 
         let inner = self.inner_arc();
         let op = inner.ops.begin(SessionId(0));

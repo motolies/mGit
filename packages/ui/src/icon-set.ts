@@ -28,6 +28,8 @@ export const ICON_GLYPHS = {
   module: 'package',
   submodule: 'file-submodule',
   scope: 'filter',
+  // Project 트리 거르기 줄의 "변경된 파일만" 켜고 끄기 단추 (R1)
+  changedOnly: 'diff-modified',
 
   // 브랜치 트리·ref 라벨
   head: 'target',

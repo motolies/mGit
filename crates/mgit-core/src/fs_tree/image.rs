@@ -30,8 +30,7 @@ impl Core {
         session: SessionId,
         path: &str,
     ) -> Result<FsImage, CoreError> {
-        let root = self.fs_root(session)?;
-        let path = path.to_owned();
+        let (root, path) = self.fs_space(session)?.locate(path)?.into_under(path)?;
         run_blocking(move || read_image_at(&root, &path)).await
     }
 }

@@ -92,7 +92,7 @@ export function FileHistoryDialog() {
                     void s.openBlame(e.path, e.oid);
                   }}
                 >
-                  blame
+                  {S.history.blame}
                 </Button>
               </li>
             ))}

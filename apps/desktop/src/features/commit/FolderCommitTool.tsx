@@ -25,7 +25,19 @@ import { useFileActions } from '../project/use-file-actions';
 import { useRepoSessionActions } from '../workspace/repo-session-actions';
 import { CommitMessageBox } from './CommitMessageBox';
 import { CommitToolSplit } from './CommitToolSplit';
-import { clearsMessage, commitBlocker, commitPlan, committedRepos } from './commit-plan';
+import {
+  type CommitPlanRepo,
+  clearsMessage,
+  commitBlocker,
+  commitPlan,
+  committedRepos,
+  commonPlaceholder,
+  ownMessage,
+  planFor,
+  repoCommitBlocker,
+  repoMessagesFor,
+  targetsSummary,
+} from './commit-plan';
 import {
   buildCommitRepos,
   type CommitFileRow,
@@ -49,6 +61,10 @@ import { FolderCommitTree } from './FolderCommitTree';
  *   (`openConflict`, W15).
  * - 커밋 대상(저장소·파일 수)과 커밋되지 않을 저장소의 사유를 누르기 전에 보인다. 결과는 일괄 결과 토스트로 알리고,
  *   대상이 모두 커밋됐을 때만 메시지를 비운다. "Commit and Push…" 는 커밋된 저장소로 push 체크 목록을 연다.
+ * - 저장소별 메시지: 커밋될 저장소가 둘 이상(또는 자기 메시지가 남은 저장소가 있음)이면 대상 줄을 눌러 저장소마다 공통
+ *   메시지를 덮어쓴다(비우면 공통 메시지). 자기 메시지로 커밋될 저장소 수는 대상 줄에 보인다. "이 저장소만 커밋"(저장소
+ *   줄 우클릭·떠 있는 창의 단추)은 대상을 그 저장소 하나로 좁힌 같은 흐름이고, 커밋 후 푸시도 같다. 커밋된 저장소의
+ *   자기 메시지는 지운다.
  * 메시지·접힌 줄·스크롤은 워크스페이스 스토어에 두어 Project 도구 창과 번갈아 띄워도 남는다
  */
 export function FolderCommitTool() {
@@ -69,6 +85,8 @@ export function FolderCommitTool() {
   const ws = useWorkspace((w) => ({
     message: w.commitMessage,
     setMessage: w.setCommitMessage,
+    repoMessages: w.commitRepoMessages,
+    setRepoMessage: w.setCommitRepoMessage,
     collapsed: w.commitCollapsed,
     setCollapsed: w.setCommitCollapsed,
     rememberScroll: w.rememberCommitScroll,
@@ -188,10 +206,90 @@ export function FolderCommitTool() {
     return [changes, openInItems(abs, fileActions.actions)];
   };
 
+  const blocker = commitBlocker(
+    plan,
+    ws.message,
+    { running: locked, pending: busyRepos.size > 0 },
+    ws.repoMessages,
+  );
+  /** "이 저장소만 커밋"을 막는 사유 (그 저장소의 stage·unstage 만 기다린다). 누를 수 있으면 null */
+  const repoBlocker = (repoPath: string) =>
+    repoCommitBlocker(
+      plan,
+      repoPath,
+      ws.message,
+      { running: locked, pending: busyRepos.has(repoPath) },
+      ws.repoMessages,
+    );
+
+  /**
+   * 커밋한다 (명시 목록, stage 된 것만). 자기 메시지가 있는 저장소는 그 메시지로(없으면 옛 호출 그대로 공통 메시지만).
+   * 계획의 대상 전부가 모두 커밋됐을 때만 공통 메시지를 비우고, 커밋된 저장소의 자기 메시지는 지운다. `thenPush` 면
+   * 커밋된 저장소로 push 확인 (업스트림이 없는 branch 는 그 확인창이 새 업스트림을 정한다)
+   */
+  const commit = async (targets: readonly CommitPlanRepo[], thenPush: boolean) => {
+    if (targets.length === 0) {
+      return;
+    }
+    setCommitting(true);
+    const paths = targets.map((r) => r.path);
+    const own = repoMessagesFor(targets, ws.repoMessages);
+    const result = await (own.length === 0
+      ? f.commitAll(paths, ws.message, false)
+      : f.commitAll(paths, ws.message, false, own));
+    setCommitting(false);
+    report(result);
+    const pushed = result ? committedRepos(result) : [];
+    const store = getWorkspaceStore(f.id)?.getState();
+    if (result && targets.length === plan.repos.length && clearsMessage(result)) {
+      store?.setCommitMessage('');
+    }
+    store?.clearCommitRepoMessages(pushed);
+    if (thenPush && pushed.length > 0) {
+      await flows.push(pushed);
+    }
+  };
+
+  /** 계획의 대상 전부를 커밋한다 (커밋 단추·⌘Enter·Commit and Push…) */
+  const commitAll = (thenPush: boolean) => {
+    if (blocker === null) {
+      void commit(plan.repos, thenPush);
+    }
+  };
+
+  /** 그 저장소 하나만 커밋한다 (같은 흐름, 대상만 좁힌다) */
+  const commitOne = (repoPath: string, thenPush: boolean) => {
+    const one = planFor(plan, repoPath);
+    if (one !== null && repoBlocker(repoPath) === null) {
+      void commit(one.repos, thenPush);
+    }
+  };
+
+  /** 저장소 줄 메뉴의 "이 저장소만 커밋"·"이 저장소만 커밋 후 푸시…" (막혔으면 꺼지고 사유가 툴팁) */
+  const commitOneItems = (repoPath: string): MenuItem[] => {
+    const reason = repoBlocker(repoPath) ?? undefined;
+    const disabled = reason !== undefined;
+    return [
+      {
+        label: S.commitTool.commitOnly,
+        disabled,
+        disabledReason: reason,
+        onSelect: () => commitOne(repoPath, false),
+      },
+      {
+        label: S.commitTool.commitOnlyAndPush,
+        disabled,
+        disabledReason: reason,
+        onSelect: () => commitOne(repoPath, true),
+      },
+    ];
+  };
+
   /**
    * 줄의 우클릭 메뉴: 파일 열기(충돌 파일은 "충돌 해결" — 머지 편집기 탭), 저장소 탭으로 열기. 진행 중 작업이 있는
    * 저장소의 stage 된 파일은 저장소 탭의 변경 목록처럼 "충돌 상태로 되돌리기" 두 가지를 더한다 (W15, 그 저장소 세션에 대고).
-   * 파일은 변경 되돌리기·ignore·Finder·터미널, 저장소는 Finder·터미널이 뒤에 붙는다
+   * 파일은 변경 되돌리기·ignore·Finder·터미널이 뒤에 붙는다. 저장소는 "이 저장소만 커밋" 두 가지가 앞에, Finder·터미널이
+   * 뒤에 붙는다
    */
   const menu = (row: CommitRow): MenuItem[] => {
     const openTab: MenuItem = {
@@ -232,35 +330,28 @@ export function FolderCommitTool() {
     }
     return row.kind === 'dir'
       ? []
-      : joinGroups([[openTab], openInItems(row.repoPath, fileActions.actions)]);
+      : joinGroups([
+          commitOneItems(row.repoPath),
+          [openTab],
+          openInItems(row.repoPath, fileActions.actions),
+        ]);
   };
 
-  const blocker = commitBlocker(plan, ws.message, {
-    running: locked,
-    pending: busyRepos.size > 0,
-  });
-
-  /** 커밋한다 (명시 목록, stage 된 것만). 대상이 모두 커밋되면 메시지를 비운다. `thenPush` 면 커밋된 저장소로 push 확인 */
-  const commit = async (thenPush: boolean) => {
-    if (blocker !== null || plan.repos.length === 0) {
-      return;
-    }
-    setCommitting(true);
-    const result = await f.commitAll(
-      plan.repos.map((r) => r.path),
-      ws.message,
-      false,
-    );
-    setCommitting(false);
-    report(result);
-    if (result && clearsMessage(result)) {
-      getWorkspaceStore(f.id)?.getState().setCommitMessage('');
-    }
-    const pushed = result ? committedRepos(result) : [];
-    if (thenPush && pushed.length > 0) {
-      await flows.push(pushed);
-    }
-  };
+  // 저장소별 메시지 칸: 커밋될 저장소가 둘 이상이거나 자기 메시지가 남은 대상이 있을 때만 (하나뿐이면 공통 메시지로 충분)
+  const ownCount = plan.repos.filter((r) => ownMessage(ws.repoMessages, r.path) !== null).length;
+  const repoMessages =
+    plan.repos.length >= 2 || ownCount > 0
+      ? {
+          rows: plan.repos.map((r) => ({
+            ...r,
+            message: ws.repoMessages[r.path] ?? '',
+            blocked: repoBlocker(r.path),
+          })),
+          placeholder: commonPlaceholder(ws.message),
+          onChange: ws.setRepoMessage,
+          onCommitOne: (repoPath: string) => commitOne(repoPath, false),
+        }
+      : null;
 
   const t = S.commitTool;
   const tools = (
@@ -332,12 +423,13 @@ export function FolderCommitTool() {
           <CommitMessageBox
             message={ws.message}
             onMessageChange={ws.setMessage}
-            targets={plan.repos.length > 0 ? t.targets(plan.repos.length, plan.files) : null}
+            targets={targetsSummary(plan, ws.repoMessages)}
+            repoMessages={repoMessages}
             skipped={plan.skipped.map((s) => t.skipLine(s.name, t.skip[s.reason]))}
             blocked={blocker === null ? null : t[blocker]}
             committing={committing}
-            onCommit={() => void commit(false)}
-            onCommitAndPush={() => void commit(true)}
+            onCommit={() => commitAll(false)}
+            onCommitAndPush={() => commitAll(true)}
           />
         }
       />

@@ -289,6 +289,24 @@ impl Store for SqliteStore {
             .map_err(db_err)
     }
 
+    fn backup_delete(&self, id: u64) -> Result<Option<BackupRecord>, StoreError> {
+        // 읽기와 지우기를 한 연결 잠금 안에서 한다 (사이에 다른 쓰기가 끼지 않는다)
+        let conn = self.conn();
+        let found = conn
+            .query_row(
+                "SELECT id, repo, rel_path, saved_at, blob_path, reason FROM backup WHERE id = ?1",
+                params![id as i64],
+                backup_row,
+            )
+            .optional()
+            .map_err(db_err)?;
+        if found.is_some() {
+            conn.execute("DELETE FROM backup WHERE id = ?1", params![id as i64])
+                .map_err(db_err)?;
+        }
+        Ok(found)
+    }
+
     fn setting_get(&self, key: &str) -> Result<Option<String>, StoreError> {
         self.conn()
             .query_row(
@@ -307,6 +325,13 @@ impl Store for SqliteStore {
                  ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
                 params![key, value_json],
             )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    fn setting_delete(&self, key: &str) -> Result<(), StoreError> {
+        self.conn()
+            .execute("DELETE FROM setting WHERE key = ?1", params![key])
             .map_err(db_err)?;
         Ok(())
     }
@@ -399,6 +424,18 @@ mod tests {
         assert_eq!(s.recent_list().unwrap().len(), 1);
     }
 
+    /// 설정 지우기: 그 키만 지우고 다른 키는 남기며, 없는 키를 지워도 오류가 아니다
+    #[test]
+    fn setting_delete_removes_only_that_key() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.setting_set("folder:mgit-group:g1", "{}").unwrap();
+        s.setting_set("folder:/w", "{}").unwrap();
+        s.setting_delete("folder:mgit-group:g1").unwrap();
+        assert_eq!(s.setting_get("folder:mgit-group:g1").unwrap(), None);
+        assert_eq!(s.setting_get("folder:/w").unwrap().as_deref(), Some("{}"));
+        s.setting_delete("never-set").unwrap();
+    }
+
     #[test]
     fn command_log_and_settings_and_tabs() {
         let s = SqliteStore::open_in_memory().unwrap();
@@ -448,6 +485,10 @@ mod tests {
         assert_eq!(s.backup_get(id).unwrap().unwrap().rel_path, "a.txt");
         assert_eq!(s.backups_for(Path::new("/r"), 10).unwrap().len(), 1);
         assert!(s.backups_for(Path::new("/other"), 10).unwrap().is_empty());
+        // 지우면 지운 항목을 돌려주고, 다시 지우면 없다
+        assert_eq!(s.backup_delete(id).unwrap().unwrap().rel_path, "a.txt");
+        assert!(s.backup_get(id).unwrap().is_none());
+        assert!(s.backup_delete(id).unwrap().is_none());
 
         let oid = Oid::from_hex("a".repeat(40).as_bytes()).unwrap();
         s.stash_origin_set(Path::new("/r"), &oid, Path::new("/r/wt"))

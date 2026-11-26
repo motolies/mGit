@@ -39,6 +39,37 @@
   color: var(--fg);
 }
 
+/* 저장소별 메시지를 받을 때의 대상 줄: 같은 글자에 펼침 표시가 붙고, 누르면 저장소별 메시지가 떠 있는 창으로 펼쳐진다 */
+.targetsToggle {
+  all: unset;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  max-width: 100%;
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+  --icon-size: 14px;
+}
+
+.targetsToggle:hover {
+  color: var(--accent);
+}
+
+.targetsToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.targetsText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 커밋되지 않을 저장소의 접힌 한 줄 (누르면 저장소별 사유가 떠 있는 창으로 펼쳐진다) */
 .skipToggle {
   all: unset;

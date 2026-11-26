@@ -373,7 +373,11 @@ impl FsOperations {
     ) -> Result<PathBuf, CoreError> {
         match source {
             FsSource::Session { session, path } => {
-                checked(&core.fs_root(SessionId(*session))?, path, false)
+                let (root, rest) = core
+                    .fs_space(SessionId(*session))?
+                    .locate(path)?
+                    .into_under(path)?;
+                checked(&root, &rest, false)
             }
             FsSource::External { token, index } => {
                 let grants = self.grants.lock().unwrap_or_else(PoisonError::into_inner);
@@ -403,10 +407,15 @@ impl FsOperations {
             .destination
             .as_ref()
             .map(|d| {
-                let root = core.fs_root(SessionId(d.session))?.canonicalize()?;
+                // 그룹 맨 위는 대상이 아니다 (쓰기 거부)
+                let (root, rest) = core
+                    .fs_space(SessionId(d.session))?
+                    .locate(&d.path)?
+                    .into_under(&d.path)?;
+                let root = root.canonicalize()?;
                 let path = checked(
                     &root,
-                    &d.path,
+                    &rest,
                     matches!(kind, FsOperationKind::Copy | FsOperationKind::Move),
                 )?;
                 Ok::<_, CoreError>((root, path))
@@ -436,8 +445,16 @@ impl FsOperations {
                 ),
             )?;
             let root = match source {
-                FsSource::Session { session, .. } => {
-                    core.fs_root(SessionId(*session))?.canonicalize()?
+                // 원본을 품은 루트: `source_path` 가 같은 요청을 나눈 그 루트다
+                FsSource::Session {
+                    session,
+                    path: request,
+                } => {
+                    let (root, _) = core
+                        .fs_space(SessionId(*session))?
+                        .locate(request)?
+                        .into_under(request)?;
+                    root.canonicalize()?
                 }
                 _ => path
                     .parent()
@@ -779,7 +796,7 @@ impl Core {
             .cloned()
             .collect();
         for folder in folders {
-            if paths.iter().any(|p| p.starts_with(&folder.path)) {
+            if paths.iter().any(|p| folder.contains(p)) {
                 folder.sink.emit(CoreEvent::FolderChanged {
                     session: folder.id,
                     refs: false,

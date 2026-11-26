@@ -7,7 +7,7 @@ import {
 } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { App } from '../App';
 import { revealLabel } from '../features/project/file-actions-menu';
 import { getFolderStore, getWorkspaceStore, useAppStore } from '../store';
@@ -579,6 +579,12 @@ describe('커밋 영역 (W14)', () => {
     await tick();
     const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
     expect(dialog.querySelector('h2')?.textContent).toBe(S.folder.batch.pushTitle);
+    // 대상은 커밋된 저장소다 — 트리에서 고르지 않았으므로 `선택 N개` 가 아니라 `저장소 N개` (#7)
+    const copy = S.folder.batch;
+    expect(dialog.querySelector('p')?.textContent).toContain(
+      copy.pushMessage(copy.targets(S.folder.repos(2), 'auth-service, web-console')),
+    );
+    expect(dialog.textContent).not.toContain(copy.selected(2));
     expect(
       within(dialog)
         .getAllByRole('checkbox')
@@ -589,7 +595,135 @@ describe('커밋 영역 (W14)', () => {
     ]);
     act(() => fireEvent.submit(dialog.querySelector('form') as HTMLFormElement));
     await tick();
-    expect(batch).toHaveBeenCalledWith(id, { kind: 'push' }, [AUTH, WEB]);
+    expect(batch).toHaveBeenCalledWith(id, { kind: 'push', newUpstream: { remotes: [] } }, [
+      AUTH,
+      WEB,
+    ]);
+  });
+
+  it('Commit and Push… 는 업스트림이 없는 새 branch 도 끊기지 않는다: origin 을 새 업스트림으로 보여 보내고 결과에 구분한다', async () => {
+    const { mock, id } = await mountFolder();
+    const batch = vi.spyOn(mock, 'folderBatch');
+    // design-system-hotfix 는 업스트림이 없는 branch (hotfix/token-contrast) 다
+    clickCheck('design-system-hotfix');
+    await tick();
+    act(() => fireEvent.change(messageBox(), { target: { value: 'fix: 대비' } }));
+    act(() =>
+      fireEvent.click(
+        within(commitArea() as HTMLElement).getByRole('button', {
+          name: S.commitTool.commitAndPush,
+        }),
+      ),
+    );
+    await tick();
+    await tick();
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
+    const b = S.folder.batch;
+    expect(
+      within(dialog)
+        .getAllByRole<HTMLInputElement>('checkbox')
+        .map((x) => [x.closest('label')?.textContent, x.checked, x.disabled]),
+    ).toEqual([
+      [b.pushCommits('auth-service', 4), true, false],
+      [b.pushPublish('design-system-hotfix', 'origin/hotfix/token-contrast'), true, false],
+      [b.pushCommits('web-console', 2), true, false],
+    ]);
+    expect(dialog.querySelector('p')?.textContent).toContain(b.pushPublishNote);
+    act(() => fireEvent.submit(dialog.querySelector('form') as HTMLFormElement));
+    await tick();
+    const hotfix = `${FOLDER}/design-system-hotfix`;
+    expect(batch).toHaveBeenLastCalledWith(id, { kind: 'push', newUpstream: { remotes: [] } }, [
+      AUTH,
+      hotfix,
+      WEB,
+    ]);
+    // 결과 알림: 새 업스트림을 지정한 저장소를 따로 보인다
+    const toast = useAppStore.getState().toasts.at(-1);
+    expect(toast?.message).toContain(
+      `design-system-hotfix: ${b.upstreamSet('origin/hotfix/token-contrast')}`,
+    );
+    expect(toast?.message).toContain(b.resultPublished(2, 1, 0, 1));
+  });
+
+  it('폴더 탭의 ⌘⇧F·⌘T·⌘⇧K 는 툴바와 같은 일괄 흐름이다: fetch·pull 은 바로, push 는 체크 목록', async () => {
+    const { mock, id } = await mountFolder('project');
+    const batch = vi.spyOn(mock, 'folderBatch');
+    press('f', { ...MOD, shiftKey: true });
+    await tick();
+    expect(batch).toHaveBeenLastCalledWith(id, { kind: 'fetch', prune: true }, []);
+    press('t', MOD);
+    await tick();
+    expect(batch).toHaveBeenLastCalledWith(id, { kind: 'pull' }, []);
+    expect(batch).toHaveBeenCalledTimes(2);
+    press('k', { ...MOD, shiftKey: true });
+    await tick();
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
+    expect(dialog.querySelector('h2')?.textContent).toBe(S.folder.batch.pushTitle);
+    expect(batch).toHaveBeenCalledTimes(2);
+    act(() => fireEvent.click(within(dialog).getByRole('button', { name: S.confirm.cancel })));
+    await tick();
+    // 일괄 작업 중이면 단축키가 꺼진다 (툴바 단추와 같이)
+    act(() => getFolderStore(id)?.setState({ batchRunning: true }));
+    press('f', { ...MOD, shiftKey: true });
+    await tick();
+    expect(batch).toHaveBeenCalledTimes(2);
+  });
+
+  it('폴더 탭의 ⌘B·브랜치 만들기(팔레트)는 일괄 줄과 같은 입력 창이고, ⌘⇧E·⌘⇧T 는 폴더 루트를 연다', async () => {
+    const { mock, id } = await mountFolder('project');
+    const batch = vi.spyOn(mock, 'folderBatch');
+    // 외부 앱 열기는 앱 스토어의 동작을 바꿔 본다 (스토어가 만들 때 받은 클라이언트는 이 목이 아니다)
+    const originalOpenExternal = useAppStore.getState().openExternal;
+    const external = vi.fn(async (_kind: string, _path: string) => true);
+    act(() => useAppStore.setState({ openExternal: external }));
+    onTestFinished(() => useAppStore.setState({ openExternal: originalOpenExternal }));
+    const b = S.folder.batch;
+    const openDialog = () =>
+      document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
+    // ⌘B: 이름을 받는 일괄 branch 전환 (대상 = 고른 저장소, 없으면 전부)
+    press('b', MOD);
+    await tick();
+    let dialog = openDialog();
+    expect(dialog.querySelector('h2')?.textContent).toBe(b.checkoutTitle);
+    act(() =>
+      fireEvent.change(within(dialog).getByRole('textbox', { name: b.branchName }), {
+        target: { value: 'development' },
+      }),
+    );
+    act(() => fireEvent.submit(dialog.querySelector('form') as HTMLFormElement));
+    await tick();
+    expect(batch).toHaveBeenLastCalledWith(id, { kind: 'checkout', name: 'development' }, []);
+    // 브랜치 만들기는 기본 키가 없어 팔레트로: 같은 이름의 항목이 일괄 branch 만들기 창을 연다 (cmdk 가 고른 항목을
+    // 스크롤하므로 jsdom 에 없는 scrollIntoView 를 채운다)
+    Element.prototype.scrollIntoView ??= () => {};
+    act(() => useAppStore.getState().setPaletteOpen(true));
+    await tick();
+    try {
+      act(() => fireEvent.click(screen.getByRole('option', { name: S.actions.createBranch })));
+      await tick();
+    } finally {
+      act(() => useAppStore.getState().setPaletteOpen(false));
+    }
+    dialog = openDialog();
+    expect(dialog.querySelector('h2')?.textContent).toBe(b.branchTitle);
+    act(() => fireEvent.click(within(dialog).getByRole('button', { name: S.confirm.cancel })));
+    await tick();
+    // ⌘⇧E·⌘⇧T: 폴더 탭의 루트 (Project 트리에서 고른 것과 상관없이)
+    press('e', { ...MOD, shiftKey: true });
+    press('t', { ...MOD, shiftKey: true });
+    await tick();
+    expect(external.mock.calls).toEqual([
+      ['editor', FOLDER],
+      ['terminal', FOLDER],
+    ]);
+    // 일괄 작업 중이면 ⌘B 는 꺼지고 외부 앱 열기는 그대로다
+    act(() => getFolderStore(id)?.setState({ batchRunning: true }));
+    press('b', MOD);
+    press('e', { ...MOD, shiftKey: true });
+    await tick();
+    expect(document.querySelector('dialog[open]')).toBeNull();
+    expect(external).toHaveBeenCalledTimes(3);
+    expect(batch).toHaveBeenCalledTimes(1);
   });
 
   it('커밋하는 동안 체크와 버튼이 막힌다', async () => {
@@ -621,6 +755,171 @@ describe('커밋 영역 (W14)', () => {
   });
 });
 
+describe('저장소별 메시지·이 저장소만 커밋', () => {
+  const t = S.commitTool;
+  /** 커밋 영역의 대상 줄 펼침 단추 (이름 = 대상 줄 글자) */
+  const targetsToggle = (text: string) =>
+    within(commitArea() as HTMLElement).getByRole('button', { name: text });
+  /** 저장소별 메시지 떠 있는 창 */
+  const messagesPopup = () => screen.getByRole('dialog', { name: t.repoMessagesLabel });
+  /** 떠 있는 창의 그 저장소 줄 */
+  const messageRow = (name: string) => {
+    const row = within(messagesPopup())
+      .getAllByRole('listitem')
+      .find((li) => li.querySelector('span')?.textContent === name);
+    if (!row) {
+      throw new Error(`저장소 줄 없음: ${name}`);
+    }
+    return row;
+  };
+  /** 열린 메뉴의 항목 */
+  const menuItem = (name: string) => screen.getByRole('menuitem', { name });
+
+  it('대상이 둘이면 대상 줄을 눌러 저장소마다 메시지를 덮어쓰고, 다른 메시지 수를 누르기 전에 보인 뒤 그대로 넘긴다', async () => {
+    const { mock, id } = await mountFolder();
+    const commit = vi.spyOn(mock, 'folderCommit');
+    const base = t.targets(2, 6);
+    act(() => fireEvent.change(messageBox(), { target: { value: 'feat: 공통\n\n본문' } }));
+    // 기본 화면은 대상 줄 그대로다 (펼치기 전에는 떠 있는 창이 없다)
+    const toggle = targetsToggle(base);
+    expect(toggle.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('dialog', { name: t.repoMessagesLabel })).toBeNull();
+    act(() => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const inputs = within(messagesPopup()).getAllByRole<HTMLTextAreaElement>('textbox');
+    expect(inputs.map((i) => i.getAttribute('aria-label'))).toEqual([
+      t.repoMessage('auth-service'),
+      t.repoMessage('web-console'),
+    ]);
+    // 빈 칸은 공통 메시지의 첫 줄을 안내하고, 열면 첫 칸에 포커스가 간다
+    expect(inputs[0]?.placeholder).toBe(t.commonMessage('feat: 공통'));
+    expect(document.activeElement).toBe(inputs[0]);
+    act(() => fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'docs: 인증 안내' } }));
+    // 메시지가 다른 저장소 수를 대상 줄에, 저장소별 제목을 툴팁에 보인다
+    const text = `${base} · ${t.ownMessages(1)}`;
+    expect(targetsToggle(text).getAttribute('title')).toContain(
+      t.ownMessageLine('auth-service', 'docs: 인증 안내'),
+    );
+    act(() => {
+      fireEvent.keyDown(messagesPopup(), { key: 'Escape' });
+    });
+    expect(screen.queryByRole('dialog', { name: t.repoMessagesLabel })).toBeNull();
+    act(() => fireEvent.click(commitButton()));
+    await tick();
+    await tick();
+    expect(commit).toHaveBeenCalledWith(id, [AUTH, WEB], 'feat: 공통\n\n본문', false, [
+      { path: AUTH, message: 'docs: 인증 안내' },
+    ]);
+    // 대상이 모두 커밋되면 공통 메시지와 커밋된 저장소의 메시지가 빈다
+    expect(messageBox().value).toBe('');
+    expect(getWorkspaceStore(id)?.getState().commitRepoMessages).toEqual({});
+  });
+
+  it('공통 메시지가 비면 대상 모두에 자기 메시지가 있어야 커밋할 수 있다', async () => {
+    const { mock, id } = await mountFolder();
+    const commit = vi.spyOn(mock, 'folderCommit');
+    act(() => getWorkspaceStore(id)?.getState().setCommitRepoMessage(AUTH, 'feat: a'));
+    expect(commitButton().disabled).toBe(true);
+    expect(commitButton().getAttribute('title')).toBe(t.noMessage);
+    act(() => getWorkspaceStore(id)?.getState().setCommitRepoMessage(WEB, 'feat: w'));
+    expect(commitButton().disabled).toBe(false);
+    act(() => fireEvent.click(commitButton()));
+    await tick();
+    await tick();
+    expect(commit).toHaveBeenCalledWith(id, [AUTH, WEB], '', false, [
+      { path: AUTH, message: 'feat: a' },
+      { path: WEB, message: 'feat: w' },
+    ]);
+  });
+
+  it('저장소 줄의 "이 저장소만 커밋" 은 그 저장소만 같은 흐름으로 커밋하고 공통 메시지는 남은 대상에 남긴다. 대상이 하나면 대상 줄은 글자뿐이다', async () => {
+    const { mock, id } = await mountFolder();
+    const commit = vi.spyOn(mock, 'folderCommit');
+    act(() => fireEvent.change(messageBox(), { target: { value: 'fix: 웹' } }));
+    // 커밋되지 않을 저장소는 꺼지고 그 사유가 툴팁이다
+    fireEvent.contextMenu(crow('catalog-service'));
+    await tick();
+    expect(menuItem(t.commitOnly).getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem(t.commitOnly).getAttribute('title')).toBe(t.skip.inProgress);
+    expect(menuItem(t.commitOnlyAndPush).getAttribute('aria-disabled')).toBe('true');
+    act(() => {
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    });
+    await tick();
+    fireEvent.contextMenu(crow('web-console'));
+    await tick();
+    expect(menuItem(t.commitOnly).getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(menuItem(t.commitOnly));
+    await tick();
+    await tick();
+    expect(commit).toHaveBeenCalledWith(id, [WEB], 'fix: 웹', false);
+    // auth 가 아직 대상이라 공통 메시지는 남는다. 대상이 하나라 대상 줄은 펼침 단추가 아니다
+    expect(messageBox().value).toBe('fix: 웹');
+    const area = within(commitArea() as HTMLElement);
+    expect(area.getByText(t.targets(1, 2)).closest('button')).toBeNull();
+  });
+
+  it('"이 저장소만 커밋 후 푸시…" 는 그 저장소만 커밋하고 그 저장소로 push 체크 목록을 연다 (업스트림이 없으면 새 업스트림으로)', async () => {
+    const { mock, id } = await mountFolder();
+    const commit = vi.spyOn(mock, 'folderCommit');
+    const batch = vi.spyOn(mock, 'folderBatch');
+    const hotfix = `${FOLDER}/design-system-hotfix`;
+    // design-system-hotfix 는 업스트림이 없는 branch 다. stage 해서 대상으로 만든다
+    clickCheck('design-system-hotfix');
+    await tick();
+    act(() => fireEvent.change(messageBox(), { target: { value: 'fix: 대비' } }));
+    fireEvent.contextMenu(crow('design-system-hotfix'));
+    await tick();
+    fireEvent.click(menuItem(t.commitOnlyAndPush));
+    await tick();
+    await tick();
+    expect(commit).toHaveBeenCalledWith(id, [hotfix], 'fix: 대비', false);
+    // 남은 대상(auth·web)이 있어 공통 메시지는 남는다
+    expect(messageBox().value).toBe('fix: 대비');
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
+    const b = S.folder.batch;
+    expect(dialog.querySelector('h2')?.textContent).toBe(b.pushTitle);
+    expect(
+      within(dialog)
+        .getAllByRole('checkbox')
+        .map((x) => x.closest('label')?.textContent),
+    ).toEqual([b.pushPublish('design-system-hotfix', 'origin/hotfix/token-contrast')]);
+    act(() => fireEvent.submit(dialog.querySelector('form') as HTMLFormElement));
+    await tick();
+    expect(batch).toHaveBeenLastCalledWith(id, { kind: 'push', newUpstream: { remotes: [] } }, [
+      hotfix,
+    ]);
+  });
+
+  it('떠 있는 창의 "이 저장소만 커밋" 은 그 저장소의 자기 메시지로 커밋하고, 대상이 하나로 줄면 창이 닫힌다', async () => {
+    const { mock, id } = await mountFolder();
+    const commit = vi.spyOn(mock, 'folderCommit');
+    act(() => fireEvent.click(targetsToggle(t.targets(2, 6))));
+    const button = () =>
+      within(messageRow('web-console')).getByRole<HTMLButtonElement>('button', {
+        name: t.commitOnly,
+      });
+    // 공통 메시지도 자기 메시지도 없으면 꺼져 있다
+    expect(button().disabled).toBe(true);
+    expect(button().getAttribute('title')).toBe(t.noMessage);
+    act(() =>
+      fireEvent.change(within(messageRow('web-console')).getByRole('textbox'), {
+        target: { value: 'fix: 웹 표' },
+      }),
+    );
+    expect(button().disabled).toBe(false);
+    act(() => fireEvent.click(button()));
+    await tick();
+    await tick();
+    expect(commit).toHaveBeenCalledWith(id, [WEB], '', false, [
+      { path: WEB, message: 'fix: 웹 표' },
+    ]);
+    expect(getWorkspaceStore(id)?.getState().commitRepoMessages).toEqual({});
+    expect(screen.queryByRole('dialog', { name: t.repoMessagesLabel })).toBeNull();
+  });
+});
+
 describe('Commit 도구 창 → 작업 트리 diff 탭 (ED-05)', () => {
   it('파일을 누르면 그 저장소 세션으로 diff 탭을 연다 (작업 트리 쪽). 체크된 파일은 staged 쪽', async () => {
     const { mock, id } = await mountFolder();
@@ -648,6 +947,26 @@ describe('Commit 도구 창 → 작업 트리 diff 탭 (ED-05)', () => {
       expect.anything(),
     );
     expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('commit 메시지 칸의 Esc (#37)', () => {
+  it('메시지를 쓰는 중 Esc 는 열린 작업 트리 diff 탭을 닫지 않고, 입력란 밖의 Esc 는 닫는다', async () => {
+    const { id } = await mountFolder();
+    act(() => fireEvent.click(crow('orders.ts')));
+    await tick();
+    expect(getWorkspaceStore(id)?.getState().activeDocId).toBe(`worktreeDiff:${WEB}`);
+    act(() => fireEvent.change(messageBox(), { target: { value: 'fix: 주문' } }));
+    act(() => {
+      messageBox().focus();
+      fireEvent.keyDown(messageBox(), { key: 'Escape' });
+    });
+    await tick();
+    expect(getWorkspaceStore(id)?.getState().activeDocId).toBe(`worktreeDiff:${WEB}`);
+    expect(messageBox().value).toBe('fix: 주문');
+    press('Escape');
+    await tick();
+    expect(getWorkspaceStore(id)?.getState().activeDocId).not.toBe(`worktreeDiff:${WEB}`);
   });
 });
 
@@ -696,7 +1015,7 @@ describe('Commit 도구 창 파일 메뉴 (Finder·터미널·변경 되돌리�
     await vi.waitFor(() => expect(() => crow('orders.ts')).toThrow(), { timeout: 2000 });
   });
 
-  it('확인창에서 취소하면 부르지 않고, 저장소 줄은 저장소 탭 열기 뒤 Finder·터미널', async () => {
+  it('확인창에서 취소하면 부르지 않고, 저장소 줄은 이 저장소만 커밋 두 가지·저장소 탭 열기 뒤 Finder·터미널', async () => {
     const { mock } = await mountFolder();
     const rollback = vi.spyOn(mock, 'rollbackPaths');
     const terminal = vi.spyOn(originalClient, 'openExternal').mockResolvedValue();
@@ -712,7 +1031,13 @@ describe('Commit 도구 창 파일 메뉴 (Finder·터미널·변경 되돌리�
 
     fireEvent.contextMenu(crow('web-console'));
     await tick();
-    expect(menuLabels()).toEqual([S.project.openAsTab, revealLabel(), S.actions.openTerminal]);
+    expect(menuLabels()).toEqual([
+      S.commitTool.commitOnly,
+      S.commitTool.commitOnlyAndPush,
+      S.project.openAsTab,
+      revealLabel(),
+      S.actions.openTerminal,
+    ]);
     fireEvent.click(screen.getByRole('menuitem', { name: S.actions.openTerminal }));
     await tick();
     expect(terminal).toHaveBeenCalledWith('terminal', WEB);

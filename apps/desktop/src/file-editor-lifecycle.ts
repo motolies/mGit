@@ -1,17 +1,20 @@
 import { flushSettings, hasPendingSettings } from '@mgit/storage';
+import { flushEditorTabSaves } from './store/editor-tabs-persist';
 import { guardFileEditorClose } from './store/file-editor-close';
 import { fileEditors } from './store/file-editor-store';
 
 /** 네이티브 창 닫기와 앱 종료 모두 저장 확인을 거친 뒤 창을 파괴한다. */
 export async function installFileEditorLifecycle(native: boolean): Promise<void> {
-  const refresh = () => {
-    void fileEditors.refreshAll();
-  };
-  window.addEventListener('focus', refresh);
+  // 창으로 돌아오면 모든 열린 파일의 원문을 다시 읽고, 2초 주기는 파일 표지가 바뀐 것만 읽는다 (N6)
+  window.addEventListener('focus', () => {
+    void fileEditors.refreshAll({ force: true });
+  });
   window.setInterval(() => {
-    if (document.visibilityState === 'visible') refresh();
+    if (document.visibilityState === 'visible') void fileEditors.refreshAll();
   }, 2000);
   window.addEventListener('beforeunload', (event) => {
+    // 기다리던 편집기 탭 저장을 설정에 먼저 넣는다 (아래 확인이 설정 저장 대기를 함께 본다)
+    flushEditorTabSaves();
     if (!fileEditors.hasDirty() && !hasPendingSettings()) return;
     event.preventDefault();
     event.returnValue = '';
@@ -29,6 +32,7 @@ export async function installFileEditorLifecycle(native: boolean): Promise<void>
     closing = true;
     try {
       if (await guardFileEditorClose()) {
+        flushEditorTabSaves();
         await flushSettings();
         await current.destroy();
       }

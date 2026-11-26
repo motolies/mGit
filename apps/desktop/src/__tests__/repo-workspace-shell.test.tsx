@@ -276,6 +276,42 @@ describe('저장소 탭의 화면 틀 (WS-15, W21)', () => {
     expect(inArea('editor').getByRole('button', { name: S.fileView.blame })).toBeTruthy();
   });
 
+  it('Project 트리 거르기 (R1): 이름 필터는 펼치지 않은 폴더의 파일도 찾고, "변경된 파일만" 은 이 저장소의 변경만 보인다', async () => {
+    await mountRepo();
+    await tick();
+    const names = () =>
+      inArea('project')
+        .getAllByRole('treeitem')
+        .map((r) => r.querySelector('span[title]')?.textContent);
+    // 거르기 전 맨 위 항목 중 변경이 없는 것 (거르면 사라져야 한다)
+    const plain = inArea('project')
+      .getAllByRole('treeitem')
+      .filter((r) => r.getAttribute('aria-level') === '2' && !r.hasAttribute('data-status'))
+      .map((r) => r.querySelector('span[title]')?.textContent);
+    expect(plain.length).toBeGreaterThan(0);
+    const input = inArea('project').getByRole('searchbox', { name: S.project.filter.label });
+    fireEvent.change(input, { target: { value: 'paymentstep' } });
+    await tick();
+    await tick();
+    expect(names()).toEqual([
+      'storefront-web',
+      'src',
+      'features',
+      'checkout',
+      'steps',
+      'PaymentStep.tsx',
+    ]);
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(inArea('project').getByRole('button', { name: S.project.filter.changedOnly }));
+    await tick();
+    const shown = names();
+    expect(shown).toContain('package.json');
+    expect(shown).toContain('CartBadge.tsx');
+    // 지운 파일은 디스크에 없어 보이지 않고, 변경이 없는 항목도 숨는다
+    expect(shown).not.toContain('CartSummary.test.tsx');
+    for (const name of plain) expect(shown).not.toContain(name);
+  });
+
   it('에디터 공간: 세션 diff 문서가 탭으로 생기고 탭 × 로 닫으면 세션 슬롯이 빈다. 직전 문서로 돌아간다', async () => {
     const { st, ws } = await mountRepo();
     await tick();

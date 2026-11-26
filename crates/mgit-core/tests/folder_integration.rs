@@ -321,7 +321,9 @@ async fn cancellation_before_dispatch_skips_all_and_empty_approval_is_rejected()
         )
         .await
         .unwrap();
-    assert_eq!(result.skipped, 2);
+    // 시작 전에 취소된 저장소는 건너뜀이 아니라 취소됨으로 센다
+    assert_eq!((result.skipped, result.cancelled), (0, 2));
+    assert!(result.results.iter().all(|r| r.cancelled));
     assert_eq!(result.failed, 0);
     assert_eq!([a.head(), b.head()], before);
 }

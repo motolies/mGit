@@ -1,11 +1,16 @@
 import {
+  type BatchResult,
+  type CloneBatchRequest,
   type CloneRequest,
   type DeviceCodes,
   type ExternalApps,
   type ExternalKind,
+  type FolderOpened,
   type FoundRepo,
   type GitignoreTemplate,
   GraphRangeCache,
+  type GroupListItem,
+  type GroupUpdate,
   type HostingAccount,
   type HostingUrls,
   type HostKind,
@@ -24,10 +29,25 @@ import {
 import { getLocale, type Locale, S } from '@mgit/ui';
 import { create, type StoreApi } from 'zustand';
 import { commitRevealStep, EMPTY_COMMIT_REVEAL } from './commit-reveal';
+import {
+  existingFiles,
+  readSavedEditorTabs,
+  restoreEditorTabs,
+  retainSavedEditorTabs,
+  type SavedEditorTabs,
+  watchEditorTabs,
+  writeSavedEditorTabs,
+} from './editor-tabs-persist';
 import { describeError } from './errors';
 import { guardFileEditorClose } from './file-editor-close';
 import { fileEditors } from './file-editor-store';
 import { createFolderStore } from './folder-store';
+import {
+  finishOpenGroupEdit,
+  groupPathMove,
+  memberChanges,
+  prepareOpenGroupEdit,
+} from './group-reshape';
 import {
   applyLanguage,
   type LanguagePreference,
@@ -38,6 +58,7 @@ import {
 } from './language';
 import { type Notice, notifyHub, type ToastKind } from './notify';
 import { readPref, writePref } from './prefs';
+import { watchRecentFiles } from './recent-files';
 import {
   activeRepoLocked,
   asBorrowed,
@@ -56,6 +77,8 @@ import {
   sessionHasWork,
   withoutSession,
 } from './repo-sessions';
+import { forgetRootPrefs, moveRootPrefPaths } from './root-prefs';
+import { groupIdOf, groupKey } from './root-space';
 import { type SessionCloseMode, type SessionClosePlan, sessionCloseTargets } from './session-close';
 import {
   disposeFolder,
@@ -68,6 +91,7 @@ import {
   registerSession,
   registerWorkspace,
 } from './session-registry';
+import { tabSpace } from './session-space';
 import {
   createSessionStore,
   type OperationState,
@@ -284,6 +308,13 @@ export function restoreLeftTool(saved: { tool?: unknown }): LeftTool | null {
   return LEFT_TOOLS.find((t) => t === saved.tool) ?? DEFAULT_LEFT_TOOL;
 }
 
+/**
+ * 그룹 대화상자 요청: 새 그룹(이름·처음 넣을 경로를 미리 채울 수 있다 — "이 폴더로 그룹 만들기") 또는 그룹 편집
+ */
+export type GroupDialogRequest =
+  | { mode: 'create'; name?: string; paths?: readonly string[] }
+  | { mode: 'edit'; id: string };
+
 /** 탭 하나의 직렬화 가능한 메타데이터. 나머지 상태는 세션·폴더 스토어에 있다 */
 export interface SessionMeta {
   id: SessionId;
@@ -315,8 +346,8 @@ export function shownDock(
 
 export interface AppStoreDeps {
   client: IpcClient;
-  /** 폴더 선택 대화상자. 취소하면 null */
-  pickDirectory: (title: string) => Promise<string | null>;
+  /** 폴더 선택 대화상자. `title` 은 창 제목 그대로다 (부르는 흐름이 용도에 맞게 정한다). 취소하면 null */
+  pickDirectory: (title: string, defaultPath?: string) => Promise<string | null>;
 }
 
 export interface AppStore {
@@ -405,7 +436,8 @@ export interface AppStore {
   profiles: Profile[];
 
   /** 폴더 선택 대화상자 */
-  pickDirectory(title: string): Promise<string | null>;
+  /** 폴더 선택 창 (`defaultPath` 가 있으면 그 폴더에서 연다) */
+  pickDirectory(title: string, defaultPath?: string): Promise<string | null>;
   replyCredential(secret: string | null, remember: boolean): Promise<void>;
   /** 키체인에 저장한 대상의 자격 증명을 지운다 (AU-03). 성공 여부를 돌려준다 */
   credentialForget(target: string): Promise<boolean>;
@@ -459,6 +491,29 @@ export interface AppStore {
   ): Promise<SessionId | null>;
   /** 멀티 저장소 폴더를 연다 (MR-01) */
   openFolderAt(path: string, options?: { activate: () => boolean }): Promise<void>;
+  /**
+   * 가상 그룹을 연다 (MR-13). 탭은 폴더 탭(`kind: 'folder'`)이고 경로가 `mgit-group:<id>`, 이름이 그룹 이름이다. 이미 열려
+   * 있으면 그 탭으로 간다
+   */
+  openGroupAt(id: string, options?: { activate: () => boolean }): Promise<void>;
+  /** 그룹 목록 (홈의 그룹 묶음·팔레트). 고정 먼저, 그다음 최근에 연 순 */
+  groups: GroupListItem[];
+  loadGroups(): Promise<void>;
+  /** 그룹 대화상자 (새 그룹·그룹 편집). null 이면 닫힘 */
+  groupDialog: GroupDialogRequest | null;
+  setGroupDialog(request: GroupDialogRequest | null): void;
+  /** 새 그룹을 만들고 연다. 실패하면 사유를 `lastError` 에 두고 false */
+  createGroup(name: string, paths: readonly string[]): Promise<boolean>;
+  /**
+   * 그룹을 고친다 (M4). 열린 그룹도 탭을 연 채로 고친다: 빠지는 멤버(뺀 것·위치를 바꾼 것)의 파일 탭은 초안 확인 뒤
+   * 닫고(취소하면 고치지 않고 false), 별칭이 바뀐 멤버의 문서·파일 탭·트리 경로는 새 별칭으로 옮긴다. 저장한 기록(편집기 탭
+   * 복원·최근 파일)의 경로도 옮긴다. 코어가 거부하면 알림을 띄우고 false
+   */
+  updateGroup(id: string, update: GroupUpdate): Promise<boolean>;
+  /**
+   * 그룹을 지운다. 열린 그룹이면 그 탭을 먼저 닫는다 (취소하면 지우지 않고 false). 지우면 그 그룹 키의 화면 기록도 지운다
+   */
+  deleteGroup(id: string): Promise<boolean>;
   /**
    * 폴더 탭에서 저장소의 세션 기능을 쓴다 (W13): 그 저장소가 활성 저장소가 되고(다른 저장소의 범위 세션이 바쁘면
    * 거부), 장부에 세션이 있으면 그것을, 없으면 연다 — 상한(3)이면 가장 오래 안 쓴 한가한 세션을 먼저 놓는다.
@@ -561,6 +616,12 @@ export interface AppStore {
   scanFolder(): Promise<void>;
   /** clone 하고 성공하면 연다 */
   cloneRepository(request: CloneRequest): Promise<boolean>;
+  /**
+   * 여러 저장소를 한 상위 폴더 아래에 clone 한다 (진행·취소는 단일 clone 과 같은 `cloneOp`). 끝나면 상위 폴더를 폴더 탭으로
+   * 열고(이미 열려 있으면 그 탭을 보이고 다시 스캔) 그 폴더의 작업 기록에 결과를 남긴다. 실행하지 못했으면 null (사유는
+   * `lastError`)
+   */
+  cloneRepositories(request: CloneBatchRequest): Promise<BatchResult | null>;
   cancelClone(): Promise<void>;
   /** 새 저장소를 만들고 연다 (REPO-04) */
   initRepository(path: string, defaultBranch: string, template: string | null): Promise<boolean>;
@@ -823,7 +884,7 @@ export function createRepoWorkspace(
 }
 
 export function createAppStore(deps: AppStoreDeps) {
-  const store = create<AppStore>()((set, get) => {
+  const store = create<AppStore>()((set, get, api) => {
     // 일괄 문서 닫기는 기존 충돌 확인의 선택이 끝난 뒤 다음 문서로 진행한다.
     let conflictCloseResolve: ((allowed: boolean) => void) | null = null;
     /**
@@ -837,6 +898,15 @@ export function createAppStore(deps: AppStoreDeps) {
       if (event.type === 'statusChanged') {
         for (const { folder, repoPath } of foldersUsing(get().repoSessions, event.session)) {
           getFolderStore(folder)?.getState().refreshRepos([repoPath]);
+        }
+      }
+      // 열린 그룹의 이름이 그 자리에서 바뀌었다 (M4): 탭 이름도 바꾼다
+      if (event.type === 'groupChanged') {
+        const meta = get().sessions[event.session];
+        if (meta && meta.name !== event.group.name) {
+          set({
+            sessions: { ...get().sessions, [event.session]: { ...meta, name: event.group.name } },
+          });
         }
       }
     };
@@ -854,6 +924,53 @@ export function createAppStore(deps: AppStoreDeps) {
     let navigationVersion = 0;
     let directoryPicking = false;
 
+    // 탭별 편집기 감시: 최근 파일 기록과 파일 탭 저장. 저장은 재시작 복원이 끝난 뒤에 건다
+    const editorWatches = new Map<SessionId, { recent: () => void; tabs?: () => void }>();
+    // 앱을 켤 때 다시 여는 루트 (그 탭의 파일 탭 저장은 복원을 마친 뒤 시작한다 — 빈 상태로 덮지 않게)
+    let restoringRoots: ReadonlySet<string> = new Set();
+
+    /** 탭의 파일 탭 저장을 건다 (이미 걸려 있으면 그대로) */
+    const watchTabsOf = (id: SessionId, root: string) => {
+      const entry = editorWatches.get(id);
+      const ws = getWorkspaceStore(id);
+      if (entry && !entry.tabs && ws) entry.tabs = watchEditorTabs(root, ws);
+    };
+
+    /** 탭의 편집기 감시를 푼다 (기다리던 저장은 버린다) */
+    const stopEditorWatch = (id: SessionId) => {
+      const entry = editorWatches.get(id);
+      entry?.recent();
+      entry?.tabs?.();
+      editorWatches.delete(id);
+    };
+
+    /** 탭의 편집기 감시를 건다. 다시 여는 중인 루트는 최근 파일만 먼저 본다 */
+    const watchEditorOf = (meta: SessionMeta) => {
+      const ws = getWorkspaceStore(meta.id);
+      if (!ws) return;
+      stopEditorWatch(meta.id);
+      editorWatches.set(meta.id, { recent: watchRecentFiles(meta.path, ws) });
+      if (!restoringRoots.has(meta.path)) watchTabsOf(meta.id, meta.path);
+    };
+
+    /**
+     * 재시작 뒤 탭 하나의 파일 탭을 다시 연다. 파일이 있는지는 부모 디렉터리 나열로만 보고, 실패하면 그 탭은 건너뛴다.
+     * 끝나면(실패해도) 그 탭의 저장을 건다. 그사이 탭이 닫혔으면 아무것도 하지 않는다
+     */
+    const restoreTabsOf = async (id: SessionId, root: string, saved: SavedEditorTabs | null) => {
+      const ws = getWorkspaceStore(id);
+      if (ws && saved) {
+        try {
+          await restoreEditorTabs(ws, saved, (paths) =>
+            existingFiles((dir, limit) => deps.client.fsListDir(id, dir, limit), paths),
+          );
+        } catch {
+          // 복원하지 못하면 빈 탭으로 둔다
+        }
+      }
+      if (get().sessions[id]?.path === root && getWorkspaceStore(id) === ws) watchTabsOf(id, root);
+    };
+
     /** 탭을 등록하고 활성화한다. */
     const addTab = (meta: SessionMeta, activate = true) => {
       set({
@@ -863,6 +980,104 @@ export function createAppStore(deps: AppStoreDeps) {
         ...(activate ? { homeVisible: false, homeReturnSessionId: null } : {}),
       });
       persistTabs();
+      watchEditorOf(meta);
+    };
+
+    /**
+     * 폴더 세션 탭을 연다 (폴더·가상 그룹 공용): `open` 이 코어에서 세션을 열고, 이미 탭이 있으면 그 탭으로 간다. 폴더·
+     * 워크스페이스 스토어를 만들어 등록하고 탭을 더한다. 그룹이면 탭 이름이 그룹 이름이다 (경로는 `mgit-group:<id>`)
+     */
+    const openFolderTab = async (
+      open: (onEvent: (event: SessionEvent) => void) => Promise<FolderOpened>,
+      options?: { activate: () => boolean },
+    ) => {
+      const version = navigationVersion;
+      const activate = () => version === navigationVersion && options?.activate() !== false;
+      set({ isOpening: true, lastError: null });
+      const { onEvent, flush } = bufferedEvents();
+      try {
+        const opened = await open(onEvent);
+        const id = opened.session;
+        if (get().sessions[id]) {
+          if (activate())
+            set({ activeSessionId: id, homeVisible: false, homeReturnSessionId: null });
+          flush();
+          return;
+        }
+        const folderStore = createFolderStore(opened, deps.client);
+        registerFolder(id, folderStore);
+        // 문서가 열리면 본문을 덮은 아래 도구 창(최대화)을 푼다 (WS-03). 범위 세션이 바쁘면 활성 저장소를 잠근다.
+        // 세션 문서를 닫으면 그 저장소 세션의 슬롯을 비운다 (W14 작업 트리 diff, W15 충돌 — 초안이 있으면 확인)
+        const wsStore = createWorkspaceStore('folder', {
+          beforeCloseFile: (path) => guardFileEditorClose([{ session: id, path }]),
+          onDocOpened: () => get().setDockMaximized(false),
+          activeRepoLocked: () => folderActiveRepoLocked(id),
+          closeSessionDoc: (doc) =>
+            doc.kind === 'conflict'
+              ? get().closeRepoConflict(id, doc.repoPath)
+              : get().closeRepoDiff(id, doc.repoPath),
+        });
+        registerWorkspace(id, wsStore);
+        // 재스캔으로 저장소 목록이 바뀌면 장부와 활성 저장소를 맞춘다 (화면이 없는 숨은 탭에서도). 작업 트리 diff
+        // 탭을 보면 그 세션을 "방금 썼다"로 고친다 (상한에서 놓을 세션 고르기, W14)
+        const unwatchRepos = folderStore.subscribe((now, before) => {
+          if (now.repos !== before.repos) {
+            syncFolderRepos(id, now.repos);
+          }
+        });
+        const unwatchDocs = wsStore.subscribe((now, before) => {
+          if (now.activeDocId !== before.activeDocId) {
+            touchShown(id);
+          }
+        });
+        folderRepoWatches.set(id, () => {
+          unwatchRepos();
+          unwatchDocs();
+        });
+        addTab(
+          {
+            id,
+            kind: 'folder',
+            path: opened.path,
+            name: opened.group?.name ?? repoNameOf(opened.path),
+            parent: null,
+          },
+          activate(),
+        );
+        flush();
+        void get().loadRecent();
+      } catch (e) {
+        set({ lastError: describeError(e) });
+      } finally {
+        set({ isOpening: false });
+      }
+    };
+
+    /** 그 그룹을 연 탭의 세션 id (열려 있지 않으면 null) */
+    const openGroupSession = (id: string): SessionId | null => {
+      const key = groupKey(id);
+      const meta = Object.values(get().sessions).find((m) => m.path === key);
+      return meta?.id ?? null;
+    };
+
+    /**
+     * 탭 닫기를 사용자 닫기와 같은 길(잃는 것이 있으면 확인, 편집기 초안 확인)로 요청하고 끝날 때까지 기다린다. 닫혔으면
+     * true, 확인을 취소했거나 다른 닫기가 도는 중이면 false. 코어 세션 닫기까지 끝난 뒤에 돌아온다
+     */
+    const closeTabAndWait = async (id: SessionId): Promise<boolean> => {
+      if (get().closeTabsRunning) return false;
+      await get().requestCloseSession(id);
+      if (get().closeTabsRunning) {
+        await new Promise<void>((resolve) => {
+          const stop = api.subscribe((s) => {
+            if (!s.closeTabsRunning) {
+              stop();
+              resolve();
+            }
+          });
+        });
+      }
+      return !get().sessions[id];
     };
 
     /** 보이는 자격 증명 요청의 만료 타이머 */
@@ -903,6 +1118,66 @@ export function createAppStore(deps: AppStoreDeps) {
         noteCredentialExpired(req);
       }
       showNextCredential();
+    };
+
+    /**
+     * clone 작업의 operation 이벤트(세션 0)를 `cloneOp` 에 싣는다 — 단일 clone 과 여러 저장소 clone 이 같이 쓴다 (시작 화면·
+     * 툴바의 진행·취소 표시)
+     */
+    const trackCloneOp = (event: SessionEvent) => {
+      const op = get().cloneOp;
+      switch (event.type) {
+        case 'operationStarted':
+          set({
+            cloneOp: {
+              id: event.opId,
+              kind: event.kind,
+              label: event.label,
+              phase: '',
+              percent: null,
+              message: '',
+              output: [],
+              done: false,
+              ok: false,
+              cancelled: false,
+              lockLeft: false,
+              startedAt: Date.now(),
+            },
+          });
+          return;
+        case 'operationProgress':
+          if (op) {
+            set({
+              cloneOp: {
+                ...op,
+                phase: event.phase,
+                percent: event.percent ?? null,
+                message: event.message,
+              },
+            });
+          }
+          return;
+        case 'operationOutput':
+          if (op) {
+            set({ cloneOp: { ...op, output: [...op.output.slice(-199), event.text] } });
+          }
+          return;
+        case 'operationFinished':
+          if (op) {
+            set({
+              cloneOp: {
+                ...op,
+                done: true,
+                ok: event.ok,
+                cancelled: event.cancelled,
+                message: event.message,
+              },
+            });
+          }
+          return;
+        default:
+          return;
+      }
     };
 
     /** 코어가 묻는 자격 증명을 받는다. 앞 요청이 있으면 차례를 기다린다 */
@@ -1495,6 +1770,8 @@ export function createAppStore(deps: AppStoreDeps) {
       terminals: [],
       activeTerminal: null,
       recent: [],
+      groups: [],
+      groupDialog: null,
       cloneOp: null,
       templates: [],
       openingExternal: [],
@@ -1517,8 +1794,10 @@ export function createAppStore(deps: AppStoreDeps) {
       hostingAccounts: [],
       profiles: [],
 
-      pickDirectory(title) {
-        return deps.pickDirectory(title);
+      pickDirectory(title, defaultPath) {
+        return defaultPath === undefined
+          ? deps.pickDirectory(title)
+          : deps.pickDirectory(title, defaultPath);
       },
 
       async replyCredential(secret, remember) {
@@ -1774,6 +2053,7 @@ export function createAppStore(deps: AppStoreDeps) {
           return;
         }
         await get().loadRecent();
+        void get().loadGroups();
         loadTemplates();
         // 콜드 스타트 탭 복원 → 시작 인자 → 두 번째 실행의 열기 요청
         let restored: string[] = [];
@@ -1782,7 +2062,22 @@ export function createAppStore(deps: AppStoreDeps) {
         } catch {
           // 저장소를 못 읽으면 빈 상태로 시작
         }
-        await get().openPaths(restored);
+        // 각 탭의 파일 탭: 저장해 둔 것을 먼저 읽어 두고, 다시 열지 못한 루트의 기록은 지운다. 파일 탭은 기다리지
+        // 않고 뒤에서 연다 (시작을 늦추지 않게)
+        const savedTabs = new Map(restored.map((root) => [root, readSavedEditorTabs(root)]));
+        restoringRoots = new Set(restored);
+        try {
+          await get().openPaths(restored);
+        } finally {
+          restoringRoots = new Set();
+        }
+        const reopened = get().sessionOrder.flatMap((id) => {
+          const meta = get().sessions[id];
+          return meta && savedTabs.has(meta.path) ? [meta] : [];
+        });
+        retainSavedEditorTabs(reopened.map((meta) => meta.path));
+        for (const meta of reopened)
+          void restoreTabsOf(meta.id, meta.path, savedTabs.get(meta.path) ?? null);
         try {
           const startup = await deps.client.takeStartupPaths();
           await get().openPaths(startup);
@@ -1835,7 +2130,7 @@ export function createAppStore(deps: AppStoreDeps) {
         const version = navigationVersion;
         set({ isOpening: true, lastError: null });
         try {
-          const path = await deps.pickDirectory('open');
+          const path = await deps.pickDirectory(S.toolbar.openRepo);
           if (path)
             await get().openRepositoryAt(path, null, {
               activate: () => version === navigationVersion,
@@ -1905,6 +2200,9 @@ export function createAppStore(deps: AppStoreDeps) {
           }
           flush();
           void get().loadRecent();
+          // 보관 기간이 지난 백업 ref·폐기 백업을 조용히 정리한다 (#18·#26). 코어가 작업 트리마다 하루 한 번만 돌고,
+          // 탭 열기를 기다리게 하지 않으며 실패해도 알리지 않는다
+          void deps.client.pruneBackupsDaily(id).catch(() => {});
           return id;
         } catch (e) {
           const err = toIpcError(e);
@@ -1922,73 +2220,93 @@ export function createAppStore(deps: AppStoreDeps) {
         }
       },
 
-      async openFolderAt(path, options) {
-        const version = navigationVersion;
-        const activate = () => version === navigationVersion && options?.activate() !== false;
-        set({ isOpening: true, lastError: null });
-        const { onEvent, flush } = bufferedEvents();
-        try {
-          const opened = await deps.client.openFolder(path, onEvent);
-          const id = opened.session;
-          if (get().sessions[id]) {
-            if (activate())
-              set({ activeSessionId: id, homeVisible: false, homeReturnSessionId: null });
-            flush();
-            return;
-          }
-          const folderStore = createFolderStore(opened, deps.client);
-          registerFolder(id, folderStore);
-          // 문서가 열리면 본문을 덮은 아래 도구 창(최대화)을 푼다 (WS-03). 범위 세션이 바쁘면 활성 저장소를 잠근다.
-          // 세션 문서를 닫으면 그 저장소 세션의 슬롯을 비운다 (W14 작업 트리 diff, W15 충돌 — 초안이 있으면 확인)
-          const wsStore = createWorkspaceStore('folder', {
-            beforeCloseFile: (path) => guardFileEditorClose([{ session: id, path }]),
-            onDocOpened: () => get().setDockMaximized(false),
-            activeRepoLocked: () => folderActiveRepoLocked(id),
-            closeSessionDoc: (doc) =>
-              doc.kind === 'conflict'
-                ? get().closeRepoConflict(id, doc.repoPath)
-                : get().closeRepoDiff(id, doc.repoPath),
-          });
-          registerWorkspace(id, wsStore);
-          // 재스캔으로 저장소 목록이 바뀌면 장부와 활성 저장소를 맞춘다 (화면이 없는 숨은 탭에서도). 작업 트리 diff
-          // 탭을 보면 그 세션을 "방금 썼다"로 고친다 (상한에서 놓을 세션 고르기, W14)
-          const unwatchRepos = folderStore.subscribe((now, before) => {
-            if (now.repos !== before.repos) {
-              syncFolderRepos(id, now.repos);
-            }
-          });
-          const unwatchDocs = wsStore.subscribe((now, before) => {
-            if (now.activeDocId !== before.activeDocId) {
-              touchShown(id);
-            }
-          });
-          folderRepoWatches.set(id, () => {
-            unwatchRepos();
-            unwatchDocs();
-          });
-          addTab(
-            {
-              id,
-              kind: 'folder',
-              path: opened.path,
-              name: repoNameOf(opened.path),
-              parent: null,
-            },
-            activate(),
-          );
-          flush();
-          void get().loadRecent();
-        } catch (e) {
-          set({ lastError: describeError(e) });
-        } finally {
-          set({ isOpening: false });
-        }
+      openFolderAt(path, options) {
+        return openFolderTab((onEvent) => deps.client.openFolder(path, onEvent), options);
+      },
+
+      async openGroupAt(id, options) {
+        await openFolderTab((onEvent) => deps.client.openGroup(id, onEvent), options);
+        // 마지막 연 시각이 바뀌었다 (홈의 그룹 묶음 순서)
+        void get().loadGroups();
       },
 
       async openPaths(paths) {
         for (const p of paths) {
-          await get().openRepositoryAt(p);
+          // 저장한 탭 목록의 그룹 키(`mgit-group:<id>`)는 그룹으로, 나머지는 경로로 연다
+          const group = groupIdOf(p);
+          if (group !== null) {
+            await get().openGroupAt(group);
+          } else {
+            await get().openRepositoryAt(p);
+          }
         }
+      },
+
+      async loadGroups() {
+        try {
+          set({ groups: await deps.client.groupsList() });
+        } catch {
+          // 그룹 목록은 없어도 된다 (홈에 빈 묶음)
+        }
+      },
+
+      setGroupDialog(request) {
+        set({ groupDialog: request, lastError: null });
+      },
+
+      async createGroup(name, paths) {
+        try {
+          const created = await deps.client.groupCreate(name, paths);
+          await get().loadGroups();
+          await get().openGroupAt(created.id);
+          return true;
+        } catch (e) {
+          set({ lastError: describeError(e) });
+          return false;
+        }
+      },
+
+      async updateGroup(id, update) {
+        // 열린 그룹은 탭을 연 채로 고친다 (M4): 빠지는 멤버의 파일 탭은 먼저 초안 확인 뒤 닫고(취소하면 고치지 않는다),
+        // 별칭이 바뀌는 멤버의 문서는 고치는 동안 멈춘다. 고치기 전 멤버는 목록에서, 아직 못 읽었으면 열린 탭의 모습에서 본다
+        const open = openGroupSession(id);
+        const before =
+          get().groups.find((g) => g.id === id)?.members ??
+          (open === null ? undefined : getFolderStore(open)?.getState().group?.members) ??
+          [];
+        const changes = memberChanges(before, update.members);
+        const edit = open === null ? null : await prepareOpenGroupEdit(open, changes);
+        if (open !== null && edit === null) return false;
+        let ok = true;
+        try {
+          await deps.client.groupUpdate(id, update);
+        } catch (e) {
+          ok = false;
+          get().notice({ kind: 'error', title: S.group.updateFailed, message: describeError(e) });
+        }
+        if (edit) finishOpenGroupEdit(edit, ok);
+        // 저장한 기록(편집기 탭 복원·최근 파일)의 경로도 새 별칭으로 옮긴다 (닫힌 그룹이어도)
+        if (ok) moveRootPrefPaths(groupKey(id), groupPathMove(changes));
+        await get().loadGroups();
+        return ok;
+      },
+
+      async deleteGroup(id) {
+        const open = openGroupSession(id);
+        if (open !== null && !(await closeTabAndWait(open))) {
+          return false;
+        }
+        try {
+          await deps.client.groupDelete(id);
+        } catch (e) {
+          set({ lastError: describeError(e) });
+          return false;
+        } finally {
+          await get().loadGroups();
+        }
+        // 지운 그룹 키의 화면 기록(탭 복원·최근 파일·열 너비·즐겨찾기)도 지운다. 폴더 설정은 코어가 지웠다
+        forgetRootPrefs(groupKey(id));
+        return true;
       },
 
       withRepoSession(folder, repoPath, run) {
@@ -2136,6 +2454,9 @@ export function createAppStore(deps: AppStoreDeps) {
             meta.kind === 'folder' ? otherLedgers : withoutSession(current.repoSessions, id),
         });
         if (!approved) persistTabs();
+        // 사용자가 탭을 닫았으니 다음에 다시 켜도 그 파일 탭을 되살리지 않는다 (앱 종료는 이 길을 지나지 않는다)
+        stopEditorWatch(id);
+        writeSavedEditorTabs(meta.path, null);
         disposeWorkspace(id);
         fileEditors.releaseSession(id);
         folderRepoWatches.get(id)?.();
@@ -2284,10 +2605,12 @@ export function createAppStore(deps: AppStoreDeps) {
 
       openTerminal(cwd, title, initialInput) {
         const st = get();
+        // 위치를 주지 않으면 활성 탭 공간의 디렉터리(저장소 작업 트리·폴더 루트). 디렉터리가 없는 공간(가상 그룹)은 그 탭의
+        // 활성 저장소, 그것도 없으면 홈
+        const active = st.activeSessionId !== null ? st.sessions[st.activeSessionId] : undefined;
+        const activeRepo = active ? getWorkspaceStore(active.id)?.getState().activeRepo : null;
         const dir =
-          cwd ??
-          (st.activeSessionId !== null ? st.sessions[st.activeSessionId]?.path : undefined) ??
-          '~';
+          cwd ?? (active ? tabSpace(active.id, active.path)?.dir : undefined) ?? activeRepo ?? '~';
         const id = ++terminalSeq;
         set({
           terminals: [
@@ -2372,7 +2695,7 @@ export function createAppStore(deps: AppStoreDeps) {
       },
 
       async scanFolder() {
-        const root = await deps.pickDirectory('scan');
+        const root = await deps.pickDirectory(S.home.scanTitle);
         if (!root) {
           return;
         }
@@ -2389,63 +2712,8 @@ export function createAppStore(deps: AppStoreDeps) {
           return false;
         }
         set({ lastError: null });
-        const onEvent = (event: SessionEvent) => {
-          const op = get().cloneOp;
-          switch (event.type) {
-            case 'operationStarted':
-              set({
-                cloneOp: {
-                  id: event.opId,
-                  kind: event.kind,
-                  label: event.label,
-                  phase: '',
-                  percent: null,
-                  message: '',
-                  output: [],
-                  done: false,
-                  ok: false,
-                  cancelled: false,
-                  lockLeft: false,
-                  startedAt: Date.now(),
-                },
-              });
-              return;
-            case 'operationProgress':
-              if (op) {
-                set({
-                  cloneOp: {
-                    ...op,
-                    phase: event.phase,
-                    percent: event.percent ?? null,
-                    message: event.message,
-                  },
-                });
-              }
-              return;
-            case 'operationOutput':
-              if (op) {
-                set({ cloneOp: { ...op, output: [...op.output.slice(-199), event.text] } });
-              }
-              return;
-            case 'operationFinished':
-              if (op) {
-                set({
-                  cloneOp: {
-                    ...op,
-                    done: true,
-                    ok: event.ok,
-                    cancelled: event.cancelled,
-                    message: event.message,
-                  },
-                });
-              }
-              return;
-            default:
-              return;
-          }
-        };
         try {
-          const dest = await deps.client.cloneRepo(request, onEvent);
+          const dest = await deps.client.cloneRepo(request, trackCloneOp);
           set({ cloneOp: null });
           await get().openRepositoryAt(dest);
           return true;
@@ -2453,6 +2721,34 @@ export function createAppStore(deps: AppStoreDeps) {
           set({ lastError: describeError(e), cloneOp: null });
           return false;
         }
+      },
+
+      async cloneRepositories(request) {
+        if (get().cloneOp && !get().cloneOp?.done) {
+          return null;
+        }
+        set({ lastError: null });
+        const startedAt = Date.now();
+        let result: BatchResult;
+        try {
+          result = await deps.client.cloneMany(request, trackCloneOp);
+          set({ cloneOp: null });
+        } catch (e) {
+          set({ lastError: describeError(e), cloneOp: null });
+          return null;
+        }
+        // 상위 폴더를 폴더 탭으로 연다. 이미 열려 있던 탭이면 새 저장소가 보이게 다시 스캔한다. 그 폴더의 작업 기록에 남긴다
+        const opened = new Set(get().sessionOrder);
+        await get().openFolderAt(request.parent);
+        const id = get().activeSessionId;
+        const folder = id === null ? undefined : getFolderStore(id);
+        if (folder) {
+          if (opened.has(id as SessionId)) {
+            await folder.getState().rescan();
+          }
+          folder.getState().recordClone(result, request, startedAt);
+        }
+        return result;
       },
 
       async cancelClone() {

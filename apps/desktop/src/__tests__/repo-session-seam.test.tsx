@@ -209,11 +209,17 @@ describe('범위 세션 이음새: 폴더 탭은 허용 목록만 켠다 (W13 �
     expect(footer().textContent).not.toContain(S.status.opening);
     expect(footer().textContent).not.toContain(S.status.noChanges);
 
-    // 저장소 탭 전용 단축키: undo·redo·fetch·push·stash·검색·Esc(세션 diff 닫기)
+    // 저장소 탭 전용 단축키: undo·redo·fetch·push·stash·검색·Esc(세션 diff 닫기). 동기화 키(⌘⇧F·⌘⇧K)는 폴더 탭에서
+    // 툴바와 같은 일괄 흐름이라 숨은 세션에 대고 돌지 않는다 — ⌘⇧K 는 폴더의 push 체크 목록을 연다 (닫고 이어 간다)
     press('z', MOD);
     press('z', { ...MOD, shiftKey: true });
     press('f', { ...MOD, shiftKey: true });
     press('k', { ...MOD, shiftKey: true });
+    await tick();
+    const pushDialog = dialog() as HTMLDialogElement;
+    expect(pushDialog.querySelector('h2')?.textContent).toBe(S.folder.batch.pushTitle);
+    act(() => fireEvent.click(within(pushDialog).getByRole('button', { name: S.confirm.cancel })));
+    await tick();
     press('s', { ...MOD, shiftKey: true });
     press('f', MOD);
     press('Escape');
@@ -572,6 +578,12 @@ describe('W14 로 넓힌 허용 목록: 폴더 탭의 작업 트리 diff 탭', (
     press('z', { ...MOD, shiftKey: true });
     press('f', { ...MOD, shiftKey: true });
     press('k', { ...MOD, shiftKey: true });
+    await tick();
+    // 폴더 탭의 ⌘⇧K 는 폴더의 push 체크 목록이다 (숨은 세션의 push 가 아니다). 닫고 이어 간다
+    const pushDialog = dialog() as HTMLDialogElement;
+    expect(pushDialog.querySelector('h2')?.textContent).toBe(S.folder.batch.pushTitle);
+    act(() => fireEvent.click(within(pushDialog).getByRole('button', { name: S.confirm.cancel })));
+    await tick();
     press('s', { ...MOD, shiftKey: true });
     press('f', MOD);
     await tick();
@@ -662,8 +674,15 @@ describe('W15 로 넓힌 허용 목록: 충돌 편집기 탭·작업 띠·충돌
     const { store } = await catalogThenWeb(id);
     act(() => store?.setState({ pendingHint: { kind: 'hookFailed' } }));
     await tick();
-    expect(dialog()?.textContent).toContain(S.repoSession.hookFailedInfo);
-    expect(dialog()?.textContent).not.toContain(S.dialog.retryNoVerify);
+    expect(dialog()?.querySelector('h2')?.textContent).toBe(
+      S.repoSession.hintTitle('catalog-service', S.dialog.hookFailed),
+    );
+    expect(dialog()?.textContent).toContain(S.dialog.hookFailedMessage);
+    // 확인 단추는 "확인" 이다 (저장소 탭과 같은 대화상자 — 다시 commit 하는 단추가 없다)
+    expect([...(dialog()?.querySelectorAll('button') ?? [])].map((b) => b.textContent)).toEqual([
+      S.confirm.cancel,
+      S.confirm.ok,
+    ]);
     expect(sessionBusy(store?.getState() as never)).toBe(true);
     fireEvent.submit(dialog()?.querySelector('form') as HTMLFormElement);
     await tick();

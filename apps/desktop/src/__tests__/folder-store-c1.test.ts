@@ -75,6 +75,7 @@ describe('FolderStore (C1 일괄 작업)', () => {
       message: '',
     });
     expect(store.getState().batchProgress).toEqual({
+      opId: 1,
       label: '일괄 fetch',
       phase: 'a',
       percent: 50,
@@ -99,10 +100,63 @@ describe('FolderStore (C1 일괄 작업)', () => {
       label: '일괄 fetch',
       result: RESULT,
       error: null,
+      // 실패한 저장소만 다시 실행에 쓰는 실행 인자 (넘긴 대상 그대로)
+      request: { op: { kind: 'fetch', prune: true }, repos: ['/f/a'] },
     });
     expect(entry?.finishedAt).toBeGreaterThanOrEqual(entry?.startedAt ?? Number.POSITIVE_INFINITY);
     store.getState().clearTaskHistory();
     expect(store.getState().taskHistory).toEqual([]);
+  });
+
+  it('일괄 작업 취소: 도는 작업의 id 로 한 번만 부르고, 끝나면 풀린다. 끝난 뒤·코어가 거절하면 아무 일도 없다', async () => {
+    const c = client();
+    const cancelOperation = vi.fn(async () => true);
+    c.cancelOperation = cancelOperation;
+    const store = createFolderStore({ session: 7, path: '/f', repos: [] }, c);
+    await tick();
+    // 도는 작업이 없으면 부르지 않는다
+    expect(await store.getState().cancelBatch()).toBe(false);
+    expect(cancelOperation).not.toHaveBeenCalled();
+    store.getState().applyEvent({
+      type: 'operationStarted',
+      session: 7,
+      opId: 42,
+      kind: 'batch',
+      label: '일괄 push',
+    });
+    const first = store.getState().cancelBatch();
+    expect(store.getState().batchCancelling).toBe(true);
+    // 취소 중의 중복 클릭은 부르지 않는다
+    expect(await store.getState().cancelBatch()).toBe(false);
+    expect(await first).toBe(true);
+    expect(cancelOperation).toHaveBeenCalledTimes(1);
+    expect(cancelOperation).toHaveBeenCalledWith(42);
+    expect(store.getState().batchCancelling).toBe(true);
+    store.getState().applyEvent({
+      type: 'operationFinished',
+      session: 7,
+      opId: 42,
+      ok: true,
+      cancelled: true,
+      message: '',
+      lockLeft: false,
+    });
+    expect(store.getState().batchCancelling).toBe(false);
+    expect(store.getState().batchProgress).toBeNull();
+    // 끝난 직후의 클릭은 부르지 않는다
+    expect(await store.getState().cancelBatch()).toBe(false);
+    expect(cancelOperation).toHaveBeenCalledTimes(1);
+    // 코어가 거절하면(이미 끝남) 단추를 되살린다
+    cancelOperation.mockResolvedValueOnce(false);
+    store.getState().applyEvent({
+      type: 'operationStarted',
+      session: 7,
+      opId: 43,
+      kind: 'batch',
+      label: '일괄 fetch',
+    });
+    expect(await store.getState().cancelBatch()).toBe(false);
+    expect(store.getState().batchCancelling).toBe(false);
   });
 
   it('재스캔 이벤트로 저장소 목록을 바꾸고, 설정 저장을 넘긴다', async () => {

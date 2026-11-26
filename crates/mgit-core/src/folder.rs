@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::UNIX_EPOCH;
 
 use mgit_git::cmd::{
-    Discovered, discover, head_state, in_progress_op, list_refs, scan_repos, scanned_repo_status,
+    Discovered, discover, head_state, in_progress_op, list_refs, list_remotes, scan_repos,
+    scanned_repo_status,
 };
-use mgit_l10n::tr;
+use mgit_l10n::{pick, tr};
 use mgit_model::{
     ChangeKind, FoundRepo, GitError, HeadState, RecentKind, RefLabel, RepoKind, RepoSummary,
     WatchHandle, WatchSpec,
@@ -21,12 +22,16 @@ use crate::core::{Core, CoreInner};
 use crate::error::CoreError;
 use crate::events::{CoreEvent, EventSink, SessionId};
 use crate::folder_timeline::TimelineState;
+use crate::fs_tree::FsSpace;
+use crate::group::{self, GroupId, GroupMount, GroupView};
 use crate::messages;
 
 /// 동시에 상태를 읽는 저장소 수
 const SUMMARY_CONCURRENCY: usize = 8;
 /// 스캔 깊이 (루트 바로 아래 = 1)
 pub const SCAN_DEPTH: u32 = 3;
+/// 그룹 열기가 정의 변경과 엇갈려 다시 시도하는 횟수 상한
+const GROUP_OPEN_ATTEMPTS: usize = 4;
 
 /// 폴더 세션이 보관하는 저장소 하나: 스캔 결과에 순번을 붙인 것. 열 때와 재스캔할 때 한 번 정한다
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,12 +127,35 @@ fn select_in(roster: Vec<FolderRepo>, paths: &[PathBuf]) -> Result<Vec<FolderRep
         .collect())
 }
 
+/// 폴더 세션이 저장소 목록을 얻는 원천. 원천마다 세션 키·경로 포함·파일 경로 공간·재스캔 방법이 다르고, 로스터만
+/// 쓰는 폴더 기능(일괄 작업·타임라인·브랜치 목록 등)은 원천을 모른다. 변형을 더하면 원천별로 갈라지는 곳이 모두
+/// `match` 의 컴파일 오류로 드러난다
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FolderSource {
+    /// 루트 폴더 아래를 `SCAN_DEPTH` 까지 스캔한다 (MR-01). `root` 는 열 때 정규화한 경로이고 바뀌지 않는다
+    Scan { root: PathBuf },
+    /// 가상 그룹 (MR-13): 정의의 멤버 저장소들이다. 바뀌는 이름·멤버 상태는 세션의 `group` 에 있다
+    Group { id: GroupId },
+}
+
+/// 그룹 원천의 바뀌는 상태: 이름과 멤버(별칭·경로·지금 상태). 스캔 원천은 비어 있다. 재스캔과 열린 그룹 고치기
+/// (M4 — 그 자리 반영)가 `rescan_lock` 안에서 로스터와 같은 구간에 통째로 바꾼다
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GroupState {
+    pub(crate) name: String,
+    pub(crate) mounts: Vec<GroupMount>,
+}
+
 /// 폴더 세션. `.git` 만 감시하고 변경은 `FolderChanged` 로 알린다
 pub struct FolderSession {
     pub id: SessionId,
-    pub path: PathBuf,
+    /// 저장소 목록의 원천. 세션 동안 바뀌지 않는다
+    pub(crate) source: FolderSource,
     /// 저장소 목록과 순번. 재스캔이 통째로 바꾸고 조회는 사본을 떠 간다 (잠금을 쥔 채 git 을 돌리지 않는다)
     repos: RwLock<Vec<FolderRepo>>,
+    /// 그룹 원천의 이름·멤버와 지금 상태 (스캔 원천은 비어 있다). 재스캔·그룹 고치기가 `rescan_lock` 안에서 로스터와 같은
+    /// 구간에 바꾸고, 파일 경로 공간·포함 검사는 짧게 읽어 사본을 쓴다
+    group: RwLock<GroupState>,
     pub(crate) sink: Arc<dyn EventSink>,
     watches: Mutex<Vec<Box<dyn WatchHandle>>>,
     /// 폴더 루트(비재귀) 감시 (MR-10)
@@ -143,6 +171,120 @@ pub struct FolderSession {
 }
 
 impl FolderSession {
+    /// 아직 감시·자동 fetch 를 걸지 않은 세션을 만든다. 열기와 시험이 같은 초기 상태를 쓴다
+    fn new(
+        id: SessionId,
+        source: FolderSource,
+        roster: Vec<FolderRepo>,
+        group: GroupState,
+        sink: Arc<dyn EventSink>,
+    ) -> Self {
+        FolderSession {
+            id,
+            source,
+            repos: RwLock::new(roster),
+            group: RwLock::new(group),
+            sink,
+            watches: Mutex::new(Vec::new()),
+            root_watch: Mutex::new(None),
+            rescan_lock: tokio::sync::Mutex::new(()),
+            timeline: TimelineState::default(),
+            light_open: tokio::sync::Mutex::new(()),
+            auto_fetch: Mutex::new(None),
+        }
+    }
+
+    /// 세션 키: 폴더 설정 키(`folder:<키>`)와 화면의 탭 키가 쓰는 값. 스캔 원천은 루트 경로를 `display` 로 적은
+    /// 문자열이다 — 이미 저장된 설정 키와 같은 꼴이어야 한다. 그룹 원천은 `mgit-group:<id>` 다
+    pub fn key(&self) -> String {
+        match &self.source {
+            FolderSource::Scan { root } => root.display().to_string(),
+            FolderSource::Group { id, .. } => group::group_key(id),
+        }
+    }
+
+    /// 절대 경로 `abs` 가 이 폴더 아래인지 (폴더 자신 포함, 경로 구성요소 단위). 파일 저장·파일 작업 뒤 갱신 알림과
+    /// 콘솔 명령의 폴더 찾기가 쓴다. 디스크를 건드리지 않는다 — `abs` 는 호출자가 정한 꼴 그대로 비교한다.
+    /// 그룹은 멤버 루트 중 하나 아래인지다 (메모리의 정규화한 멤버 경로만 본다)
+    pub(crate) fn contains(&self, abs: &Path) -> bool {
+        match &self.source {
+            FolderSource::Scan { root } => abs.starts_with(root),
+            FolderSource::Group { .. } => self
+                .group
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .mounts
+                .iter()
+                .any(|m| abs.starts_with(&m.path)),
+        }
+    }
+
+    /// 이 폴더의 파일 경로 공간 (FS-01). 스캔 원천은 루트 폴더 하나, 그룹 원천은 별칭으로 나눈 멤버들이다
+    pub(crate) fn fs_space(&self) -> FsSpace {
+        match &self.source {
+            FolderSource::Scan { root } => FsSpace::Dir(root.clone()),
+            FolderSource::Group { .. } => FsSpace::Group(self.mounts()),
+        }
+    }
+
+    /// 스캔 원천의 루트. 같은 경로의 폴더 찾기와 폴더 루트 감시는 스캔 원천만 한다
+    pub(crate) fn scan_root(&self) -> Option<&Path> {
+        match &self.source {
+            FolderSource::Scan { root } => Some(root),
+            FolderSource::Group { .. } => None,
+        }
+    }
+
+    /// 그룹 원천의 id. 스캔 원천은 None
+    pub(crate) fn group_id(&self) -> Option<&GroupId> {
+        match &self.source {
+            FolderSource::Scan { .. } => None,
+            FolderSource::Group { id, .. } => Some(id),
+        }
+    }
+
+    /// 그룹 멤버와 지금 상태의 사본 (스캔 원천은 비어 있다)
+    pub(crate) fn mounts(&self) -> Vec<GroupMount> {
+        self.group_state().mounts
+    }
+
+    /// 그룹 원천의 이름·멤버 상태의 사본 (스캔 원천은 빈 값)
+    fn group_state(&self) -> GroupState {
+        self.group
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// 그룹 원천의 모습 (이름·멤버 상태). 스캔 원천은 None
+    pub(crate) fn group_view(&self) -> Option<GroupView> {
+        match &self.source {
+            FolderSource::Scan { .. } => None,
+            FolderSource::Group { id } => {
+                let state = self.group_state();
+                Some(GroupView {
+                    id: id.clone(),
+                    name: state.name,
+                    members: state.mounts,
+                })
+            }
+        }
+    }
+
+    /// 이미 열린 세션의 열기 응답. 경로는 스캔이면 루트, 그룹이면 세션 키(`mgit-group:<id>`)다
+    fn opened(&self) -> FolderOpened {
+        let path = match &self.source {
+            FolderSource::Scan { root } => root.clone(),
+            FolderSource::Group { .. } => PathBuf::from(self.key()),
+        };
+        FolderOpened {
+            session: self.id,
+            path,
+            repos: self.repos(),
+            group: self.group_view(),
+        }
+    }
+
     /// 자동 fetch 태스크를 다시 건다: 돌던 태스크를 끊고 `start` 가 만든 태스크를 보관한다(`None` 이면 멈춘 채로 둔다).
     /// 간격 읽기와 보관이 한 잠금 구간이라 폴더 열기와 간격 변경이 겹쳐도 옛 간격의 태스크가 남지 않는다
     /// (`RepoSession::rearm_auto_fetch` 와 같다). `start` 안에서 다른 잠금을 잡지 않는다
@@ -246,13 +388,15 @@ impl FolderSession {
     }
 }
 
-/// `open_folder` 결과
+/// `open_folder`·`open_group` 결과. 그룹이면 `path` 가 세션 키(`mgit-group:<id>`)이고 `group` 에 멤버 상태가 있다
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderOpened {
     pub session: SessionId,
     pub path: PathBuf,
     pub repos: Vec<FoundRepo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupView>,
 }
 
 /// 파일 수정 시각을 epoch 밀리초로
@@ -296,6 +440,18 @@ pub(crate) async fn read_head_refs(
     Ok((d, head, labels))
 }
 
+/// 저장소에 등록된 원격 이름 (`git remote -v` 순서). 요약과 일괄 push 가 같은 목록을 본다
+pub(crate) async fn remote_names(
+    runner: &dyn mgit_model::GitRunner,
+    work_tree: &Path,
+) -> Result<Vec<String>, GitError> {
+    Ok(list_remotes(runner, work_tree)
+        .await?
+        .into_iter()
+        .map(|r| r.name)
+        .collect())
+}
+
 /// 저장소 하나의 요약을 읽는다. 실패해도 줄은 남긴다 (`error` 에 이유)
 async fn summarize(inner: &CoreInner, repo: FolderRepo) -> RepoSummary {
     let color = repo.color();
@@ -314,6 +470,8 @@ async fn summarize(inner: &CoreInner, repo: FolderRepo) -> RepoSummary {
         op: None,
         last_fetch: None,
         error: None,
+        remotes: None,
+        stash_count: 0,
     };
     let runner = inner.runner();
     let d = match discover(runner, &found.path).await {
@@ -328,12 +486,17 @@ async fn summarize(inner: &CoreInner, repo: FolderRepo) -> RepoSummary {
             let s = status.summary();
             summary.changed = s.staged + s.unstaged + s.untracked + s.conflicted;
             summary.conflicted = s.conflicted;
+            // `--show-stash` 머리 (`STATUS_ARGS`): stash 수를 따로 읽지 않는다
+            summary.stash_count = status.stash_count;
             let b = &status.branch;
             summary.branch = b.head.clone();
             summary.detached = b.head.is_none() && b.oid.is_some();
             if b.upstream.is_some() {
                 summary.ahead = Some(b.ahead);
                 summary.behind = Some(b.behind);
+            } else if b.head.is_some() {
+                // 일괄 push 가 새 업스트림을 둘 원격을 미리 보이게 한다. 업스트림이 있는 branch 는 읽지 않는다
+                summary.remotes = remote_names(runner, &d.work_tree).await.ok();
             }
         }
         Err(e) => summary.error = Some(e.to_string()),
@@ -364,36 +527,23 @@ impl Core {
         }
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let inner = self.inner_arc();
-        /// 이미 열린 세션의 응답
-        fn reopened(existing: &FolderSession) -> FolderOpened {
-            FolderOpened {
-                session: existing.id,
-                path: existing.path.clone(),
-                repos: existing.repos(),
-            }
-        }
         if let Some(existing) = inner.folders_find(&path) {
-            return Ok(reopened(&existing));
+            return Ok(existing.opened());
         }
         let repos = scan_repos(&path, SCAN_DEPTH);
         let (roster, discovered) = build_roster(&inner, repos.clone()).await;
         // 판별하는 동안 같은 폴더가 먼저 열렸을 수 있다. 확인과 등록 사이에는 await 를 두지 않는다
         if let Some(existing) = inner.folders_find(&path) {
-            return Ok(reopened(&existing));
+            return Ok(existing.opened());
         }
         let id = inner.alloc_session_id();
-        let session = Arc::new(FolderSession {
+        let session = Arc::new(FolderSession::new(
             id,
-            path: path.clone(),
-            repos: RwLock::new(roster),
+            FolderSource::Scan { root: path.clone() },
+            roster,
+            GroupState::default(),
             sink,
-            watches: Mutex::new(Vec::new()),
-            root_watch: Mutex::new(None),
-            rescan_lock: tokio::sync::Mutex::new(()),
-            timeline: TimelineState::default(),
-            light_open: tokio::sync::Mutex::new(()),
-            auto_fetch: Mutex::new(None),
-        });
+        ));
         inner.folders_insert(Arc::clone(&session));
         self.watch_folder(&session, &repos, discovered);
         self.watch_root(&session);
@@ -405,7 +555,79 @@ impl Core {
             session: id,
             path,
             repos,
+            group: None,
         })
+    }
+
+    /// 가상 그룹을 연다 (MR-13): 멤버 상태를 다시 보고 → 있는 멤버로 로스터를 만들고 → 각 `.git` 을 감시하고 → 자동
+    /// fetch 를 걸고 → 마지막 연 시각을 적는다. 폴더 루트 감시·최근 목록은 없다. 이미 열린 그룹이면 그 세션을 돌려준다.
+    /// 판별(await)하는 동안 정의가 바뀌었으면 처음부터 다시 하고, 지워졌으면 오류다 — 등록은 그룹 잠금 안에서 정의를 다시
+    /// 읽고 하므로 열기와 고치기·지우기가 엇갈려 옛 멤버로 열린 세션이 남지 않는다
+    pub async fn open_group(
+        &self,
+        id: &GroupId,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<FolderOpened, CoreError> {
+        let inner = self.inner_arc();
+        for _ in 0..GROUP_OPEN_ATTEMPTS {
+            let def = inner.group_def(id)?;
+            if let Some(existing) = inner.folders_find_group(id) {
+                return Ok(existing.opened());
+            }
+            let mounts = group::mounts_of(&def.members);
+            let repos = group::present_repos(&mounts);
+            let (roster, discovered) = build_roster(&inner, repos.clone()).await;
+            let registered = {
+                let _guard = inner
+                    .groups_lock
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let mut groups = group::load_groups(inner.store.as_ref())?;
+                let Some(now) = groups.iter_mut().find(|g| g.id == *id) else {
+                    return Err(group::not_found(id));
+                };
+                if now.members != def.members {
+                    None
+                } else if let Some(existing) = inner.folders_find_group(id) {
+                    return Ok(existing.opened());
+                } else {
+                    let session = Arc::new(FolderSession::new(
+                        inner.alloc_session_id(),
+                        FolderSource::Group { id: id.clone() },
+                        roster,
+                        GroupState {
+                            name: now.name.clone(),
+                            mounts,
+                        },
+                        Arc::clone(&sink),
+                    ));
+                    inner.folders_insert(Arc::clone(&session));
+                    now.last_opened_at = group::now_millis();
+                    if let Err(e) = group::save_groups(inner.store.as_ref(), &groups) {
+                        tracing::warn!(error = %e, "그룹을 연 시각을 저장하지 못함");
+                    }
+                    Some(session)
+                }
+            };
+            let Some(session) = registered else {
+                continue;
+            };
+            self.watch_folder(&session, &repos, discovered);
+            inner.arm_folder_auto_fetch(&session);
+            return Ok(FolderOpened {
+                session: session.id,
+                path: PathBuf::from(session.key()),
+                repos,
+                group: session.group_view(),
+            });
+        }
+        Err(CoreError::Invalid(
+            pick(
+                "그룹이 바뀌는 중이라 열지 못했습니다. 다시 시도하세요",
+                "The group changed while opening. Try again",
+            )
+            .into(),
+        ))
     }
 
     /// 하위 저장소 전부의 `.git` 을 비재귀로 감시한다. 판별·감시에 실패한 저장소는 건너뛴다.
@@ -458,11 +680,15 @@ impl Core {
             .unwrap_or_else(PoisonError::into_inner) = handles;
     }
 
-    /// 폴더 루트를 비재귀로 감시해 저장소가 생기거나 사라지면 다시 스캔한다 (MR-10)
+    /// 폴더 루트를 비재귀로 감시해 저장소가 생기거나 사라지면 다시 스캔한다 (MR-10). 스캔 원천만 감시한다
     fn watch_root(&self, session: &Arc<FolderSession>) {
+        let Some(root) = session.scan_root().map(Path::to_path_buf) else {
+            return;
+        };
         let inner = self.inner_arc();
         let weak = Arc::downgrade(session);
         let weak_inner = Arc::downgrade(&inner);
+        let scan_root = root.clone();
         let on_change: mgit_model::OnChange = Arc::new(move |_changes| {
             let (Some(folder), Some(inner)) = (weak.upgrade(), weak_inner.upgrade()) else {
                 return;
@@ -470,6 +696,7 @@ impl Core {
             let Ok(handle) = tokio::runtime::Handle::try_current() else {
                 return;
             };
+            let scan_root = scan_root.clone();
             handle.spawn(async move {
                 // 폴더가 막 생겼을 때는 `.git` 이 아직 없을 수 있어 잠시 뒤 한 번 더 본다
                 let mut changed = false;
@@ -478,7 +705,7 @@ impl Core {
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                     }
                     let before: Vec<PathBuf> = folder.repos().into_iter().map(|r| r.path).collect();
-                    let after: Vec<PathBuf> = scan_repos(&folder.path, SCAN_DEPTH)
+                    let after: Vec<PathBuf> = scan_repos(&scan_root, SCAN_DEPTH)
                         .into_iter()
                         .map(|r| r.path)
                         .collect();
@@ -496,7 +723,7 @@ impl Core {
                 }
             });
         });
-        match inner.watcher.watch_dir(session.path.clone(), on_change) {
+        match inner.watcher.watch_dir(root.clone(), on_change) {
             Ok(h) => {
                 *session
                     .root_watch
@@ -504,7 +731,7 @@ impl Core {
                     .unwrap_or_else(PoisonError::into_inner) = Some(h);
             }
             Err(e) => {
-                tracing::debug!(path = %session.path.display(), error = %e, "폴더 루트 감시 없음")
+                tracing::debug!(path = %root.display(), error = %e, "폴더 루트 감시 없음")
             }
         }
     }
@@ -538,32 +765,86 @@ impl Core {
         Ok(out)
     }
 
-    /// 하위 저장소를 다시 스캔해 순번을 다시 매기고 감시를 다시 건다.
+    /// 하위 저장소를 다시 스캔해 순번을 다시 매기고 감시를 다시 건다. 그룹은 스캔 대신 멤버 상태를 다시 본다.
     /// 저장소 집합이 그대로면 순번(색)도 그대로다
     pub async fn folder_rescan(&self, session: SessionId) -> Result<Vec<FoundRepo>, CoreError> {
         self.rescan_folder(session, false).await
     }
 
-    /// 자동 재스캔은 감시와 삭제 알림이 겹쳐도 목록이 바뀐 경우에만 이벤트를 보낸다.
+    /// 자동 재스캔은 감시와 삭제 알림이 겹쳐도 목록이 바뀐 경우에만 이벤트를 보낸다. 그룹 원천은 정의를 다시 읽지 않고
+    /// 지금 멤버(별칭·경로)를 다시 본다 — 사라진 멤버는 `Missing` 으로 남고 로스터에서 빠지며, 멤버 상태는 로스터와
+    /// 같은 잠금 구간(`rescan_lock`)에서 바꾸고 `GroupChanged` 로 알린다
     async fn rescan_folder(
         &self,
         session: SessionId,
         only_changed: bool,
     ) -> Result<Vec<FoundRepo>, CoreError> {
+        self.rescan_folder_with(session, only_changed, false).await
+    }
+
+    /// 열린 그룹에 저장된 정의를 그 자리에서 반영한다 (M4): `rescan_lock` 을 잡은 뒤 정의를 다시 읽어 이름·멤버를 바꾸고
+    /// 로스터·감시를 다시 건다. 이벤트는 재스캔과 같다(`FolderRescanned` → `GroupChanged`). 잠금 안에서 그때의 정의를
+    /// 읽으므로 고치기가 겹쳐도 마지막에 저장된 정의가 남는다
+    pub(crate) async fn reload_group_session(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<FoundRepo>, CoreError> {
+        self.rescan_folder_with(session, false, true).await
+    }
+
+    /// 재스캔 공용: 스캔 원천은 폴더를 다시 스캔하고, 그룹 원천은 `from_definition` 이면 저장된 정의의 이름·멤버를,
+    /// 아니면 지금 멤버를 다시 본다(정의가 그새 지워졌으면 지금 것). 저장소 목록·멤버 상태·이름은 `rescan_lock` 안의 한
+    /// 구간에서 바꾼다. 잠금 순서는 `rescan_lock`(tokio) → 그룹 잠금(정의 읽기, 짧게) → 상태 쓰기 → 감시다
+    async fn rescan_folder_with(
+        &self,
+        session: SessionId,
+        only_changed: bool,
+        from_definition: bool,
+    ) -> Result<Vec<FoundRepo>, CoreError> {
         let inner = self.inner_arc();
         let folder = inner.folders_get(session)?;
         let _scanning = folder.rescan_lock.lock().await;
-        let repos = scan_repos(&folder.path, SCAN_DEPTH);
-        if only_changed && repos == folder.repos() {
+        let (repos, next) = match &folder.source {
+            FolderSource::Scan { root } => (scan_repos(root, SCAN_DEPTH), None),
+            FolderSource::Group { id } => {
+                let current = folder.group_state();
+                let def = if from_definition {
+                    inner.group_def(id).ok()
+                } else {
+                    None
+                };
+                let (name, members) = match def {
+                    Some(def) => (def.name, def.members),
+                    None => (
+                        current.name,
+                        current.mounts.iter().map(GroupMount::member).collect(),
+                    ),
+                };
+                let mounts = group::mounts_of(&members);
+                (
+                    group::present_repos(&mounts),
+                    Some(GroupState { name, mounts }),
+                )
+            }
+        };
+        let unchanged =
+            repos == folder.repos() && next.as_ref().is_none_or(|g| *g == folder.group_state());
+        if only_changed && unchanged {
             return Ok(repos);
         }
         let (roster, discovered) = build_roster(&inner, repos.clone()).await;
+        if let Some(next) = next {
+            *folder.group.write().unwrap_or_else(PoisonError::into_inner) = next;
+        }
         *folder.repos.write().unwrap_or_else(PoisonError::into_inner) = roster;
         self.watch_folder(&folder, &repos, discovered);
         folder.sink.emit(CoreEvent::FolderRescanned {
             session,
             repos: repos.clone(),
         });
+        if let Some(group) = folder.group_view() {
+            folder.sink.emit(CoreEvent::GroupChanged { session, group });
+        }
         // 타임라인을 열어 둔 상태면 저장소 목록 변화를 반영한다
         if folder.timeline.is_opened() {
             self.schedule_timeline_load(&folder);
@@ -715,18 +996,15 @@ mod tests {
             ],
         );
         let sink: Arc<dyn EventSink> = Arc::new(|_e: CoreEvent| {});
-        let folder = FolderSession {
-            id: SessionId(1),
-            path: PathBuf::from("/f"),
-            repos: RwLock::new(roster),
+        let folder = FolderSession::new(
+            SessionId(1),
+            FolderSource::Scan {
+                root: PathBuf::from("/f"),
+            },
+            roster,
+            GroupState::default(),
             sink,
-            watches: Mutex::new(Vec::new()),
-            root_watch: Mutex::new(None),
-            rescan_lock: tokio::sync::Mutex::new(()),
-            timeline: TimelineState::default(),
-            light_open: tokio::sync::Mutex::new(()),
-            auto_fetch: Mutex::new(None),
-        };
+        );
         let primary = |cwd: &str| folder.primary_of(Path::new(cwd));
         assert_eq!(primary("/f/a"), Some(PathBuf::from("/f/a")));
         assert_eq!(primary("/f/a/src/deep"), Some(PathBuf::from("/f/a")));
@@ -740,6 +1018,120 @@ mod tests {
         assert_eq!(primary("/f/ab"), None);
         assert_eq!(primary("/f"), None);
         assert_eq!(primary("/elsewhere/a"), None);
+    }
+
+    /// 스캔 원천 세션 (저장소 없음)
+    fn scan_session(root: &str) -> FolderSession {
+        let sink: Arc<dyn EventSink> = Arc::new(|_e: CoreEvent| {});
+        FolderSession::new(
+            SessionId(1),
+            FolderSource::Scan {
+                root: PathBuf::from(root),
+            },
+            Vec::new(),
+            GroupState::default(),
+            sink,
+        )
+    }
+
+    /// 그룹 원천 세션: `/a/api`(있음), `/b/web`(없음) 두 멤버
+    #[allow(clippy::unwrap_used)]
+    fn group_session() -> FolderSession {
+        let sink: Arc<dyn EventSink> = Arc::new(|_e: CoreEvent| {});
+        let mount = |alias: &str, path: &str, state| GroupMount {
+            alias: alias.into(),
+            path: PathBuf::from(path),
+            state,
+        };
+        FolderSession::new(
+            SessionId(2),
+            FolderSource::Group {
+                id: GroupId::parse("g0123456789ab").unwrap(),
+            },
+            Vec::new(),
+            GroupState {
+                name: "작업".into(),
+                mounts: vec![
+                    mount(
+                        "api",
+                        "/a/api",
+                        group::MemberState::Present(RepoKind::Standalone),
+                    ),
+                    mount("web", "/b/web", group::MemberState::Missing),
+                ],
+            },
+            sink,
+        )
+    }
+
+    /// 그룹 원천: 키는 `mgit-group:<id>`(폴더 설정 키 `folder:mgit-group:<id>` 의 재료), 포함은 멤버 루트 중 하나 아래
+    /// (구성요소 단위, 없는 멤버 포함), 공간은 멤버들, 스캔 루트는 없다(루트 감시·경로로 찾기 없음)
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn group_source_key_contains_space_and_no_scan_root() {
+        let folder = group_session();
+        assert_eq!(folder.key(), "mgit-group:g0123456789ab");
+        for (abs, want) in [
+            ("/a/api", true),
+            ("/a/api/src/x.rs", true),
+            ("/b/web/x", true),
+            ("/a/apix", false),
+            ("/a", false),
+            ("/", false),
+        ] {
+            assert_eq!(folder.contains(Path::new(abs)), want, "{abs}");
+        }
+        assert_eq!(folder.fs_space(), FsSpace::Group(folder.mounts()));
+        assert_eq!(folder.scan_root(), None);
+        let view = folder.group_view().unwrap();
+        assert_eq!((view.name.as_str(), view.members.len()), ("작업", 2));
+        let opened = folder.opened();
+        assert_eq!(opened.path, PathBuf::from("mgit-group:g0123456789ab"));
+        assert_eq!(opened.group, Some(view));
+        assert_eq!(scan_session("/f").group_view(), None);
+    }
+
+    /// 스캔 원천의 키는 루트 경로를 `display` 로 적은 그대로다 — 원천을 들이기 전의 설정 키(`folder:<경로>`)·탭 키와
+    /// 같은 문자열이어야 저장된 폴더 설정을 그대로 읽는다. 공백·한글·끝 구분자 없는 꼴도 바꾸지 않는다
+    #[test]
+    fn scan_key_is_the_root_path_as_displayed() {
+        for root in ["/f", "/Users/me/작업 폴더", "/a/b.c/d-e"] {
+            assert_eq!(
+                scan_session(root).key(),
+                Path::new(root).display().to_string()
+            );
+            assert_eq!(scan_session(root).key(), root);
+        }
+    }
+
+    /// 스캔 원천의 포함은 경로 구성요소 단위 접두다: 루트 자신·하위는 참, 이름만 앞이 같은 형제(`/f/ab` 와 `/f/a`)·
+    /// 상위·바깥은 거짓. 디스크를 보지 않는다
+    #[test]
+    fn scan_contains_is_a_component_prefix_check() {
+        let folder = scan_session("/f/a");
+        let cases = [
+            ("/f/a", true),
+            ("/f/a/", true),
+            ("/f/a/x", true),
+            ("/f/a/x/.git/HEAD", true),
+            ("/f/ab", false),
+            ("/f/ab/x", false),
+            ("/f", false),
+            ("/", false),
+            ("/elsewhere/f/a", false),
+            ("f/a", false),
+        ];
+        for (abs, want) in cases {
+            assert_eq!(folder.contains(Path::new(abs)), want, "{abs}");
+        }
+    }
+
+    /// 스캔 원천의 파일 경로 공간은 루트 디렉터리 하나이고, 스캔 루트도 그 루트다
+    #[test]
+    fn scan_space_and_root_are_the_folder_root() {
+        let folder = scan_session("/f/a");
+        assert_eq!(folder.fs_space(), FsSpace::Dir(PathBuf::from("/f/a")));
+        assert_eq!(folder.scan_root(), Some(Path::new("/f/a")));
     }
 
     #[test]

@@ -1,25 +1,46 @@
 import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useSearchPanel } from '../features/search/search-state';
+import { fileListCache } from '../features/search/file-list';
+import { type SearchMode, useSearchPanel } from '../features/search/search-state';
 import { WorkspaceSearch } from '../features/search/WorkspaceSearch';
+import { writePref } from '../store/prefs';
+import { recentFilesKey, recordRecentFile } from '../store/recent-files';
 import { installDialogStub, removeDialogStub } from './dialog-stub';
 
 const fixture = vi.hoisted(() => ({
   search: vi.fn(),
+  files: vi.fn(),
   cancel: vi.fn(async () => {}),
-  open: vi.fn(async () => ({ kind: 'binary' })),
+  open: vi.fn(async (): Promise<{ kind: string }> => ({ kind: 'binary' })),
   doc: vi.fn(),
+  /** 폴더 스토어의 파일 트리 epoch (빠른 열기 목록 표지) */
+  epoch: 0,
 }));
 vi.mock('../store', () => {
+  const sessions = { 1: { path: '/workspace' } };
   const state = {
     activeSessionId: 1,
-    sessions: { 1: { path: '/workspace' } },
-    client: { workspaceSearch: fixture.search, workspaceSearchCancel: fixture.cancel },
+    sessions,
+    client: {
+      workspaceSearch: fixture.search,
+      workspaceSearchCancel: fixture.cancel,
+      workspaceFiles: fixture.files,
+    },
+  };
+  const repos: unknown[] = [];
+  const summaries: unknown[] = [];
+  const folder = {
+    getState: () => ({
+      repos,
+      summaries,
+      fileTree: { getState: () => ({ epoch: fixture.epoch }) },
+    }),
   };
   return {
     useAppStore: (selector: (state: unknown) => unknown) => selector(state),
-    getFolderStore: () => undefined,
+    getFolderStore: () => folder,
+    getSessionStore: () => undefined,
     getWorkspaceStore: () => ({ getState: () => ({ openDoc: fixture.doc }) }),
   };
 });
@@ -45,6 +66,14 @@ const result = (length: number) => ({
   truncated: false,
   cancelled: false,
 });
+/** 빠른 열기 파일 목록 응답 */
+const fileList = (files: string[]) => ({
+  files,
+  repos: [''],
+  skipped: 0,
+  truncated: false,
+  cancelled: false,
+});
 const input = () => screen.getByRole('combobox', { name: S.workspaceSearch.query });
 const scroll = vi.fn();
 let oldOffset: PropertyDescriptor | undefined;
@@ -66,6 +95,11 @@ beforeEach(() => {
   });
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scroll });
   fixture.search.mockReset().mockResolvedValue(result(3));
+  fixture.files.mockReset().mockResolvedValue(fileList(['file-0.ts', 'file-1.ts', 'file-2.ts']));
+  fixture.open.mockReset().mockResolvedValue({ kind: 'binary' });
+  fixture.epoch = 0;
+  fileListCache.clear();
+  writePref(recentFilesKey('/workspace'), []);
   useSearchPanel.setState({ mode: null, focusVersion: 0 });
 });
 afterEach(() => {
@@ -79,7 +113,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 /** 검색창 열기를 실제 호출자 포커스와 함께 재현한다. */
-function show(mode: 'files' | 'content' = 'files') {
+function show(mode: SearchMode = 'files') {
   render(
     <>
       <button type="button">origin</button>
@@ -106,9 +140,11 @@ describe('검색 결과 키보드와 포커스', () => {
   });
 
   it('빈 결과에서 아래 화살표를 눌러도 이후 첫 결과를 Enter로 열 수 있다', async () => {
-    fixture.search.mockResolvedValueOnce(result(0)).mockResolvedValue(result(1));
+    fixture.files.mockResolvedValue(fileList(['other.ts', 'file-0.ts']));
     show();
-    await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBeTruthy());
+    fireEvent.change(input(), { target: { value: 'zzz' } });
+    await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBeNull());
     fireEvent.keyDown(input(), { key: 'ArrowDown' });
     fireEvent.change(input(), { target: { value: 'file' } });
     await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBeTruthy());
@@ -116,6 +152,94 @@ describe('검색 결과 키보드와 포커스', () => {
     await waitFor(() =>
       expect(fixture.open).toHaveBeenCalledWith(expect.anything(), 1, 'file-0.ts'),
     );
+    expect(fixture.files).toHaveBeenCalledTimes(1);
+    expect(fixture.search).not.toHaveBeenCalled();
+  });
+
+  it('퍼지 일치 글자를 강조하고 점수 순으로 보이며, 결과 수는 맞은 전체 파일 수다', async () => {
+    fixture.files.mockResolvedValue(
+      fileList(['docs/reference.md', 'src/FileEditor.tsx', 'src/fe.ts', 'zzz.md']),
+    );
+    show();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(4));
+    fireEvent.change(input(), { target: { value: 'fe' } });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    const options = screen.getAllByRole('option');
+    expect(options.map((option) => option.getAttribute('title'))).toEqual([
+      'src/fe.ts:1:1',
+      'src/FileEditor.tsx:1:1',
+      'docs/reference.md:1:1',
+    ]);
+    expect([...(options[1]?.querySelectorAll('mark') ?? [])].map((m) => m.textContent)).toEqual([
+      'F',
+      'E',
+    ]);
+    expect(screen.getByRole('status').textContent).toContain(S.workspaceSearch.results(3));
+  });
+
+  it('목록은 한 번만 받아 입력·다시 열기에 그대로 쓰고, 표지가 바뀐 뒤 열 때만 다시 받는다', async () => {
+    show();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    for (const value of ['f', 'fi', 'file-1']) fireEvent.change(input(), { target: { value } });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    act(() => useSearchPanel.getState().close());
+    act(() => useSearchPanel.getState().open('files'));
+    act(() => useSearchPanel.getState().open('files'));
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    expect(fixture.files).toHaveBeenCalledTimes(1);
+    // 파일 트리를 다시 읽으면(창 포커스·새로고침·파일 작업 등) epoch 가 오른다
+    fixture.files.mockResolvedValue(fileList(['file-0.ts', 'new.ts']));
+    fixture.epoch = 1;
+    act(() => useSearchPanel.getState().close());
+    act(() => useSearchPanel.getState().open('files'));
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
+    expect(fixture.files).toHaveBeenCalledTimes(2);
+  });
+
+  it('최근 파일(저장한 배열)이 빈 검색어 맨 앞에 온다', async () => {
+    recordRecentFile('/workspace', 'file-1.ts');
+    recordRecentFile('/workspace', 'file-2.ts');
+    show();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    expect(screen.getAllByRole('option').map((option) => option.getAttribute('title'))).toEqual([
+      'file-2.ts:1:1',
+      'file-1.ts:1:1',
+      'file-0.ts:1:1',
+    ]);
+  });
+
+  it('최근 파일 창(⌘E)은 아직 있는 최근 파일만 최근 순서로 보이고, 검색어로 거르며 Enter 로 연다', async () => {
+    recordRecentFile('/workspace', 'gone.ts');
+    recordRecentFile('/workspace', 'file-0.ts');
+    recordRecentFile('/workspace', 'file-2.ts');
+    show('recent');
+    expect(screen.getByText(S.workspaceSearch.recentFiles)).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getAllByRole('option').map((option) => option.getAttribute('title'))).toEqual([
+        'file-2.ts:1:1',
+        'file-0.ts:1:1',
+      ]),
+    );
+    fireEvent.change(input(), { target: { value: 'f0' } });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() =>
+      expect(fixture.open).toHaveBeenCalledWith(expect.anything(), 1, 'file-0.ts'),
+    );
+    expect(fixture.doc).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'file-0.ts' }),
+      'pinned',
+    );
+  });
+
+  it('낡은 목록에서 고른 파일이 사라졌으면 그 탭은 열고 다음에 열 때 목록을 다시 받는다', async () => {
+    fixture.open.mockResolvedValue({ kind: 'missing' });
+    show();
+    await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBeTruthy());
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(fixture.doc).toHaveBeenCalledTimes(1));
+    act(() => useSearchPanel.getState().open('files'));
+    await waitFor(() => expect(fixture.files).toHaveBeenCalledTimes(2));
   });
 
   it('긴 결과는 가상화하고 PageDown 선택을 스크롤하며 Home·End는 입력칸에 남긴다', async () => {

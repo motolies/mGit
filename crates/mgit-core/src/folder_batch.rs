@@ -87,6 +87,15 @@ impl FolderSettings {
     rename_all_fields = "camelCase"
 )]
 pub enum BatchOp {
+    Merge {
+        reference: String,
+        mode: crate::BatchMergeMode,
+        targets: Vec<crate::IntegrationTarget>,
+    },
+    Rebase {
+        reference: String,
+        targets: Vec<crate::IntegrationTarget>,
+    },
     DeleteRemoteBranch {
         targets: Vec<BranchDeleteTarget>,
         delete_local: bool,
@@ -144,6 +153,12 @@ impl BatchOp {
     /// 진행 표시용 라벨
     pub fn label(&self) -> String {
         match self {
+            BatchOp::Merge { reference, .. } => {
+                tr!("일괄 병합: {reference}", "Batch merge: {reference}")
+            }
+            BatchOp::Rebase { reference, .. } => {
+                tr!("일괄 리베이스: {reference}", "Batch rebase: {reference}")
+            }
             BatchOp::DeleteRemoteBranch { .. } => {
                 pick("원격 브랜치 일괄 삭제", "Delete remote branches").into()
             }
@@ -190,6 +205,17 @@ impl BatchOp {
     /// 사용자 입력 검증 (브랜치 이름·시작점·경로)
     fn validate(&self) -> Result<(), CoreError> {
         match self {
+            BatchOp::Merge {
+                reference, targets, ..
+            }
+            | BatchOp::Rebase { reference, targets } => {
+                if targets.is_empty() {
+                    return Err(CoreError::Invalid(
+                        "No confirmed integration targets".into(),
+                    ));
+                }
+                crate::folder_integration::validate(reference, targets)
+            }
             BatchOp::DeleteRemoteBranch { targets, .. }
             | BatchOp::DeleteLocalBranches { targets } => {
                 if targets.is_empty() {
@@ -310,11 +336,13 @@ pub struct RepoResult {
     pub moved: Option<RefMove>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_deletion: Option<BranchDeletionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<crate::IntegrationOutcome>,
 }
 
 impl RepoResult {
     /// 아직 결과가 없는 저장소 한 줄 (실패로 시작한다)
-    fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         RepoResult {
             name: repo_name(&path),
             path,
@@ -323,11 +351,12 @@ impl RepoResult {
             message: String::new(),
             moved: None,
             branch_deletion: None,
+            integration: None,
         }
     }
 
     /// 건너뛰기 (성공으로 센다)
-    fn skip(&mut self, why: &str) {
+    pub(crate) fn skip(&mut self, why: &str) {
         self.skipped = Some(why.into());
         self.ok = true;
     }
@@ -533,6 +562,39 @@ async fn run_batch_one(
         r.branch_deletion = Some(result);
         return r;
     }
+    if let BatchOp::Merge {
+        reference, targets, ..
+    }
+    | BatchOp::Rebase { reference, targets } = &*op
+    {
+        if d.work_tree != found.path {
+            r.skip(pick(
+                "스캔 이후 저장소 경로가 변경되었습니다. 다시 확인하세요.",
+                "Repository location changed since scanning. Preview again.",
+            ));
+            return r;
+        }
+        let Some(target) = targets.iter().find(|t| Path::new(&t.path) == found.path) else {
+            r.skip("No confirmed integration target");
+            return r;
+        };
+        let mode = if let BatchOp::Merge { mode, .. } = &*op {
+            Some(*mode)
+        } else {
+            None
+        };
+        return crate::folder_integration::execute(
+            &inner,
+            &d.work_tree,
+            reference,
+            target,
+            mode,
+            &settings,
+            cancel,
+            r,
+        )
+        .await;
+    }
     let status = match scanned_repo_status(runner, &d.work_tree).await {
         Ok(s) => s,
         Err(e) => {
@@ -548,6 +610,7 @@ async fn run_batch_one(
         .flatten()
         .is_some();
     let (args, network): (Vec<String>, bool) = match &*op {
+        BatchOp::Merge { .. } | BatchOp::Rebase { .. } => unreachable!("integration handled above"),
         BatchOp::DeleteRemoteBranch { .. } | BatchOp::DeleteLocalBranches { .. } => {
             unreachable!("deletion handled above")
         }
@@ -980,7 +1043,32 @@ impl Core {
         } else {
             folder.repos()
         };
-        let wanted = canonical_paths(repos);
+        // 승인된 스냅샷 경로는 폴더의 실제 작업 트리여야 하며 다른 저장소로 확장하지 않는다.
+        let integration_paths = match &op {
+            BatchOp::Merge { targets, .. } | BatchOp::Rebase { targets, .. } => Some(
+                targets
+                    .iter()
+                    .map(|t| PathBuf::from(&t.path))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        if let Some(paths) = &integration_paths {
+            folder.select(paths)?;
+            if !repos.is_empty() {
+                folder.select(repos)?;
+                let confirmed: std::collections::HashSet<_> =
+                    canonical_paths(paths).into_iter().collect();
+                let selected: std::collections::HashSet<_> =
+                    canonical_paths(repos).into_iter().collect();
+                if confirmed != selected {
+                    return Err(CoreError::Invalid(
+                        "Integration targets do not match selected repositories".into(),
+                    ));
+                }
+            }
+        }
+        let wanted = canonical_paths(integration_paths.as_deref().unwrap_or(repos));
         let targets: Vec<FoundRepo> = if wanted.is_empty() {
             all
         } else {

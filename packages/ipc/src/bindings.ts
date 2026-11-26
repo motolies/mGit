@@ -484,6 +484,8 @@ export const commands = {
 	folderSettingsSet: (session: number, settings: FolderSettingsDto_Deserialize) => __TAURI_INVOKE<null>("folder_settings_set", { session, settings }),
 	/**  일괄 작업 (MR-05·06·07). `repos` 가 비어 있으면 전부 */
 	folderBatch: (session: number, op: BatchOpDto_Deserialize, repos: string[]) => __TAURI_INVOKE<BatchResult_Serialize>("folder_batch", { session, op, repos }),
+	/**  쓰기 전 현재 브랜치와 대상 커밋 및 실행 불가 사유를 읽는다. */
+	folderIntegrationPreview: (session: number, reference: string, repos: string[]) => __TAURI_INVOKE<IntegrationPreview_Serialize[]>("folder_integration_preview", { session, reference, repos }),
 	/**  변경이 있는 저장소의 상태 (MR-08). `repos` 가 비어 있으면 전부, 아니면 그 저장소만 읽는다 (PF-02) */
 	folderChanges: (session: number, repos: string[]) => __TAURI_INVOKE<RepoChanges_Serialize[]>("folder_changes", { session, repos }),
 	/**
@@ -778,11 +780,13 @@ export type BackupRef = {
 	createdAt: number | null,
 };
 
+export type BatchMergeMode = "default" | "noFf" | "ffOnly" | "squash";
+
 /**  일괄 작업 */
 export type BatchOpDto = BatchOpDto_Serialize | BatchOpDto_Deserialize;
 
 /**  일괄 작업 */
-export type BatchOpDto_Deserialize = { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Deserialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint?: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
@@ -793,7 +797,7 @@ startPoint?: string | null } | { kind: "checkout"; name: string } |
 { kind: "renameBranch"; from: string; to: string };
 
 /**  일괄 작업 */
-export type BatchOpDto_Serialize = { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Serialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
@@ -2036,6 +2040,39 @@ export type IndexWriteResultDto = {
 	skipped: SkippedPathDto[],
 };
 
+export type IntegrationOutcome = "clean" | "conflicts" | "squashed";
+
+/**  실행 불가도 행으로 반환해 확인창에서 제외 이유를 보인다. */
+export type IntegrationPreview = IntegrationPreview_Serialize | IntegrationPreview_Deserialize;
+
+/**  실행 불가도 행으로 반환해 확인창에서 제외 이유를 보인다. */
+export type IntegrationPreview_Deserialize = {
+	path: string,
+	name: string,
+	currentBranch?: string | null,
+	head?: string | null,
+	sourceOid?: string | null,
+	reason?: string | null,
+};
+
+/**  실행 불가도 행으로 반환해 확인창에서 제외 이유를 보인다. */
+export type IntegrationPreview_Serialize = {
+	path: string,
+	name: string,
+	currentBranch: string | null,
+	head: string | null,
+	sourceOid: string | null,
+	reason: string | null,
+};
+
+/**  확인창이 승인한 저장소·현재 브랜치·양쪽 커밋 스냅샷이다. */
+export type IntegrationTarget = {
+	path: string,
+	currentBranch: string,
+	head: string,
+	sourceOid: string,
+};
+
 /**
  *  프런트로 넘어가는 오류. 프런트는 `kind` 로 분기해 화면 언어의 안내 문구로 바꿔 쓴다. `message` 는 셸이 받은
  *  화면 언어(`set_language`)로 만든 문구다
@@ -2778,6 +2815,7 @@ export type RepoResult_Deserialize = {
 	 */
 	moved?: RefMove | null,
 	branchDeletion?: BranchDeletionResult | null,
+	integration?: IntegrationOutcome | null,
 };
 
 /**  저장소 하나의 결과 */
@@ -2793,6 +2831,7 @@ export type RepoResult_Serialize = {
 	 */
 	moved?: RefMove,
 	branchDeletion?: BranchDeletionResult,
+	integration?: IntegrationOutcome,
 };
 
 /**  `folder_release_repo_session` 응답. 이미 닫혔거나 잡지 않은 세션도 오류가 아니라 이 모양이다 */

@@ -284,6 +284,7 @@ export function createNullClient(): IpcClient {
     }),
     folderSettingsSet: async () => {},
     folderBatch: noSession,
+    folderIntegrationPreview: noSession,
     folderChanges: async () => [],
     folderBranches: async () => ({ repos: [], branches: [] }),
     folderStage: noSession,

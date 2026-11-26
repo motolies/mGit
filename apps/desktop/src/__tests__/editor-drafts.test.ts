@@ -45,3 +45,12 @@ describe('shared editor draft paths', () => {
     expect(editorDrafts('/workspace/api').map((d) => d.path)).toEqual(['a.ts']);
   });
 });
+
+it('대상 검사에서는 저장 중인 원문도 포함하지만 일반 초안 조회는 기존대로 유지한다', () => {
+  const saving = { ...doc([[2, 'saving.ts']], false), inflight: Promise.resolve(true) };
+  vi.spyOn(fileEditors, 'documents').mockReturnValue([saving]);
+  expect(editorDrafts('/workspace')).toEqual([]);
+  expect(editorDrafts('/workspace', { includeSaving: true }).map((row) => row.path)).toEqual([
+    'api/saving.ts',
+  ]);
+});

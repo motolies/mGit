@@ -424,6 +424,10 @@ export interface FolderState {
    * 어느 쪽이든 빈 목록은 "전부"를 뜻한다. 실행하지 못했으면 null (사유는 `error`). 끝나면 결과나 사유를 작업 기록에
    * 남긴다 (이미 일괄 작업 중이라 부르지 않았으면 남기지 않는다)
    */
+  inspectIntegration(
+    reference: string,
+    repos: readonly string[],
+  ): ReturnType<IpcClient['folderIntegrationPreview']>;
   runBatch(op: BatchOp, repos?: readonly string[]): Promise<BatchResult | null>;
   inspectRemoteBranchDeletion(remote: string, name: string): Promise<BranchDeleteTarget[]>;
   /** 작업 기록을 비운다 (작업 기록 탭의 "기록 지우기") */
@@ -1288,6 +1292,10 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
 
       inspectRemoteBranchDeletion(remote, name) {
         return client.inspectFolderRemoteBranchDeletion(id, remote, name);
+      },
+
+      inspectIntegration(reference, repos) {
+        return client.folderIntegrationPreview(id, reference, [...repos]);
       },
 
       async runBatch(op, repos) {

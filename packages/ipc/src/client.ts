@@ -62,6 +62,7 @@ import type {
   HostKind,
   IndexTarget,
   IndexWriteResult,
+  IntegrationPreview,
   IpcError,
   IsolatedMerge,
   KeptResolution,
@@ -586,6 +587,11 @@ export interface IpcClient {
   folderSettings(session: SessionId): Promise<FolderSettings>;
   folderSettingsSet(session: SessionId, settings: FolderSettings): Promise<void>;
   /** `repos` 가 비면 전부 */
+  folderIntegrationPreview(
+    session: SessionId,
+    reference: string,
+    repos: string[],
+  ): Promise<IntegrationPreview[]>;
   folderBatch(session: SessionId, op: BatchOp, repos: string[]): Promise<BatchResult>;
   /** 변경이 있는 저장소만 온다. `repos` 를 주면 그 저장소만 읽는다 (PF-02). 없거나 비면 전부 */
   folderChanges(session: SessionId, repos?: readonly string[]): Promise<RepoChanges[]>;
@@ -1165,6 +1171,8 @@ export function createTauriClient(): IpcClient {
     folderSettings: (session) => call(() => commands.folderSettings(session)),
     folderSettingsSet: (session, settings) =>
       voidCall(() => commands.folderSettingsSet(session, settings)),
+    folderIntegrationPreview: (session, reference, repos) =>
+      call(() => commands.folderIntegrationPreview(session, reference, repos)),
     folderBatch: (session, op, repos) => call(() => commands.folderBatch(session, op, repos)),
     folderChanges: (session, repos) =>
       call(() => commands.folderChanges(session, [...(repos ?? [])])),

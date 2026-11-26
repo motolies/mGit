@@ -2,16 +2,18 @@ import type { GraphViewProps } from '@mgit/graph-view';
 import {
   type BatchResult,
   type BranchDeleteTarget,
+  createMockClient,
   createNullClient,
   type FolderBranch,
   type FolderBranches,
   type FolderBranchIn,
+  GraphRangeCache,
   type GraphRevs,
   type IpcClient,
   type TimelineInfo,
 } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PREF_BRANCH_FAVORITES } from '../features/branches/branch-favorites';
 import { batchNotice, batchSummary, repoResultState } from '../features/folder/batch-report';
@@ -19,8 +21,15 @@ import { FolderTimeline } from '../features/folder/FolderTimeline';
 import { TaskHistoryPanel } from '../features/folder/TaskHistoryPanel';
 import { useAppStore } from '../store';
 import type { SessionMeta } from '../store/app-store';
+import { type EditorFile, fileEditors } from '../store/file-editor-store';
 import { createFolderStore, DEFAULT_TIMELINE_QUERY, type FolderStore } from '../store/folder-store';
-import { clearSessionRegistry, disposeFolder, registerFolder } from '../store/session-registry';
+import {
+  clearSessionRegistry,
+  disposeFolder,
+  registerFolder,
+  registerSession,
+} from '../store/session-registry';
+import { createSessionStore } from '../store/session-store';
 import { installDialogStub, removeDialogStub, tick } from './dialog-stub';
 
 // 그래프 뷰는 jsdom 에서 그리지 못한다. 여기서 보는 것은 브랜치 트리와 로그 머리다
@@ -167,7 +176,7 @@ async function setup(
   await tick();
   /** 마지막 질의의 ref 범위 */
   const lastRevs = (): GraphRevs | undefined => querySet.mock.calls.at(-1)?.[1].revs;
-  return { store, batch, querySet, lastRevs };
+  return { store, batch, querySet, lastRevs, client };
 }
 
 const branchPanel = () => document.querySelector<HTMLElement>('[data-panel="git-branches"]');
@@ -493,6 +502,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       S.branches.menu.updateNone,
       `${S.comparison.withLocal}▸`,
       `${S.menu.compareWithHead('hotfix')}▸`,
+      S.folder.integration.mergeMenu('hotfix'),
+      S.folder.integration.rebaseMenu('hotfix'),
       S.branches.menu.newBranchHere,
       S.menu.rename,
       S.branches.menu.showOnly,
@@ -502,6 +513,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
     expect(menu.map((m) => m.getAttribute('aria-disabled'))).toEqual([
       null,
       'true',
+      null,
+      null,
       null,
       null,
       null,
@@ -519,6 +532,8 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       S.branches.menu.checkout,
       `${S.comparison.withLocal}▸`,
       `${S.menu.compareWithHead('origin/hotfix')}▸`,
+      S.folder.integration.mergeMenu('origin/hotfix'),
+      S.folder.integration.rebaseMenu('origin/hotfix'),
       S.branches.menu.newBranchHere,
       S.menu.deleteRemote,
       S.branches.menu.showOnly,
@@ -1347,4 +1362,325 @@ describe('batchNotice', () => {
       S.confirm.more(3),
     ]);
   });
+});
+
+/** 병합·리베이스 확인창에 전달할 실제 형태의 사전 조회 결과이다. */
+function integrationRows(): Awaited<ReturnType<IpcClient['folderIntegrationPreview']>> {
+  return [
+    {
+      path: pathOf('api'),
+      name: 'api',
+      currentBranch: 'development',
+      head: 'a'.repeat(40),
+      sourceOid: 'b'.repeat(40),
+      reason: null,
+    },
+    {
+      path: pathOf('docs'),
+      name: 'docs',
+      currentBranch: 'main',
+      head: 'c'.repeat(40),
+      sourceOid: 'd'.repeat(40),
+      reason: null,
+    },
+  ];
+}
+
+describe('멀티 저장소 병합·리베이스 확인', () => {
+  it('현재 브랜치별 방향과 제외 사유를 보이고 선택한 스냅샷만 squash 실행한다', async () => {
+    const rows = integrationRows().map((row) =>
+      row.name === 'docs' ? { ...row, reason: 'Dirty working tree' } : row,
+    );
+    const preview = vi.fn(async () => rows);
+    const { batch } = await setup(async () => RESULT, { folderIntegrationPreview: preview });
+    await openMenu(LOCAL('hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
+    );
+    const enabled = await screen.findByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
+    });
+    const disabled = screen.getByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(S.folder.integration.mergeDirection('docs', 'hotfix', 'main')),
+    });
+    expect(preview).toHaveBeenCalledWith(FOLDER_ID, 'refs/heads/hotfix', [
+      pathOf('api'),
+      pathOf('docs'),
+    ]);
+    expect(enabled).toHaveProperty('checked', true);
+    expect(disabled).toHaveProperty('disabled', true);
+    expect(disabled).toHaveProperty('checked', false);
+    expect(screen.getByText(/Dirty working tree/)).toBeTruthy();
+    expect(batch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: S.folder.integration.mode }), {
+      target: { value: 'squash' },
+    });
+    expect(screen.getByText(S.folder.integration.squashNotice)).toBeTruthy();
+    submit();
+    await waitFor(() => expect(batch).toHaveBeenCalledTimes(1));
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      {
+        kind: 'merge',
+        reference: 'refs/heads/hotfix',
+        mode: 'squash',
+        targets: [
+          {
+            path: pathOf('api'),
+            currentBranch: 'development',
+            head: 'a'.repeat(40),
+            sourceOid: 'b'.repeat(40),
+          },
+        ],
+      },
+      [pathOf('api')],
+    );
+  });
+
+  it('원격 브랜치 리베이스도 현재 선택한 저장소를 우선 체크하고 확인 전에는 쓰지 않는다', async () => {
+    const { store, batch } = await setup(async () => RESULT, {
+      folderIntegrationPreview: async () => integrationRows(),
+    });
+    act(() => store.getState().setSelected([pathOf('docs')]));
+    await openMenu(REMOTE('origin/hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.rebaseMenu('origin/hotfix') }),
+    );
+    const api = await screen.findByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(
+          S.folder.integration.rebaseDirection('api', 'development', 'origin/hotfix'),
+        ),
+    });
+    expect(api).toHaveProperty('checked', false);
+    expect(
+      screen.getByRole('checkbox', {
+        name: (name) =>
+          name.startsWith(S.folder.integration.rebaseDirection('docs', 'main', 'origin/hotfix')),
+      }),
+    ).toHaveProperty('checked', true);
+    expect(
+      screen.getByText(
+        new RegExp(S.folder.integration.remoteSnapshot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      ),
+    ).toBeTruthy();
+    expect(batch).not.toHaveBeenCalled();
+    submit();
+    await waitFor(() => expect(batch).toHaveBeenCalledTimes(1));
+    expect(batch).toHaveBeenCalledWith(
+      FOLDER_ID,
+      {
+        kind: 'rebase',
+        reference: 'refs/remotes/origin/hotfix',
+        targets: [
+          {
+            path: pathOf('docs'),
+            currentBranch: 'main',
+            head: 'c'.repeat(40),
+            sourceOid: 'd'.repeat(40),
+          },
+        ],
+      },
+      [pathOf('docs')],
+    );
+  });
+
+  it('모두 해제·취소·실행 불가 상태는 빈 대상 일괄 실행으로 바뀌지 않는다', async () => {
+    const { batch } = await setup(async () => RESULT, {
+      folderIntegrationPreview: async () => integrationRows(),
+    });
+    await openMenu(LOCAL('hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
+    );
+    await screen.findByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
+    });
+    for (const checkbox of within(dialog() as HTMLElement).getAllByRole('checkbox'))
+      fireEvent.click(checkbox);
+    expect(screen.getByRole('button', { name: S.folder.integration.mergeRun })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    submit();
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel }));
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('사전 조회 실패는 오류로 알리고 쓰기 작업을 시작하지 않는다', async () => {
+    const { batch } = await setup(async () => RESULT, {
+      folderIntegrationPreview: async () => {
+        throw new Error('preview unavailable');
+      },
+    });
+    await openMenu(LOCAL('hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
+    );
+    await waitFor(() =>
+      expect(
+        useAppStore.getState().toasts.some((toast) => toast.message === 'preview unavailable'),
+      ).toBe(true),
+    );
+    expect(dialog()).toBeNull();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('스쿼시 준비와 충돌을 완료된 커밋으로 표시하지 않는다', () => {
+    const squashed = {
+      path: '/a',
+      name: 'a',
+      ok: true,
+      skipped: null,
+      message: '',
+      integration: 'squashed' as const,
+    };
+    const conflicts = {
+      path: '/b',
+      name: 'b',
+      ok: false,
+      skipped: null,
+      message: 'conflict',
+      integration: 'conflicts' as const,
+    };
+    expect(repoResultState(squashed)).toBe(S.folder.integration.squashed);
+    expect(repoResultState(conflicts)).toBe(S.folder.integration.conflicts);
+    expect(
+      batchNotice({
+        label: 'merge',
+        results: [squashed, conflicts],
+        succeeded: 1,
+        skipped: 0,
+        failed: 1,
+      }).message,
+    ).toContain(S.folder.integration.squashed);
+  });
+});
+
+it('일괄 통합 사전 조회가 끝나기 전에 폴더를 떠나면 확인창이나 쓰기를 시작하지 않는다', async () => {
+  let finish: (rows: ReturnType<typeof integrationRows>) => void = () => {};
+  const preview = vi.fn(
+    () =>
+      new Promise<ReturnType<typeof integrationRows>>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const { batch } = await setup(async () => RESULT, { folderIntegrationPreview: preview });
+  await openMenu(LOCAL('hotfix'));
+  fireEvent.click(screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }));
+  await waitFor(() => expect(preview).toHaveBeenCalledOnce());
+  act(() => useAppStore.setState({ activeSessionId: null }));
+  await act(async () => finish(integrationRows()));
+  expect(dialog()).toBeNull();
+  expect(batch).not.toHaveBeenCalled();
+});
+
+it('실행 가능한 저장소가 없으면 사유를 보이고 빈 대상으로 실행하지 않는다', async () => {
+  const { batch } = await setup(async () => RESULT, {
+    folderIntegrationPreview: async () =>
+      integrationRows().map((row) => ({ ...row, reason: 'Current branch is the selected branch' })),
+  });
+  await openMenu(LOCAL('hotfix'));
+  fireEvent.click(
+    screen.getByRole('menuitem', { name: S.folder.integration.rebaseMenu('hotfix') }),
+  );
+  await screen.findByText(S.folder.integration.noneEligible);
+  const boxes = within(dialog() as HTMLElement).getAllByRole('checkbox');
+  expect(boxes.every((box) => (box as HTMLInputElement).disabled)).toBe(true);
+  submit();
+  await tick();
+  expect(batch).not.toHaveBeenCalled();
+});
+
+/** 디스크와 다른 초안을 실제 편집 저장소에 넣고 IME 중으로 두어 자동 저장 타이밍을 제거한다. */
+async function pendingIntegrationDraft(client: IpcClient, session: number, path: string) {
+  client.fsReadEditableFile = async () => ({
+    kind: 'text',
+    fileKey: `batch-draft-${session}`,
+    path,
+    text: 'base',
+    revision: '1',
+    size: 4,
+    bom: false,
+    lineEnding: 'lf',
+  });
+  const opened = await fileEditors.open(client, session, path);
+  if (!('fileKey' in opened)) throw new Error('Expected editable fixture');
+  const doc = opened as EditorFile;
+  fileEditors.composition(doc, true);
+  fileEditors.update(
+    doc,
+    doc.state.update({ changes: { from: 0, to: doc.state.doc.length, insert: 'draft' } }).state,
+  );
+  return doc;
+}
+
+it('폴더 세션으로 열린 미저장 편집 내용이 있으면 해당 저장소를 체크할 수 없다', async () => {
+  const { batch, client } = await setup(async () => RESULT, {
+    folderIntegrationPreview: async () => integrationRows(),
+  });
+  try {
+    await pendingIntegrationDraft(client, FOLDER_ID, 'api/draft.ts');
+    await openMenu(LOCAL('hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
+    );
+    const checkbox = await screen.findByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
+    });
+    expect(checkbox).toHaveProperty('disabled', true);
+    expect(
+      screen.getByText(
+        new RegExp(S.folder.integration.pendingEditor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      ),
+    ).toBeTruthy();
+    expect(batch).not.toHaveBeenCalled();
+  } finally {
+    await fileEditors.discard(FOLDER_ID);
+    fileEditors.releaseSession(FOLDER_ID);
+  }
+});
+
+it('확인창 이후 저장소 탭에서 생긴 초안은 다시 검사하여 병합 실행을 막는다', async () => {
+  const { batch } = await setup(async () => RESULT, {
+    folderIntegrationPreview: async () => integrationRows(),
+  });
+  const repoClient = createMockClient({ rows: 3, progressIntervalMs: 0 });
+  const opened = await repoClient.openRepo(pathOf('api'), () => {});
+  const cache = new GraphRangeCache({
+    fetchWindow: (start, length) => repoClient.graphWindow(opened.session, start, length),
+  });
+  const repoStore = createSessionStore(opened, repoClient, cache);
+  registerSession(opened.session, { store: repoStore, cache });
+  try {
+    await openMenu(LOCAL('hotfix'));
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: S.folder.integration.mergeMenu('hotfix') }),
+    );
+    await screen.findByRole('checkbox', {
+      name: (name) =>
+        name.startsWith(S.folder.integration.mergeDirection('api', 'hotfix', 'development')),
+    });
+    await pendingIntegrationDraft(repoClient, opened.session, 'draft.ts');
+    submit();
+    await waitFor(() =>
+      expect(
+        useAppStore
+          .getState()
+          .toasts.some((toast) => toast.message === S.folder.integration.editorChanged),
+      ).toBe(true),
+    );
+    expect(batch).not.toHaveBeenCalled();
+  } finally {
+    await fileEditors.discard(opened.session);
+    fileEditors.releaseSession(opened.session);
+    await repoClient.closeRepo(opened.session);
+  }
 });

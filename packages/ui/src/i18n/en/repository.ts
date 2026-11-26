@@ -610,6 +610,44 @@ export const enRepository: Pick<
     button: 'Create',
   },
   folder: {
+    integration: {
+      pendingEditor: 'There are unsaved edits or a file save in progress.',
+      editorChanged: 'Wait for edited files to finish saving, then inspect the targets again.',
+      noneEligible: 'No eligible repositories. Check the reason shown for each repository.',
+      result: (
+        done: number,
+        prepared: number,
+        conflicts: number,
+        skipped: number,
+        failed: number,
+      ) =>
+        `Completed ${done} · Awaiting commit ${prepared} · Conflicts ${conflicts} · Skipped ${skipped} · Failed ${failed}`,
+      mergeMenu: (source: string) => `Merge ${source} into current branches…`,
+      rebaseMenu: (source: string) => `Rebase current branches onto ${source}…`,
+      mergeTitle: (source: string) => `Batch merge ${source}`,
+      rebaseTitle: (source: string) => `Batch rebase onto ${source}`,
+      mergeDirection: (name: string, source: string, current: string) =>
+        `${name}: ${source} → ${current}`,
+      rebaseDirection: (name: string, current: string, source: string) =>
+        `${name}: ${current} → onto ${source}`,
+      partialResults:
+        'Repositories are processed independently. A conflict or failure stops that repository; others continue. Completed changes are kept.',
+      mergeExplanation: 'Merge the selected branch into each repository’s current branch.',
+      rebaseWarning:
+        'Rewrite each repository’s current branch commits onto the selected branch. The current branch is backed up before execution.',
+      remoteSnapshot: 'Remote branches use the state from the last fetch.',
+      mode: 'Merge mode',
+      defaultMode: 'Default merge (fast-forward when possible)',
+      squashNotice:
+        'Squash prepares staged changes without committing. Review and commit them in each repository.',
+      noBranch: 'No current branch',
+      incomplete: 'Repository state could not be verified.',
+      previewFailed: 'Could not inspect merge/rebase targets',
+      mergeRun: 'Merge selected repositories',
+      rebaseRun: 'Rebase selected repositories',
+      conflicts: 'Stopped on conflicts — resolve and continue, or abort',
+      squashed: 'Changes prepared — commit required',
+    },
     title: (name: string) => `${name} dashboard`,
     repos: (n: number) => `${formatNumber(n)} ${plural(n, 'repository', 'repositories')}`,
     refresh: 'Refresh',
@@ -793,6 +831,8 @@ export const enRepository: Pick<
         worktree: 'Batch worktree',
         updateBranch: 'Batch update',
         renameBranch: 'Batch rename',
+        merge: 'Batch merge',
+        rebase: 'Batch rebase',
         deleteRemoteBranch: 'Batch delete remote branch',
         deleteLocalBranches: 'Batch force-delete local branches',
         commit: 'Batch commit',

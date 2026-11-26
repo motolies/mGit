@@ -19,6 +19,7 @@ import type {
   FolderBranchIn,
   IndexTarget,
   IndexWriteResult,
+  IntegrationPreview,
   OpKind,
   RefLabel,
   RefMove,
@@ -111,6 +112,10 @@ function shortRef(name: string): string {
 /** 일괄 작업의 진행 라벨 (코어 `BatchOp::label`, 화면 언어로) */
 export function mockBatchLabel(op: BatchOp): string {
   switch (op.kind) {
+    case 'merge':
+      return pick(`일괄 병합: ${op.reference}`, `Batch merge: ${op.reference}`);
+    case 'rebase':
+      return pick(`일괄 리베이스: ${op.reference}`, `Batch rebase: ${op.reference}`);
     case 'deleteRemoteBranch':
       return pick('원격 브랜치 일괄 삭제', 'Delete remote branches');
     case 'deleteLocalBranches':
@@ -220,6 +225,9 @@ function batchStep(
   const url = `${MOCK_REMOTE_HOST}/${name}.git`;
   const key = `${repo}:${op.kind}`;
   switch (op.kind) {
+    case 'merge':
+    case 'rebase':
+      return { skip: 'Handled by integration flow' };
     case 'deleteRemoteBranch':
     case 'deleteLocalBranches':
       return { skip: 'Handled by deletion flow' };
@@ -465,6 +473,82 @@ export function mockFolderBatch(
   op: BatchOp,
   repos: readonly string[],
 ): MockBatchRun {
+  if (op.kind === 'merge' || op.kind === 'rebase') {
+    if (!op.targets.length) throw new Error('No confirmed integration targets');
+    const preview = mockIntegrationPreview(
+      data,
+      op.reference,
+      op.targets.map((t) => t.path),
+    );
+    const commands: MockBatchRun['commands'] = [];
+    const results: RepoResult[] = preview.map((row) => {
+      const target = op.targets.find((t) => t.path === row.path);
+      const skipped =
+        row.reason ??
+        (!target ||
+        target.currentBranch !== row.currentBranch ||
+        target.head !== row.head ||
+        target.sourceOid !== row.sourceOid
+          ? pick(
+              '확인 이후 브랜치 또는 커밋이 변경되었습니다. 다시 확인하세요.',
+              'Branch or commit changed after confirmation. Preview again.',
+            )
+          : null);
+      if (skipped) return { path: row.path, name: row.name, ok: true, skipped, message: '' };
+      const args =
+        op.kind === 'merge'
+          ? [
+              'merge',
+              '--no-edit',
+              '--no-autostash',
+              ...(op.mode === 'noFf'
+                ? ['--no-ff']
+                : op.mode === 'ffOnly'
+                  ? ['--ff-only']
+                  : op.mode === 'squash'
+                    ? ['--squash']
+                    : []),
+            ]
+          : ['rebase', '--no-autostash', '--no-update-refs'];
+      if (op.kind === 'rebase')
+        commands.push({
+          cwd: row.path,
+          command: ran(
+            ['update-ref', `refs/mgit/backup/${target?.currentBranch}/mock`, target?.head ?? ''],
+            10,
+          ),
+        });
+      commands.push({
+        cwd: row.path,
+        command: ran([...args, '--end-of-options', target?.sourceOid ?? ''], 50),
+      });
+      const squashed = op.kind === 'merge' && op.mode === 'squash';
+      return {
+        path: row.path,
+        name: row.name,
+        ok: true,
+        skipped: null,
+        message: squashed
+          ? pick(
+              '스쿼시 병합을 준비했습니다. 변경 내용을 확인한 뒤 커밋하세요.',
+              'Squash merge prepared. Review the changes and commit them.',
+            )
+          : '',
+        integration: squashed ? 'squashed' : 'clean',
+      };
+    });
+    const skipped = results.filter((r) => r.skipped).length;
+    return {
+      commands,
+      result: {
+        label: mockBatchLabel(op),
+        results,
+        succeeded: results.length - skipped,
+        skipped,
+        failed: 0,
+      },
+    };
+  }
   const deletion =
     op.kind === 'deleteRemoteBranch' || op.kind === 'deleteLocalBranches' ? op : null;
   const targets = data.openFolder
@@ -753,4 +837,48 @@ export function mockUnresolveCommand(path: string, mode: UnresolveMode): MockCom
       ? ['checkout', '-m', '--', path]
       : ['update-index', '--unresolve', '--', path];
   return ran(args, elapsedOf(`unresolve:${path}`, 8, 30));
+}
+
+/** 목에서도 실제 브랜치 목록과 작업 상태를 확인하고 동일 스냅샷을 실행에 사용한다. */
+export function mockIntegrationPreview(
+  data: MockFolderData,
+  reference: string,
+  repos: readonly string[],
+): IntegrationPreview[] {
+  if (!reference.startsWith('refs/heads/') && !reference.startsWith('refs/remotes/'))
+    throw new Error('A fully qualified branch reference is required');
+  for (const path of repos)
+    if (!data.openFolder.some((repo) => repo.path === path))
+      throw new Error('Repository is outside this folder');
+  const remote = reference.startsWith('refs/remotes/');
+  const name = reference.replace(/^refs\/(heads|remotes)\//, '');
+  return data.folderSummaries
+    .filter((repo) => !repos.length || repos.includes(repo.path))
+    .map((repo) => {
+      const exists = hasBranch(data, repo.path, name, remote);
+      const reason =
+        repo.error ??
+        (!repo.branch || repo.detached
+          ? pick(
+              '현재 브랜치의 커밋이 필요합니다 (분리된 HEAD 또는 빈 저장소)',
+              'A committed current branch is required (detached or unborn HEAD)',
+            )
+          : !exists
+            ? mockReason.noBranch()
+            : reference === `refs/heads/${repo.branch}`
+              ? pick('현재 브랜치와 같은 브랜치입니다', 'The selected branch is the current branch')
+              : repo.op || repo.conflicted
+                ? mockReason.inProgress()
+                : repo.changed
+                  ? mockReason.dirty()
+                  : null);
+      return {
+        path: repo.path,
+        name: repo.name,
+        currentBranch: repo.branch ?? null,
+        head: repo.branch ? oidOf(`${repo.path}:head:${repo.branch}`) : null,
+        sourceOid: exists ? oidOf(`${ownerOf(data, repo.path)}:${reference}`) : null,
+        reason,
+      };
+    });
 }

@@ -514,6 +514,32 @@ export function FolderTimeline() {
           })),
         },
         {
+          label: S.folder.integration.mergeMenu(branch.name),
+          disabled: running,
+          onSelect: () =>
+            void flowsRef.current.integrateBranch(
+              'merge',
+              { fullName: folderBranchFullName(branch), name: branch.name },
+              branch.repos.map((repo) => ({
+                path: repo.path,
+                name: repoNameIn(branchRepos, repo.path),
+              })),
+            ),
+        },
+        {
+          label: S.folder.integration.rebaseMenu(branch.name),
+          disabled: running,
+          onSelect: () =>
+            void flowsRef.current.integrateBranch(
+              'rebase',
+              { fullName: folderBranchFullName(branch), name: branch.name },
+              branch.repos.map((repo) => ({
+                path: repo.path,
+                name: repoNameIn(branchRepos, repo.path),
+              })),
+            ),
+        },
+        {
           label: S.branches.menu.newBranchHere,
           disabled: running,
           // "여기서 새 branch…": 그 브랜치를 가진 저장소 중 체크한 저장소에서 그 브랜치를 시작점으로 만든다

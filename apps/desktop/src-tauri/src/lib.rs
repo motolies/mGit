@@ -259,6 +259,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_folder::folder_settings,
             commands_folder::folder_settings_set,
             commands_folder::folder_batch,
+            commands_folder::folder_integration_preview,
             commands_folder::folder_changes,
             commands_folder::folder_branches,
             commands_folder::folder_stage,

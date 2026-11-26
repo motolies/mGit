@@ -1,7 +1,9 @@
-import type { BatchOp, BatchResult, FoundRepo, RepoSummary } from '@mgit/ipc';
+import type { BatchOp, BatchResult, FoundRepo, IpcClient, MergeMode, RepoSummary } from '@mgit/ipc';
 import { Button, requireChecked, S } from '@mgit/ui';
+import { useRef, useState } from 'react';
 import { bool, str, useDialogs } from '../../components/use-dialogs';
-import { getFolderStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import { describeError, getFolderStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import { editorDrafts } from '../../store/editor-drafts';
 import { branchNameField, normalizeBranchName } from '../branch/branch-name';
 import { useBatchReport } from './batch-report';
 import styles from './FolderExtra.module.css';
@@ -29,6 +31,24 @@ export interface BranchStartPoint {
   fullName: string;
   /** 화면에 쓰는 이름 */
   name: string;
+}
+
+export type IntegrationPreviewRow = Awaited<
+  ReturnType<IpcClient['folderIntegrationPreview']>
+>[number];
+
+/** 사전 조회에 실행 스냅샷이 모두 있는 저장소만 선택할 수 있다. */
+export function eligibleIntegration(row: IntegrationPreviewRow): row is IntegrationPreviewRow & {
+  currentBranch: string;
+  head: string;
+  sourceOid: string;
+} {
+  return row.reason === null && !!row.currentBranch && !!row.head && !!row.sourceOid;
+}
+
+/** 확인창의 저장소 선택 키는 병합 방식 필드와 충돌하지 않는다. */
+export function integrationRepoKey(path: string): string {
+  return `repo:${path}`;
 }
 
 /**
@@ -154,6 +174,8 @@ function targetRepos(repos: readonly FoundRepo[], paths: readonly string[]): Fou
  * `report` 를 주면 실행이 끝날 때마다 결과를 넘긴다 (실행하지 못했으면 null — 사유는 폴더 스토어의 `error`)
  */
 export function useFolderBatchFlows(report?: (result: BatchResult | null) => void) {
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
   const f = useFolder((st) => ({
     id: st.id,
     repos: st.repos,
@@ -161,14 +183,16 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     settings: st.settings,
     running: st.batchRunning,
     runBatch: st.runBatch,
+    inspectIntegration: st.inspectIntegration,
   }));
   const selected = useSelectedRepos();
+  const notice = useAppStore((s) => s.notice);
   const pickDirectory = useAppStore((s) => s.pickDirectory);
   const openFolderAt = useAppStore((s) => s.openFolderAt);
   const dialogs = useDialogs();
   const t = S.folder.batch;
   const repos = f?.repos ?? [];
-  const running = f?.running ?? false;
+  const running = (f?.running ?? false) || preparing;
   const runBatch = f?.runBatch;
   const folderId = f?.id ?? null;
 
@@ -208,6 +232,130 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
    */
   const updateBranch = (name: string, paths: readonly string[]) =>
     paths.length === 0 ? Promise.resolve(null) : run({ kind: 'updateBranch', name }, paths);
+
+  /** 저장소별 현재 브랜치와 기준 OID를 확인한 뒤 선택한 저장소에만 병합·리베이스한다. */
+  const integrateBranch = async (
+    kind: 'merge' | 'rebase',
+    source: BranchStartPoint,
+    candidates: readonly { path: string; name: string }[],
+  ) => {
+    if (
+      folderId === null ||
+      !f?.inspectIntegration ||
+      running ||
+      preparingRef.current ||
+      candidates.length === 0
+    )
+      return;
+    const live = getFolderStore(folderId)?.getState();
+    if (!live || live.batchRunning) return;
+    const copy = S.folder.integration;
+    preparingRef.current = true;
+    setPreparing(true);
+    let rows: IntegrationPreviewRow[];
+    try {
+      rows = (
+        await live.inspectIntegration(
+          source.fullName,
+          candidates.map((repo) => repo.path),
+        )
+      ).map((row) =>
+        editorDrafts(row.path, { includeSaving: true }).length > 0
+          ? { ...row, reason: copy.pendingEditor }
+          : row,
+      );
+    } catch (error) {
+      notice({ kind: 'error', title: copy.previewFailed, message: describeError(error) });
+      return;
+    } finally {
+      preparingRef.current = false;
+      setPreparing(false);
+    }
+    if (
+      !getFolderStore(folderId) ||
+      useAppStore.getState().activeSessionId !== folderId ||
+      getFolderStore(folderId)?.getState().batchRunning
+    )
+      return;
+    const eligible = rows.filter(eligibleIntegration);
+    const values = await dialogs.prompt({
+      title: kind === 'merge' ? copy.mergeTitle(source.name) : copy.rebaseTitle(source.name),
+      message: [
+        copy.partialResults,
+        kind === 'rebase' ? copy.rebaseWarning : copy.mergeExplanation,
+        ...(source.fullName.startsWith('refs/remotes/') ? [copy.remoteSnapshot] : []),
+      ].join('\n'),
+      danger: kind === 'rebase',
+      fields: [
+        ...(kind === 'merge'
+          ? [
+              {
+                key: 'mode',
+                label: copy.mode,
+                type: 'select' as const,
+                initial: 'default',
+                options: [
+                  { value: 'default', label: copy.defaultMode },
+                  { value: 'noFf', label: S.menu.mergeIntoNoFf },
+                  { value: 'ffOnly', label: S.menu.mergeIntoFfOnly },
+                  { value: 'squash', label: S.menu.mergeIntoSquash },
+                ],
+              },
+            ]
+          : []),
+        ...rows.map((row) => ({
+          key: integrationRepoKey(row.path),
+          label:
+            kind === 'merge'
+              ? copy.mergeDirection(row.name, source.name, row.currentBranch ?? copy.noBranch)
+              : copy.rebaseDirection(row.name, row.currentBranch ?? copy.noBranch, source.name),
+          type: 'checkbox' as const,
+          initial:
+            eligibleIntegration(row) && (selected.length === 0 || selected.includes(row.path)),
+          disabled: !eligibleIntegration(row),
+          note: [row.path, row.reason ?? (!eligibleIntegration(row) ? copy.incomplete : null)]
+            .filter(Boolean)
+            .join(' · '),
+          group: t.repoGroup(rows.length),
+        })),
+      ],
+      validate: requireChecked(
+        eligible.map((row) => integrationRepoKey(row.path)),
+        eligible.length === 0 ? copy.noneEligible : t.noneChecked,
+      ),
+      notice: (values) => (kind === 'merge' && values.mode === 'squash' ? copy.squashNotice : null),
+      confirmLabel: kind === 'merge' ? copy.mergeRun : copy.rebaseRun,
+    });
+    if (!values || !getFolderStore(folderId) || useAppStore.getState().activeSessionId !== folderId)
+      return;
+    const targets = eligible
+      .filter((row) => bool(values, integrationRepoKey(row.path)))
+      .map(({ path, currentBranch, head, sourceOid }) => ({
+        path,
+        currentBranch,
+        head,
+        sourceOid,
+      }));
+    if (targets.length === 0) return;
+    // 확인창을 띄운 뒤 포맷·편집·저장이 시작된 경우 원문을 덮거나 자동 저장을 강제하지 않는다.
+    if (targets.some((target) => editorDrafts(target.path, { includeSaving: true }).length > 0)) {
+      notice({ kind: 'error', title: copy.previewFailed, message: copy.editorChanged });
+      return;
+    }
+    if (kind === 'merge') {
+      const value = str(values, 'mode');
+      const mode: MergeMode =
+        value === 'noFf' || value === 'ffOnly' || value === 'squash' ? value : 'default';
+      await run(
+        { kind: 'merge', reference: source.fullName, mode, targets },
+        targets.map((target) => target.path),
+      );
+    } else
+      await run(
+        { kind: 'rebase', reference: source.fullName, targets },
+        targets.map((target) => target.path),
+      );
+  };
 
   /**
    * push (WS-09, W14·W19): 항상 저장소 체크 목록을 거친다 (checkout 체크 목록과 같은 부품·같은 묶음 모양). 올라갈
@@ -486,6 +634,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     fetch,
     pull,
     updateBranch,
+    integrateBranch,
     push,
     createBranch,
     checkout,

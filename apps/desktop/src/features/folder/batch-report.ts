@@ -30,6 +30,21 @@ export function movedCounts(
 /** 작업 기록 줄·토스트의 수: 옮긴 결과가 있으면 "갱신 · 이미 최신 · 건너뜀 · 실패", 아니면 "성공 · 건너뜀 · 실패" */
 export function batchSummary(result: BatchResult): string {
   const t = S.folder.batch;
+  if (result.results.some((row) => row.integration)) {
+    const prepared = result.results.filter(
+      (row) => row.ok && !row.skipped && row.integration === 'squashed',
+    ).length;
+    const conflicts = result.results.filter(
+      (row) => !row.skipped && row.integration === 'conflicts',
+    ).length;
+    return S.folder.integration.result(
+      result.succeeded - prepared,
+      prepared,
+      conflicts,
+      result.skipped,
+      Math.max(0, result.failed - conflicts),
+    );
+  }
   const moved = movedCounts(result);
   return moved
     ? t.resultMoved(moved.updated, moved.upToDate, moved.done, result.skipped, result.failed)
@@ -43,6 +58,8 @@ export function repoResultState(r: RepoResult): string {
   if (r.skipped) {
     return `${t.skipped}: ${r.skipped}`;
   }
+  if (r.integration === 'conflicts') return S.folder.integration.conflicts;
+  if (r.integration === 'squashed') return S.folder.integration.squashed;
   if (!r.ok) {
     return t.failed;
   }
@@ -67,10 +84,15 @@ export function batchNotice(result: BatchResult): {
     .filter((r) => r.skipped || !r.ok)
     .map(
       (r) =>
-        `${r.name}: ${r.branchDeletion ? [...branchDeletionLines(r.branchDeletion), ...(r.message ? [r.message] : [])].join(' · ') : (r.skipped ?? r.message)}`,
+        `${r.name}: ${r.branchDeletion ? [...branchDeletionLines(r.branchDeletion), ...(r.message ? [r.message] : [])].join(' · ') : (r.skipped ?? (r.integration === 'conflicts' ? [repoResultState(r), r.message].filter(Boolean).join(' · ') : r.message))}`,
     );
   const updates = result.results
-    .filter((r) => r.ok && !r.skipped && (r.branchDeletion || (r.moved?.commits ?? 0) > 0))
+    .filter(
+      (r) =>
+        r.ok &&
+        !r.skipped &&
+        (r.branchDeletion || r.integration === 'squashed' || (r.moved?.commits ?? 0) > 0),
+    )
     .map((r) => `${r.name}: ${repoResultState(r)}`);
   const lines = [...problems, ...updates];
   const more = lines.length - BATCH_PROBLEM_LINES;

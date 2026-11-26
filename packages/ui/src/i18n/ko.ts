@@ -1482,6 +1482,44 @@ export const ko = {
     button: '만들기',
   },
   folder: {
+    integration: {
+      pendingEditor: '저장하지 않은 편집 내용 또는 저장 중인 파일이 있습니다.',
+      editorChanged: '편집 내용의 저장이 끝난 뒤 대상을 다시 확인하고 실행하세요.',
+      noneEligible: '실행할 수 있는 저장소가 없습니다. 각 저장소의 사유를 확인하세요.',
+      result: (
+        done: number,
+        prepared: number,
+        conflicts: number,
+        skipped: number,
+        failed: number,
+      ) =>
+        `완료 ${done} · 커밋 대기 ${prepared} · 충돌 ${conflicts} · 건너뜀 ${skipped} · 실패 ${failed}`,
+      mergeMenu: (source: string) => `${source} → 현재 브랜치 일괄 병합…`,
+      rebaseMenu: (source: string) => `현재 브랜치를 ${source} 위로 일괄 리베이스…`,
+      mergeTitle: (source: string) => `${source} 일괄 병합`,
+      rebaseTitle: (source: string) => `${source} 위로 일괄 리베이스`,
+      mergeDirection: (name: string, source: string, current: string) =>
+        `${name}: ${source} → ${current}`,
+      rebaseDirection: (name: string, current: string, source: string) =>
+        `${name}: ${current} → ${source} 위로`,
+      partialResults:
+        '저장소별로 실행합니다. 충돌·실패가 발생한 저장소는 멈추고 다른 저장소는 계속 처리합니다. 이미 완료된 작업은 유지됩니다.',
+      mergeExplanation: '선택한 브랜치를 각 저장소의 현재 브랜치에 병합합니다.',
+      rebaseWarning:
+        '각 저장소의 현재 브랜치 커밋을 선택한 브랜치 위에 다시 작성합니다. 실행 전에 현재 브랜치를 백업합니다.',
+      remoteSnapshot: '원격 브랜치는 마지막 Fetch로 받은 내용을 사용합니다.',
+      mode: '병합 방식',
+      defaultMode: '기본 병합 (가능하면 fast-forward)',
+      squashNotice:
+        'Squash는 변경 내용을 스테이징하고 멈춥니다. 내용을 검토한 뒤 각 저장소에서 커밋하세요.',
+      noBranch: '현재 브랜치 없음',
+      incomplete: '상태를 확인할 수 없습니다.',
+      previewFailed: '병합·리베이스 대상을 확인하지 못했습니다.',
+      mergeRun: '선택한 저장소 병합',
+      rebaseRun: '선택한 저장소 리베이스',
+      conflicts: '충돌로 중단됨 — 충돌 해결 후 계속하거나 중단하세요',
+      squashed: '변경 준비됨 — 별도 커밋 필요',
+    },
     title: (name: string) => `${name} 대시보드`,
     repos: (n: number) => `저장소 ${n}개`,
     refresh: '새로고침',
@@ -1665,6 +1703,8 @@ export const ko = {
         worktree: '일괄 워크트리',
         updateBranch: '일괄 업데이트',
         renameBranch: '일괄 이름 바꾸기',
+        merge: '일괄 병합',
+        rebase: '일괄 리베이스',
         deleteRemoteBranch: '일괄 원격 브랜치 삭제',
         deleteLocalBranches: '일괄 로컬 브랜치 강제 삭제',
         commit: '일괄 커밋',

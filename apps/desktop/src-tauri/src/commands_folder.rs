@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use mgit_core::{
-    BatchOp, BatchPullMode, FolderSettings, IndexTarget, IndexWriteResult, SessionId, SkipReason,
+    BatchMergeMode, BatchOp, BatchPullMode, FolderSettings, IndexTarget, IndexWriteResult,
+    IntegrationOutcome, IntegrationPreview, IntegrationTarget, SessionId, SkipReason,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -81,6 +82,15 @@ impl From<FolderSettingsDto> for FolderSettings {
     rename_all_fields = "camelCase"
 )]
 pub enum BatchOpDto {
+    Merge {
+        reference: String,
+        mode: BatchMergeMode,
+        targets: Vec<IntegrationTarget>,
+    },
+    Rebase {
+        reference: String,
+        targets: Vec<IntegrationTarget>,
+    },
     DeleteRemoteBranch {
         targets: Vec<BranchDeleteTarget>,
         delete_local: bool,
@@ -128,6 +138,16 @@ impl From<BatchOpDto> for BatchOp {
     /// wire → 코어
     fn from(op: BatchOpDto) -> Self {
         match op {
+            BatchOpDto::Merge {
+                reference,
+                mode,
+                targets,
+            } => BatchOp::Merge {
+                reference,
+                mode,
+                targets,
+            },
+            BatchOpDto::Rebase { reference, targets } => BatchOp::Rebase { reference, targets },
             BatchOpDto::DeleteRemoteBranch {
                 targets,
                 delete_local,
@@ -208,6 +228,9 @@ pub struct RepoResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
     pub branch_deletion: Option<BranchDeletionResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub integration: Option<IntegrationOutcome>,
 }
 
 /// 일괄 작업 결과
@@ -237,6 +260,7 @@ impl From<mgit_core::BatchResult> for BatchResult {
                     message: r.message,
                     moved: r.moved.map(Into::into),
                     branch_deletion: r.branch_deletion.map(Into::into),
+                    integration: r.integration,
                 })
                 .collect(),
             succeeded: b.succeeded,
@@ -934,4 +958,24 @@ pub async fn folder_commit_file_diff_document(
         )
         .await?;
     Ok(diff.into())
+}
+
+/// 쓰기 전 현재 브랜치와 대상 커밋 및 실행 불가 사유를 읽는다.
+#[tauri::command]
+#[specta::specta]
+pub async fn folder_integration_preview(
+    state: State<'_, AppState>,
+    session: u32,
+    reference: String,
+    repos: Vec<String>,
+) -> Result<Vec<IntegrationPreview>, IpcError> {
+    Ok(state
+        .core()?
+        .core
+        .folder_integration_preview(
+            SessionId(session),
+            &reference,
+            &repos.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
+        )
+        .await?)
 }

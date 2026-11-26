@@ -25,6 +25,10 @@ mod events;
 mod folder;
 mod folder_auto_fetch;
 mod folder_batch;
+mod folder_integration;
+pub use folder_integration::{
+    BatchMergeMode, IntegrationOutcome, IntegrationPreview, IntegrationTarget,
+};
 mod folder_branches;
 mod folder_index;
 mod folder_inspect;

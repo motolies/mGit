@@ -36,6 +36,7 @@ import {
   mockCommitCommands,
   mockFolderBatch,
   mockIndexCommand,
+  mockIntegrationPreview,
   mockOpCommand,
   mockResolveCommands,
   mockUnresolveCommand,
@@ -2026,6 +2027,9 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
          * 실패 사례: push 는 갈라진 `web-console` 이 거부되고, 요약에 실패한 `infra-scripts` 는 명령 없이 실패한다.
          * 호출 인자는 `__mgitMockBatches` 에 `{op, repos}` 로 남는다
          */
+        async folderIntegrationPreview(session, reference, repos) {
+          return mockIntegrationPreview(folderOf(session).data, reference, repos);
+        },
         async folderBatch(session, op, repos) {
           countMockCall('folderBatch');
           recordMockWrite({ op, repos: [...repos] });

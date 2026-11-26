@@ -215,11 +215,22 @@ describe('editor tools', () => {
       }),
     });
     expect(host.querySelector('.mgit-inline-blame')?.textContent).toContain('Kim');
+    // Blame는 코드 DOM 밖에 있어 줄 끝 커서·줄 높이·텍스트 선택에 포함되지 않는다.
+    expect(view.contentDOM.querySelector('.mgit-inline-blame')).toBeNull();
+    expect(view.contentDOM.textContent).toBe('firstsecond');
+    expect(view.contentDOM.querySelector('.cm-widgetBuffer')).toBeNull();
     view.dispatch({ selection: { anchor: 6 } });
     expect(host.querySelector('.mgit-inline-blame')?.textContent).toContain('Lee');
-    (host.querySelector('.mgit-inline-blame') as HTMLButtonElement).click();
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+    const blame = host.querySelector('.mgit-inline-blame') as HTMLButtonElement;
+    const position = view.state.selection.main.head;
+    expect(fireEvent.mouseDown(blame)).toBe(false);
+    expect(view.state.selection.main.head).toBe(position);
+    expect(view.contentDOM.textContent).toBe('firstsecond');
+    blame.click();
     expect(openCommit).toHaveBeenCalledWith('2'.repeat(40));
     view.destroy();
+    expect(host.querySelector('.mgit-inline-blame')).toBeNull();
     host.remove();
   });
   it('marks additions, modifications and deletions without inventing attribution', () => {

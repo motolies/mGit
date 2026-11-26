@@ -1,15 +1,6 @@
 import { presentableDiff } from '@codemirror/merge';
-import { type Extension, RangeSetBuilder } from '@codemirror/state';
-import {
-  Decoration,
-  type DecorationSet,
-  EditorView,
-  GutterMarker,
-  gutter,
-  ViewPlugin,
-  type ViewUpdate,
-  WidgetType,
-} from '@codemirror/view';
+import type { Extension } from '@codemirror/state';
+import { EditorView, GutterMarker, gutter, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import type { BlameLine } from '@mgit/ipc';
 import { formatDateTime, S, shortHash } from '@mgit/ui';
 
@@ -37,30 +28,6 @@ export function blameLabel(line: BlameLine | undefined): string {
   ]
     .filter(Boolean)
     .join(' · ');
-}
-class Attribution extends WidgetType {
-  readonly line: BlameLine | undefined;
-  readonly open: (oid: string) => void;
-  constructor(line: BlameLine | undefined, open: (oid: string) => void) {
-    super();
-    this.line = line;
-    this.open = open;
-  }
-  eq(other: Attribution): boolean {
-    return this.line === other.line;
-  }
-  toDOM(): HTMLElement {
-    const el = document.createElement('button');
-    el.type = 'button';
-    el.className = 'mgit-inline-blame';
-    el.textContent = blameLabel(this.line);
-    if (this.line && !/^0+$/.test(this.line.oid)) {
-      const oid = this.line.oid;
-      el.title = `${shortHash(oid)}\n${this.line.summary}`;
-      el.onclick = () => this.open(oid);
-    } else el.disabled = true;
-    return el;
-  }
 }
 class MetaMarker extends GutterMarker {
   readonly label: string;
@@ -116,7 +83,14 @@ export function annotationExtension(data: AnnotationData, text: string): Extensi
         color: 'var(--fg-muted)',
         background: 'transparent',
         border: 'none',
-        marginLeft: '24px',
+        position: 'absolute',
+        zIndex: '3',
+        margin: '0',
+        padding: '0',
+        boxSizing: 'border-box',
+        textAlign: 'left',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
         font: 'inherit',
         cursor: 'pointer',
         opacity: '0.75',
@@ -132,6 +106,9 @@ export function annotationExtension(data: AnnotationData, text: string): Extensi
         color: 'var(--fg-muted)',
         cursor: 'pointer',
         padding: '0 4px',
+        margin: '0',
+        lineHeight: 'inherit',
+        verticalAlign: 'top',
         maxWidth: '220px',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -167,31 +144,86 @@ export function annotationExtension(data: AnnotationData, text: string): Extensi
     }),
     ViewPlugin.fromClass(
       class {
-        decorations: DecorationSet;
+        readonly button: HTMLButtonElement;
+        readonly view: EditorView;
+        readonly onScroll = () => this.refresh();
         constructor(view: EditorView) {
-          this.decorations = this.build(view);
+          this.view = view;
+          this.button = document.createElement('button');
+          this.button.type = 'button';
+          this.button.className = 'mgit-inline-blame';
+          this.button.hidden = true;
+          // 주석 클릭은 코드 커서와 선택 범위를 바꾸지 않는다.
+          this.button.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          view.scrollDOM.append(this.button);
+          view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
+          this.refresh();
         }
         update(update: ViewUpdate) {
-          if (update.selectionSet || update.docChanged || update.viewportChanged)
-            this.decorations = this.build(update.view);
+          if (
+            update.selectionSet ||
+            update.docChanged ||
+            update.viewportChanged ||
+            update.geometryChanged
+          )
+            this.refresh();
         }
-        build(view: EditorView): DecorationSet {
-          const builder = new RangeSetBuilder<Decoration>();
-          if (data.current && !data.pending && (data.lines.length > 0 || data.head === '')) {
-            const line = view.state.doc.lineAt(view.state.selection.main.head);
-            builder.add(
-              line.to,
-              line.to,
-              Decoration.widget({
-                widget: new Attribution(data.lines[line.number - 1], data.openCommit),
-                side: 1,
-              }),
-            );
-          }
-          return builder.finish();
+        /** 줄 높이와 커서 계산에 들어가지 않는 레이어를 실제 줄 끝 위치에 배치한다. */
+        refresh() {
+          const view = this.view;
+          const line = view.state.doc.lineAt(view.state.selection.main.head);
+          const blame = data.lines[line.number - 1];
+          const enabled =
+            data.current && !data.pending && (data.lines.length > 0 || data.head === '');
+          this.button.textContent = blameLabel(blame);
+          this.button.disabled = !blame || /^0+$/.test(blame.oid);
+          this.button.title =
+            this.button.disabled || !blame ? '' : `${shortHash(blame.oid)}\n${blame.summary}`;
+          this.button.onclick =
+            !this.button.disabled && blame ? () => data.openCommit(blame.oid) : null;
+          this.button.hidden = true;
+          if (!enabled) return;
+          view.requestMeasure({
+            key: this,
+            read: () => {
+              if (!this.button.isConnected || line.to > view.state.doc.length) return null;
+              if (!view.visibleRanges.some((range) => line.to >= range.from && line.to <= range.to))
+                return null;
+              const end = view.coordsAtPos(line.to, -1);
+              if (!end) return null;
+              const box = view.scrollDOM.getBoundingClientRect();
+              const left = end.right - box.left + 24;
+              const width = Math.min(600, view.scrollDOM.clientWidth - left - 8);
+              if (width <= 0 || left < 0) return null;
+              return {
+                left: left + view.scrollDOM.scrollLeft,
+                top: end.top - box.top + view.scrollDOM.scrollTop,
+                width,
+                height: end.bottom - end.top,
+              };
+            },
+            write: (position) => {
+              if (!this.button.isConnected) return;
+              this.button.hidden = position === null;
+              if (!position) return;
+              Object.assign(this.button.style, {
+                left: `${position.left}px`,
+                top: `${position.top}px`,
+                maxWidth: `${position.width}px`,
+                height: `${position.height}px`,
+                lineHeight: `${position.height}px`,
+              });
+            },
+          });
+        }
+        destroy() {
+          this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
+          this.button.remove();
         }
       },
-      { decorations: (plugin) => plugin.decorations },
     ),
   ];
 }

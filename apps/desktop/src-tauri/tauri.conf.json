@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "mGit",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "io.github.motolies.mgit",
   "build": {
     "beforeDevCommand": "node ../../scripts/dev.mjs --direct",

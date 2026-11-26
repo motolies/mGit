@@ -19,6 +19,7 @@
   border-radius: 4px;
   cursor: default;
   outline: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -70,6 +71,7 @@
   color: var(--fg);
   font-size: var(--font-size-small);
   font-weight: 600;
+  -webkit-user-select: none;
   user-select: none;
 }
 

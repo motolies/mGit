@@ -80,6 +80,27 @@ function inputActions(input: HTMLInputElement | HTMLTextAreaElement): TextContex
   };
 }
 
+const NON_TEXT_CONTROLS =
+  'button, a, select, option, label, summary, input, [role="button"], [role="tab"], ' +
+  '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], ' +
+  '[role="checkbox"], [role="radio"], [role="switch"], [role="slider"], ' +
+  '[role="combobox"], [role="option"], [role="separator"], [role="toolbar"]';
+
+/** 다른 영역에 남은 선택을 제외하고 우클릭한 본문의 선택만 복사한다. */
+function selectedTextAt(target: HTMLElement): string | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.toString()) return null;
+  for (let i = 0; i < selection.rangeCount; i++) {
+    const range = selection.getRangeAt(i);
+    const selectedHere = Array.from(target.childNodes).some(
+      (node) =>
+        node.nodeType === Node.TEXT_NODE && node.textContent?.trim() && range.intersectsNode(node),
+    );
+    if (selectedHere) return selection.toString();
+  }
+  return null;
+}
+
 /** 가장 바깥 영역은 기본 Reload를 막고 텍스트 영역에는 편집 메뉴를 제공한다. */
 export function TextContextMenu({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -97,6 +118,11 @@ export function TextContextMenu({ children }: { children: ReactNode }) {
       resolveTarget={(event) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
         if (!target || target.closest('[data-context-area]') !== event.currentTarget) return null;
+        if (target.matches('input:disabled, textarea:disabled')) return null;
+        const textInput =
+          target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLInputElement && target.selectionStart !== null);
+        if (!textInput && target.closest(NON_TEXT_CONTROLS)) return null;
         const custom = queryTextContext(target);
         if (custom) return custom;
         const cm = target.closest<HTMLElement>('.cm-editor');
@@ -105,7 +131,7 @@ export function TextContextMenu({ children }: { children: ReactNode }) {
         if (target instanceof HTMLTextAreaElement) return inputActions(target);
         if (target instanceof HTMLInputElement && target.selectionStart !== null)
           return inputActions(target);
-        const selected = window.getSelection()?.toString();
+        const selected = selectedTextAt(target);
         return selected ? { copy: () => navigator.clipboard.writeText(selected) } : null;
       }}
       items={(adapter) =>

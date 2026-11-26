@@ -141,6 +141,7 @@
   background: var(--bg);
   color: var(--fg-muted);
   text-align: right;
+  -webkit-user-select: none;
   user-select: none;
 }
 

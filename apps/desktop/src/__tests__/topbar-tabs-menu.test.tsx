@@ -59,7 +59,7 @@ describe('상단 탭 앱 컨텍스트 메뉴', () => {
 
   it('Shift+F10으로도 같은 메뉴를 열고 폴더 제외 닫기를 요청한다', () => {
     const { close, tabs } = setup();
-    const tab = within(tabs).getByRole('tab', { name: '▣ folder' });
+    const tab = within(tabs).getByRole('tab', { name: 'folder' });
     act(() => {
       tab.focus();
       fireEvent.keyDown(tab, { key: 'F10', shiftKey: true });

@@ -294,3 +294,41 @@ body {
 .tok-strikethrough {
   text-decoration: line-through;
 }
+
+/* 조작용 컨트롤의 글자는 선택하지 않는다. WebKit에서도 같은 정책을 적용한다. */
+:where(
+  button,
+  select,
+  option,
+  label,
+  summary,
+  a,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="checkbox"],
+  [role="radio"],
+  [role="switch"],
+  [role="slider"],
+  [role="combobox"],
+  [role="option"],
+  [role="separator"]
+) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 컨트롤 안의 검색창과 편집기는 텍스트 선택·복사·편집을 계속 허용한다. */
+:where(
+  input,
+  textarea,
+  [contenteditable="true"],
+  [contenteditable=""],
+  [contenteditable="plaintext-only"],
+  .cm-content
+) {
+  -webkit-user-select: text;
+  user-select: text;
+}

@@ -45,6 +45,7 @@ export interface GlobalKeyContext {
   activeDoc: KeyDocKind | null;
   /** 활성 문서를 닫는다 (워크스페이스의 `closeDoc` — 세션 문서면 그 세션 슬롯을 비워 그 탭이 닫힌다) */
   closeActiveDoc(): void;
+  returnHome?(): boolean;
 }
 
 /** 키 입력을 먼저 받아야 할 대화상자·메뉴가 떠 있는지 */
@@ -77,6 +78,10 @@ export function handleGlobalKey(e: KeyboardEvent, ctx: GlobalKeyContext): void {
   const terminal = target?.closest?.('[data-terminal], .xterm');
   if (terminal && !terminalPassKey(e, ctx.actions)) return;
   if (e.key === 'Escape' && !isBoundEscape(e, ctx.actions)) {
+    if (ctx.returnHome?.()) {
+      e.preventDefault();
+      return;
+    }
     if (ctx.searchOpen) {
       ctx.closeSearch();
     } else if (ctx.activeDoc === 'diff') {

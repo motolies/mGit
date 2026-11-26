@@ -77,6 +77,7 @@
   overflow: hidden;
   cursor: default;
   /* 더블클릭(그래프 거르기)이 이름 글자를 텍스트 선택으로 칠하지 않게 한다 (다른 트리 행과 같다) */
+  -webkit-user-select: none;
   user-select: none;
 }
 

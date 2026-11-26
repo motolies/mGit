@@ -1,5 +1,5 @@
 import type { PullMode, SessionId } from '@mgit/ipc';
-import { Button, S } from '@mgit/ui';
+import { Button, Icon, S } from '@mgit/ui';
 import { type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ContextMenuArea } from '../components/ContextMenu';
 import { type DropdownItem, DropdownMenu } from '../components/DropdownMenu';
@@ -291,7 +291,7 @@ export function Toolbar() {
   const sessionOrder = useAppStore((s) => s.sessionOrder);
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const openRepository = useAppStore((s) => s.openRepository);
+  const openRepository = useAppStore((s) => s.showHome);
   const closeSession = useAppStore((s) => s.requestCloseSession);
   const closeTabs = useAppStore((s) => s.requestCloseTabs);
   const closing = useAppStore((s) => s.closeTabsRunning);
@@ -311,6 +311,8 @@ export function Toolbar() {
   const logTitle = useCommandTitle('view.log', S.toolbar.log, 'mod+j');
   const tabsRef = useRef<HTMLDivElement>(null);
   const tabPrefix = useId();
+  const homeVisible = useAppStore((s) => s.homeVisible);
+  const previousHome = useRef(homeVisible);
   const previousActive = useRef(activeSessionId);
   const previousTabCount = useRef(sessionOrder.length);
   // 전역 닫기 명령으로 세션 본문까지 사라졌다면 남은 활성 탭 또는 빈 탭 영역으로 돌아간다.
@@ -318,16 +320,18 @@ export function Toolbar() {
     const closed =
       (previousActive.current !== null && !sessionOrder.includes(previousActive.current)) ||
       sessionOrder.length < previousTabCount.current;
+    const returned = previousHome.current && !homeVisible;
+    previousHome.current = homeVisible;
     previousActive.current = activeSessionId;
     previousTabCount.current = sessionOrder.length;
-    if (closed && document.activeElement === document.body) {
+    if ((closed || returned) && document.activeElement === document.body) {
       const target =
         activeSessionId === null
           ? null
           : document.getElementById(`${tabPrefix}-${activeSessionId}`);
       (target ?? tabsRef.current)?.focus();
     }
-  }, [sessionOrder, activeSessionId, tabPrefix]);
+  }, [sessionOrder, activeSessionId, tabPrefix, homeVisible]);
 
   /** 탭 닫기 완료 뒤 포커스가 사라졌으면 다음·이전 탭, 빈 목록 순서로 복귀한다 */
   const closeTab = async (id: SessionId) => {
@@ -440,13 +444,11 @@ export function Toolbar() {
                   tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
                   onKeyDown={(e) => onTabKeyDown(e, id)}
                   onClick={() => setActiveSession(id)}
-                  title={meta.path}
+                  title={`${meta.kind === 'folder' ? S.home.folder : S.home.repo}: ${meta.path}`}
+                  aria-description={meta.kind === 'folder' ? S.home.folder : S.home.repo}
                 >
-                  {meta.kind === 'folder'
-                    ? `▣ ${meta.name}`
-                    : meta.parent !== null
-                      ? `└ ${meta.name}`
-                      : meta.name}
+                  {meta.kind === 'folder' ? <Icon name="folder" /> : null}
+                  <span>{meta.parent !== null ? `└ ${meta.name}` : meta.name}</span>
                 </button>
                 <button
                   type="button"

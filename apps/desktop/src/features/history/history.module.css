@@ -126,6 +126,7 @@
 .lineNo {
   text-align: right;
   color: var(--fg-muted);
+  -webkit-user-select: none;
   user-select: none;
 }
 

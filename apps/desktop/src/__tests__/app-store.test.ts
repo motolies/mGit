@@ -672,3 +672,84 @@ describe('취소된 저장소 열기의 포커스', () => {
     expect(late === null ? null : app.getState().sessions[late]?.path).toBe('/late');
   });
 });
+
+describe('임시 시작 화면', () => {
+  beforeEach(() => {
+    clearSessionRegistry();
+    localStorage.clear();
+  });
+
+  it('시작 화면은 세션을 보존하고 이전 탭과 도구 배치로 복귀한다', async () => {
+    const { client } = fakeClient();
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    const first = await app.getState().openRepositoryAt('/first');
+    const second = await app.getState().openRepositoryAt('/second');
+    const session = getSessionStore(second ?? -1);
+    app.setState({ dock: { tool: 'terminal', gitTab: 'log', maximized: true } });
+    app.getState().showHome();
+    app.getState().showHome();
+    expect(app.getState().sessionOrder).toEqual([first, second]);
+    expect(app.getState().activeSessionId).toBeNull();
+    expect(shownDock(app.getState()).tool).toBeNull();
+    expect(client.closeRepo).not.toHaveBeenCalled();
+    app.getState().returnToWorkspace();
+    expect(app.getState().activeSessionId).toBe(second);
+    expect(getSessionStore(second ?? -1)).toBe(session);
+    expect(shownDock(app.getState())).toMatchObject({ tool: 'terminal', maximized: true });
+  });
+
+  it('복귀할 탭을 닫았으면 남은 탭으로 돌아간다', async () => {
+    const { client } = fakeClient();
+    const app = createAppStore({ client, pickDirectory: async () => null });
+    const first = await app.getState().openRepositoryAt('/first');
+    const second = await app.getState().openRepositoryAt('/second');
+    app.getState().showHome();
+    await app.getState().closeSession(second ?? -1);
+    expect(app.getState().activeSessionId).toBeNull();
+    app.getState().returnToWorkspace();
+    expect(app.getState().activeSessionId).toBe(first);
+  });
+
+  it('취소와 실패는 시작 화면을 유지하고 선택창 중복 호출을 막는다', async () => {
+    const { client } = fakeClient();
+    let resolve!: (path: string | null) => void;
+    const pickDirectory = vi.fn(
+      () =>
+        new Promise<string | null>((done) => {
+          resolve = done;
+        }),
+    );
+    const app = createAppStore({ client, pickDirectory });
+    app.getState().showHome();
+    const pending = app.getState().openRepository();
+    await app.getState().openRepository();
+    expect(pickDirectory).toHaveBeenCalledTimes(1);
+    resolve(null);
+    await pending;
+    expect(app.getState().homeVisible).toBe(true);
+    vi.mocked(client.openRepo).mockRejectedValueOnce(new Error('missing'));
+    await app.getState().openRepositoryAt('/missing');
+    expect(app.getState().homeVisible).toBe(true);
+    expect(app.getState().lastError).not.toBeNull();
+  });
+
+  it('선택창 대기 중 탭을 바꾸면 완료된 열기가 포커스를 빼앗지 않는다', async () => {
+    const { client } = fakeClient();
+    let resolve!: (path: string | null) => void;
+    const app = createAppStore({
+      client,
+      pickDirectory: () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    });
+    const first = await app.getState().openRepositoryAt('/first');
+    app.getState().showHome();
+    const pending = app.getState().openRepository();
+    app.getState().setActiveSession(first ?? -1);
+    resolve('/second');
+    await pending;
+    expect(app.getState().sessionOrder).toHaveLength(2);
+    expect(app.getState().activeSessionId).toBe(first);
+  });
+});

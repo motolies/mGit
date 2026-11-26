@@ -10,6 +10,7 @@
   font-size: var(--font-size);
   white-space: nowrap;
   cursor: default;
+  -webkit-user-select: none;
   user-select: none;
   /* 글자색: 제목·ref 라벨은 --row-fg, 작성자·날짜·해시는 --row-meta. 상태(흐림·선택)가 이 둘만 바꾼다 */
   --row-fg: var(--fg);

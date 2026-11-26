@@ -72,6 +72,11 @@ import { type AppStore, shownDock } from './store/app-store';
 import type { SessionState } from './store/session-store';
 import { allDocs } from './store/workspace-store';
 
+/** 열기 명령은 기존 탭을 보존하는 시작 화면으로 이동한다. */
+async function showHomeAction(): Promise<void> {
+  useAppStore.getState().showHome();
+}
+
 /** 동작이 읽는 앱 상태만 고른다 (토스트 등 무관한 변경에 앱 전체가 다시 그려지지 않게) */
 function pickApp(s: AppStore): ActionApp {
   return {
@@ -85,7 +90,7 @@ function pickApp(s: AppStore): ActionApp {
     pickDirectory: s.pickDirectory,
     cloneRepository: s.cloneRepository,
     initRepository: s.initRepository,
-    openRepository: s.openRepository,
+    openRepository: showHomeAction,
     requestCloseSession: s.requestCloseSession,
     setActiveSession: s.setActiveSession,
     refreshActive: s.refreshActive,
@@ -282,6 +287,12 @@ function useGlobalShortcuts(actions: Action[]): void {
         closeSearch: () => setSearchOpen(false),
         activeDoc,
         closeActiveDoc,
+        returnHome: () => {
+          const app = useAppStore.getState();
+          if (!app.homeVisible) return false;
+          app.returnToWorkspace();
+          return true;
+        },
       });
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

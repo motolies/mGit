@@ -39,6 +39,7 @@
   white-space: nowrap;
   overflow: hidden;
   cursor: default;
+  -webkit-user-select: none;
   user-select: none;
 }
 

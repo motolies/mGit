@@ -306,8 +306,11 @@ export function activeTabKind(s: Pick<AppStore, 'sessions' | 'activeSessionId'>)
  * 화면에 그릴 슬롯 상태 (`effectiveDock`). 새 객체일 수 있으므로 스토어 selector 에서는 이 결과의 값
  * 하나를 골라 쓴다 (`useAppStore((s) => shownDock(s).tool)`)
  */
-export function shownDock(s: Pick<AppStore, 'dock' | 'sessions' | 'activeSessionId'>): DockState {
-  return effectiveDock(s.dock, activeTabKind(s));
+export function shownDock(
+  s: Pick<AppStore, 'dock' | 'sessions' | 'activeSessionId'> &
+    Partial<Pick<AppStore, 'homeVisible'>>,
+): DockState {
+  return s.homeVisible ? dockHidden(s.dock) : effectiveDock(s.dock, activeTabKind(s));
 }
 
 export interface AppStoreDeps {
@@ -320,6 +323,10 @@ export interface AppStore {
   sessions: Record<SessionId, SessionMeta>;
   sessionOrder: SessionId[];
   activeSessionId: SessionId | null;
+  homeVisible: boolean;
+  homeReturnSessionId: SessionId | null;
+  showHome(): void;
+  returnToWorkspace(): void;
   gitVersion: string | null;
   gitError: string | null;
   theme: ThemePreference;
@@ -451,7 +458,7 @@ export interface AppStore {
     options?: { activate: () => boolean },
   ): Promise<SessionId | null>;
   /** 멀티 저장소 폴더를 연다 (MR-01) */
-  openFolderAt(path: string): Promise<void>;
+  openFolderAt(path: string, options?: { activate: () => boolean }): Promise<void>;
   /**
    * 폴더 탭에서 저장소의 세션 기능을 쓴다 (W13): 그 저장소가 활성 저장소가 되고(다른 저장소의 범위 세션이 바쁘면
    * 거부), 장부에 세션이 있으면 그것을, 없으면 연다 — 상한(3)이면 가장 오래 안 쓴 한가한 세션을 먼저 놓는다.
@@ -844,12 +851,16 @@ export function createAppStore(deps: AppStoreDeps) {
       deps.client.openTabsSet(paths).catch(() => {});
     };
 
-    /** 탭을 등록하고 활성화한다 */
+    let navigationVersion = 0;
+    let directoryPicking = false;
+
+    /** 탭을 등록하고 활성화한다. */
     const addTab = (meta: SessionMeta, activate = true) => {
       set({
         sessions: { ...get().sessions, [meta.id]: meta },
         sessionOrder: [...get().sessionOrder.filter((s) => s !== meta.id), meta.id],
         activeSessionId: activate ? meta.id : get().activeSessionId,
+        ...(activate ? { homeVisible: false, homeReturnSessionId: null } : {}),
       });
       persistTabs();
     };
@@ -1436,7 +1447,7 @@ export function createAppStore(deps: AppStoreDeps) {
           )
           .map((id) => get().closeSession(id));
         approvedCloseIds.clear();
-        if (plan.mode === 'others' && get().sessions[plan.target])
+        if (!get().homeVisible && plan.mode === 'others' && get().sessions[plan.target])
           set({ activeSessionId: plan.target });
         persistTabs();
         await Promise.all(pending);
@@ -1458,6 +1469,8 @@ export function createAppStore(deps: AppStoreDeps) {
       sessions: {},
       sessionOrder: [],
       activeSessionId: null,
+      homeVisible: false,
+      homeReturnSessionId: null,
       gitVersion: null,
       gitError: null,
       theme: loadThemePreference(),
@@ -1797,15 +1810,47 @@ export function createAppStore(deps: AppStoreDeps) {
           .catch(() => {});
       },
 
+      /** 기존 작업을 유지하고 임시 시작 화면을 보여준다. */
+      showHome() {
+        if (get().homeVisible) return;
+        navigationVersion++;
+        set({
+          homeVisible: true,
+          homeReturnSessionId: get().activeSessionId,
+          activeSessionId: null,
+        });
+      },
+
+      /** 직전 작업이 닫혔으면 남아 있는 마지막 탭으로 복귀한다. */
+      returnToWorkspace() {
+        const state = get();
+        const id = state.homeReturnSessionId;
+        const target = id !== null && state.sessions[id] ? id : state.sessionOrder.at(-1);
+        if (target !== undefined) get().setActiveSession(target);
+      },
+
       async openRepository() {
-        const path = await deps.pickDirectory('open');
-        if (!path) {
-          return;
+        if (directoryPicking || get().isOpening) return;
+        directoryPicking = true;
+        const version = navigationVersion;
+        set({ isOpening: true, lastError: null });
+        try {
+          const path = await deps.pickDirectory('open');
+          if (path)
+            await get().openRepositoryAt(path, null, {
+              activate: () => version === navigationVersion,
+            });
+        } catch (error) {
+          set({ lastError: describeError(error) });
+        } finally {
+          directoryPicking = false;
+          set({ isOpening: false });
         }
-        await get().openRepositoryAt(path);
       },
 
       async openRepositoryAt(path, parent = null, options) {
+        const version = navigationVersion;
+        const activate = () => version === navigationVersion && options?.activate() !== false;
         set({ isOpening: true, lastError: null });
         const { onEvent, flush } = bufferedEvents();
         try {
@@ -1817,8 +1862,8 @@ export function createAppStore(deps: AppStoreDeps) {
               ? await deps.client.graphQuery(id)
               : undefined;
           if (opened.alreadyOpen && get().sessions[id]) {
-            if (options?.activate() !== false) {
-              set({ activeSessionId: id });
+            if (activate()) {
+              set({ activeSessionId: id, homeVisible: false, homeReturnSessionId: null });
             }
             flush();
             return id;
@@ -1850,7 +1895,7 @@ export function createAppStore(deps: AppStoreDeps) {
               name: repoNameOf(opened.info.workTree),
               parent,
             },
-            options?.activate() !== false,
+            activate(),
           );
           // 탭을 더하면 세션 문서가 파생된다. 승격한 세션에 폴더에서 연 문서가 있으면 그것을 보인다 — 옛 화면은 그 세션의
           // 마지막 열기(diff·충돌)를 보였다. 충돌을 열면 diff 슬롯이 비므로 둘 다 있으면 diff 가 나중에 연 것이다
@@ -1865,8 +1910,8 @@ export function createAppStore(deps: AppStoreDeps) {
           const err = toIpcError(e);
           if (err.kind === 'multiRepoFolder') {
             set({ isOpening: false });
-            if (options?.activate() !== false) {
-              await get().openFolderAt(err.path);
+            if (activate()) {
+              await get().openFolderAt(err.path, { activate });
             }
             return null;
           }
@@ -1877,14 +1922,18 @@ export function createAppStore(deps: AppStoreDeps) {
         }
       },
 
-      async openFolderAt(path) {
+      async openFolderAt(path, options) {
+        const version = navigationVersion;
+        const activate = () => version === navigationVersion && options?.activate() !== false;
         set({ isOpening: true, lastError: null });
         const { onEvent, flush } = bufferedEvents();
         try {
           const opened = await deps.client.openFolder(path, onEvent);
           const id = opened.session;
           if (get().sessions[id]) {
-            set({ activeSessionId: id });
+            if (activate())
+              set({ activeSessionId: id, homeVisible: false, homeReturnSessionId: null });
+            flush();
             return;
           }
           const folderStore = createFolderStore(opened, deps.client);
@@ -1917,13 +1966,16 @@ export function createAppStore(deps: AppStoreDeps) {
             unwatchRepos();
             unwatchDocs();
           });
-          addTab({
-            id,
-            kind: 'folder',
-            path: opened.path,
-            name: repoNameOf(opened.path),
-            parent: null,
-          });
+          addTab(
+            {
+              id,
+              kind: 'folder',
+              path: opened.path,
+              name: repoNameOf(opened.path),
+              parent: null,
+            },
+            activate(),
+          );
           flush();
           void get().loadRecent();
         } catch (e) {
@@ -2157,7 +2209,8 @@ export function createAppStore(deps: AppStoreDeps) {
 
       setActiveSession(id) {
         if (get().sessions[id]) {
-          set({ activeSessionId: id });
+          navigationVersion++;
+          set({ activeSessionId: id, homeVisible: false, homeReturnSessionId: null });
         }
       },
 

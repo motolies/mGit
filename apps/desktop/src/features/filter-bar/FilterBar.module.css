@@ -325,6 +325,7 @@
   color: var(--fg);
   font-size: var(--font-size-small);
   font-weight: 600;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -335,6 +336,7 @@
   height: var(--tree-row-h);
   padding: 0 var(--space-4);
   cursor: default;
+  -webkit-user-select: none;
   user-select: none;
   white-space: nowrap;
 }

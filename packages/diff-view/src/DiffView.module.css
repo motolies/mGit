@@ -143,6 +143,7 @@
   flex: 0 0 auto;
   height: 20px;
   align-items: center;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -192,6 +193,7 @@
   padding: 0 6px;
   text-align: right;
   color: var(--fg-muted);
+  -webkit-user-select: none;
   user-select: none;
   font-variant-numeric: tabular-nums;
 }
@@ -201,6 +203,7 @@
   flex: 0 0 auto;
   text-align: center;
   color: var(--fg-muted);
+  -webkit-user-select: none;
   user-select: none;
 }
 

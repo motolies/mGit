@@ -1,6 +1,6 @@
 import type { RecentEntry } from '@mgit/ipc';
-import { Button, formatDateTime, S } from '@mgit/ui';
-import { useEffect, useMemo, useState } from 'react';
+import { Button, formatDateTime, Icon, S } from '@mgit/ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDialogs } from '../../components/use-dialogs';
 import { useAppStore } from '../../store';
 import styles from './HomeScreen.module.css';
@@ -26,6 +26,15 @@ export function HomeScreen() {
   const loadRecent = useAppStore((s) => s.loadRecent);
   const dialogs = useDialogs();
   const [query, setQuery] = useState('');
+  const [kind, setKind] = useState<'all' | 'folder' | 'repo'>('all');
+  const sessions = useAppStore((s) => s.sessions);
+  const returnToWorkspace = useAppStore((s) => s.returnToWorkspace);
+  const canReturn = useAppStore((s) => s.sessionOrder.length > 0);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     void loadRecent();
@@ -33,10 +42,20 @@ export function HomeScreen() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q === ''
-      ? recent
-      : recent.filter((r) => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q));
-  }, [recent, query]);
+    return recent.filter(
+      (r) =>
+        (kind === 'all' || r.kind === kind) &&
+        (q === '' || r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)),
+    );
+  }, [recent, query, kind]);
+  const sections = [
+    {
+      title: S.home.favorites,
+      entries: filtered.filter((r) => r.pinned),
+      empty: S.home.noFavorites,
+    },
+    { title: S.home.recent, entries: filtered.filter((r) => !r.pinned), empty: S.home.empty },
+  ];
 
   /** clone 흐름 (공용 흐름 함수) */
   const clone = () => cloneFlow(dialogs, { pickDirectory, cloneRepository });
@@ -46,6 +65,12 @@ export function HomeScreen() {
 
   /** 최근 항목 열기 (폴더면 폴더 탭) */
   const open = (r: RecentEntry) => {
+    if (useAppStore.getState().isOpening) return;
+    const existing = Object.values(sessions).find((session) => session.path === r.path);
+    if (existing) {
+      useAppStore.getState().setActiveSession(existing.id);
+      return;
+    }
     if (r.kind === 'folder') {
       void openFolderAt(r.path);
     } else {
@@ -55,9 +80,13 @@ export function HomeScreen() {
 
   return (
     <div className={styles.home}>
+      <div className={styles.recentHeader}>
+        <h1 className={styles.recentTitle}>{S.home.title}</h1>
+        {canReturn ? <Button onClick={returnToWorkspace}>{S.home.back}</Button> : null}
+      </div>
       <div className={styles.actions}>
         <Button variant="primary" disabled={isOpening} onClick={() => void openRepository()}>
-          {S.home.open}
+          {S.home.chooseDirectory}
         </Button>
         <Button
           disabled={isOpening || (cloneOp !== null && !cloneOp.done)}
@@ -84,55 +113,90 @@ export function HomeScreen() {
         </div>
       ) : null}
       <div className={styles.recentHeader}>
-        <span className={styles.recentTitle}>{S.home.recent}</span>
+        <select
+          aria-label={S.home.kindFilter}
+          value={kind}
+          onChange={(e) => setKind(e.target.value as typeof kind)}
+        >
+          <option value="all">{S.home.all}</option>
+          <option value="folder">{S.home.folder}</option>
+          <option value="repo">{S.home.repo}</option>
+        </select>
         <input
+          ref={searchRef}
+          aria-label={S.home.search}
           className={styles.search}
           placeholder={S.home.search}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      {filtered.length === 0 ? (
-        <div className={styles.empty}>{S.home.empty}</div>
-      ) : (
-        <ul className={styles.list}>
-          {filtered.map((r) => (
-            <li key={r.path} className={styles.item}>
-              <button type="button" className={styles.entry} onClick={() => open(r)} title={r.path}>
-                <span className={styles.name}>
-                  {r.pinned ? '★ ' : ''}
-                  {r.name}
-                  {r.kind === 'folder' ? (
-                    <span className={styles.kind}>{S.home.folder}</span>
-                  ) : null}
-                </span>
-                <span className={styles.path}>{r.path}</span>
-                <span className={styles.time}>
-                  {formatDateTime(Math.floor((r.lastOpenedAt ?? 0) / 1000))}
-                </span>
-              </button>
-              <span className={styles.itemActions}>
-                <button
-                  type="button"
-                  className={styles.small}
-                  onClick={() => void pinRecent(r.path, !r.pinned)}
-                  title={r.pinned ? S.home.unpin : S.home.pin}
-                >
-                  {r.pinned ? '☆' : '★'}
-                </button>
-                <button
-                  type="button"
-                  className={styles.small}
-                  onClick={() => void removeRecent(r.path)}
-                  title={S.home.remove}
-                >
-                  ×
-                </button>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {sections.map((section) => (
+        <section key={section.title} aria-label={section.title}>
+          <h2 className={styles.recentTitle}>
+            {section.title} <span className={styles.count}>{section.entries.length}</span>
+          </h2>
+          {section.entries.length === 0 ? (
+            <div className={styles.empty}>
+              {query || kind !== 'all' ? S.home.noMatches : section.empty}
+            </div>
+          ) : (
+            <ul className={styles.list}>
+              {section.entries.map((r) => (
+                <li key={r.path} className={styles.item}>
+                  <button
+                    type="button"
+                    disabled={isOpening}
+                    className={styles.entry}
+                    onClick={() => open(r)}
+                    title={r.path}
+                  >
+                    <span className={styles.name}>
+                      <span aria-hidden="true" className={styles.typeIcon}>
+                        {r.kind === 'folder' ? <Icon name="folder" /> : null}
+                      </span>
+                      <span className={styles.entryName}>{r.name}</span>
+                      <span className={styles.badges}>
+                        <span className={styles.kind}>
+                          {r.kind === 'folder' ? S.home.folder : S.home.repo}
+                        </span>
+                        {Object.values(sessions).some((session) => session.path === r.path) ? (
+                          <span className={styles.opened}>{S.home.opened}</span>
+                        ) : null}
+                      </span>
+                    </span>
+                    <span className={styles.path}>{r.path}</span>
+                    <span className={styles.time}>
+                      {formatDateTime(Math.floor((r.lastOpenedAt ?? 0) / 1000))}
+                    </span>
+                  </button>
+                  <span className={styles.itemActions}>
+                    <button
+                      type="button"
+                      className={styles.small}
+                      onClick={() => void pinRecent(r.path, !r.pinned)}
+                      aria-label={`${r.pinned ? S.home.unpin : S.home.pin}: ${r.name}`}
+                      aria-pressed={r.pinned}
+                      title={r.pinned ? S.home.unpin : S.home.pin}
+                    >
+                      {r.pinned ? '★' : '☆'}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.small}
+                      onClick={() => void removeRecent(r.path)}
+                      aria-label={`${S.home.remove}: ${r.name}`}
+                      title={S.home.remove}
+                    >
+                      ×
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))}
       <div className={styles.hint}>{S.home.dropHint}</div>
       {dialogs.element}
     </div>

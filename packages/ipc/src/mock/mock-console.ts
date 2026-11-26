@@ -147,6 +147,8 @@ export function mockBatchLabel(op: BatchOp): string {
       return pick(`일괄 워크트리: ${op.branch}`, `Batch worktree: ${op.branch}`);
     case 'updateBranch':
       return pick(`일괄 업데이트: ${op.name}`, `Batch update: ${op.name}`);
+    case 'deleteBranch':
+      return pick(`로컬 브랜치 일괄 삭제: ${op.name}`, `Delete local branch: ${op.name}`);
     case 'renameBranch':
       return pick(`일괄 이름 바꾸기: ${op.from} → ${op.to}`, `Batch rename: ${op.from} → ${op.to}`);
   }
@@ -441,6 +443,19 @@ function batchStep(
         : ['branch', '-f', '--end-of-options', op.name, moved.to];
       return { run: [fetched, ran(move, elapsedOf(`${key}:move`, 8, 40))], moved };
     }
+    case 'deleteBranch': {
+      const local = localBranchIn(data, repo, op.name);
+      if (!local) return { skip: mockReason.noBranch() };
+      if (inOp) return { skip: mockReason.inProgress() };
+      const owner = ownerOf(data, repo);
+      const checkedOut = data.folderSummaries.find(
+        (item) => ownerOf(data, item.path) === owner && item.branch === op.name,
+      );
+      if (local.current || checkedOut)
+        return { failed: 'Cannot delete a branch checked out in a worktree' };
+      if ((local.ahead ?? 0) > 0) return { failed: 'Branch is not fully merged' };
+      return { command: ran(['branch', '-d', '--', op.name], elapsedOf(key, 8, 30)) };
+    }
     case 'renameBranch': {
       // 코어 `rename_args` 흉내: branch 없음 → 새 이름 있음 → `branch -m` (현재 branch·다른 워크트리 branch 도 바꾼다)
       if (!localBranchIn(data, repo, op.from)) {
@@ -473,6 +488,7 @@ export function mockFolderBatch(
   op: BatchOp,
   repos: readonly string[],
 ): MockBatchRun {
+  if (op.kind === 'deleteBranch' && repos.length === 0) throw new Error('No deletion targets');
   if (op.kind === 'merge' || op.kind === 'rebase') {
     if (!op.targets.length) throw new Error('No confirmed integration targets');
     const preview = mockIntegrationPreview(
@@ -881,4 +897,26 @@ export function mockIntegrationPreview(
         reason,
       };
     });
+}
+
+/** 삭제에 성공한 로컬 브랜치만 장면에서 제거하고 원격 브랜치는 유지한다. */
+export function applyMockBatchDeletes(
+  data: MockFolderData,
+  op: BatchOp,
+  results: readonly RepoResult[],
+): void {
+  if (op.kind !== 'deleteBranch') return;
+  const owners = new Set(
+    results
+      .filter((result) => result.ok && !result.skipped)
+      .map((result) => ownerOf(data, result.path)),
+  );
+  data.folderBranches = {
+    ...data.folderBranches,
+    branches: data.folderBranches.branches.flatMap((branch) => {
+      if (branch.remote || branch.name !== op.name) return [branch];
+      const repos = branch.repos.filter((repo) => !owners.has(repo.path));
+      return repos.length ? [{ ...branch, repos }] : [];
+    }),
+  };
 }

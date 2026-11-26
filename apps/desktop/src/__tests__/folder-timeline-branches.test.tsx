@@ -506,6 +506,7 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
       S.folder.integration.rebaseMenu('hotfix'),
       S.branches.menu.newBranchHere,
       S.menu.rename,
+      S.folder.localDeletion.menu,
       S.branches.menu.showOnly,
       S.branches.addFavorite,
       S.menu.copyName,
@@ -513,6 +514,7 @@ describe('브랜치 우클릭 메뉴 (BT-07)', () => {
     expect(menu.map((m) => m.getAttribute('aria-disabled'))).toEqual([
       null,
       'true',
+      null,
       null,
       null,
       null,
@@ -1683,4 +1685,156 @@ it('확인창 이후 저장소 탭에서 생긴 초안은 다시 검사하여 �
     fileEditors.releaseSession(opened.session);
     await repoClient.closeRepo(opened.session);
   }
+});
+
+describe('멀티 레포 로컬 브랜치 삭제', () => {
+  /** 로컬 브랜치 메뉴에서 삭제 확인을 연다. */
+  async function openDelete(name: string) {
+    await openMenu(LOCAL(name));
+    act(() => fireEvent.click(screen.getByText(S.folder.localDeletion.menu)));
+    await tick();
+    return dialog() as HTMLDialogElement;
+  }
+
+  it('현재 브랜치는 선택할 수 없고 선택한 저장소만 안전 삭제한다', async () => {
+    const { batch } = await setup();
+    const opened = await openDelete('main');
+    const boxes = within(opened).getAllByRole<HTMLInputElement>('checkbox');
+    expect(boxes.map((box) => [box.checked, box.disabled])).toEqual([
+      [true, false],
+      [true, false],
+      [false, true],
+    ]);
+    expect(opened.textContent).toContain(S.folder.localDeletion.current);
+    expect(opened.textContent).toContain(S.folder.localDeletion.message);
+    fireEvent.click(boxes[1] as HTMLInputElement);
+    submit();
+    await tick();
+    expect(batch).toHaveBeenCalledWith(FOLDER_ID, { kind: 'deleteBranch', name: 'main' }, [
+      pathOf('api'),
+    ]);
+    expect(toasts().length).toBe(1);
+  });
+
+  it('빈 선택과 현재 브랜치만 있는 경우는 실행하지 않는다', async () => {
+    const { batch } = await setup();
+    const opened = await openDelete('feature/login');
+    expect(within(opened).getByRole<HTMLInputElement>('checkbox').disabled).toBe(true);
+    expect(opened.textContent).toContain(S.folder.localDeletion.noneEligible);
+    expect(
+      within(opened).getByRole<HTMLButtonElement>('button', {
+        name: S.folder.localDeletion.confirm,
+      }).disabled,
+    ).toBe(true);
+    submit();
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('삭제 후 브랜치가 모두 사라지면 로그 조건을 HEAD로 돌린다', async () => {
+    let deleted = false;
+    const { lastRevs } = await setup(
+      async () => {
+        deleted = true;
+        return {
+          label: 'delete hotfix',
+          results: ['api', 'docs'].map((name) => ({
+            path: pathOf(name),
+            name,
+            ok: true,
+            skipped: null,
+            message: '',
+          })),
+          succeeded: 2,
+          skipped: 0,
+          failed: 0,
+        };
+      },
+      {
+        folderBranches: async () => ({
+          ...BRANCHES,
+          branches: BRANCHES.branches.filter((item) => !deleted || item.name !== 'hotfix'),
+        }),
+      },
+    );
+    act(() => fireEvent.click(row(LOCAL('hotfix'))));
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'solo', name: 'hotfix' });
+    await openDelete('hotfix');
+    submit();
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'head' });
+    expect(ids()).not.toContain(LOCAL('hotfix'));
+  });
+
+  it('일부 삭제가 실패하면 남은 브랜치 조건과 실패 사유를 유지한다', async () => {
+    const { lastRevs } = await setup(async () => ({
+      label: 'delete hotfix',
+      succeeded: 1,
+      failed: 1,
+      skipped: 0,
+      results: [
+        { path: pathOf('api'), name: 'api', ok: true, skipped: null, message: '' },
+        {
+          path: pathOf('docs'),
+          name: 'docs',
+          ok: false,
+          skipped: null,
+          message: 'not fully merged',
+        },
+      ],
+    }));
+    act(() => fireEvent.click(row(LOCAL('hotfix'))));
+    await tick();
+    await openDelete('hotfix');
+    submit();
+    await tick();
+    expect(lastRevs()).toEqual({ kind: 'solo', name: 'hotfix' });
+    expect(toasts()[0]?.[2]).toContain('not fully merged');
+  });
+
+  it('모든 체크 해제 또는 취소는 삭제를 실행하지 않는다', async () => {
+    const { batch } = await setup();
+    const opened = await openDelete('hotfix');
+    for (const box of within(opened).getAllByRole('checkbox')) fireEvent.click(box);
+    expect(
+      within(opened).getByRole<HTMLButtonElement>('button', {
+        name: S.folder.localDeletion.confirm,
+      }).disabled,
+    ).toBe(true);
+    submit();
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+    fireEvent.click(within(opened).getByRole('button', { name: S.confirm.cancel }));
+    await tick();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('폴더에서 제외한 저장소는 체크를 끄고 사유를 표시한다', async () => {
+    const { store, batch } = await setup();
+    act(() =>
+      store.setState({
+        settings: {
+          pullMode: 'ffOnly',
+          concurrency: 4,
+          autoRefreshSecs: 0,
+          worktreeRoot: null,
+          ...store.getState().settings,
+          exclude: ['api'],
+        },
+      }),
+    );
+    const opened = await openDelete('hotfix');
+    const boxes = within(opened).getAllByRole<HTMLInputElement>('checkbox');
+    expect(boxes.map((box) => [box.checked, box.disabled])).toEqual([
+      [false, true],
+      [true, false],
+    ]);
+    expect(opened.textContent).toContain(S.folder.batch.excluded);
+    submit();
+    await tick();
+    expect(batch).toHaveBeenCalledWith(FOLDER_ID, { kind: 'deleteBranch', name: 'hotfix' }, [
+      pathOf('docs'),
+    ]);
+  });
 });

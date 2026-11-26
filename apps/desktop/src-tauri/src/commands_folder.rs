@@ -98,6 +98,9 @@ pub enum BatchOpDto {
     DeleteLocalBranches {
         targets: Vec<BranchDeleteTarget>,
     },
+    DeleteBranch {
+        name: String,
+    },
     Fetch {
         prune: bool,
     },
@@ -158,6 +161,7 @@ impl From<BatchOpDto> for BatchOp {
             BatchOpDto::DeleteLocalBranches { targets } => BatchOp::DeleteLocalBranches {
                 targets: targets.into_iter().map(Into::into).collect(),
             },
+            BatchOpDto::DeleteBranch { name } => BatchOp::DeleteBranch { name },
             BatchOpDto::Fetch { prune } => BatchOp::Fetch { prune },
             BatchOpDto::Pull => BatchOp::Pull,
             BatchOpDto::Push => BatchOp::Push,

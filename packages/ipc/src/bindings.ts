@@ -786,7 +786,7 @@ export type BatchMergeMode = "default" | "noFf" | "ffOnly" | "squash";
 export type BatchOpDto = BatchOpDto_Serialize | BatchOpDto_Deserialize;
 
 /**  일괄 작업 */
-export type BatchOpDto_Deserialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Deserialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Deserialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Deserialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint?: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */
@@ -797,7 +797,7 @@ startPoint?: string | null } | { kind: "checkout"; name: string } |
 { kind: "renameBranch"; from: string; to: string };
 
 /**  일괄 작업 */
-export type BatchOpDto_Serialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
+export type BatchOpDto_Serialize = { kind: "merge"; reference: string; mode: BatchMergeMode; targets: IntegrationTarget[] } | { kind: "rebase"; reference: string; targets: IntegrationTarget[] } | { kind: "deleteRemoteBranch"; targets: BranchDeleteTarget_Serialize[]; deleteLocal: boolean } | { kind: "deleteLocalBranches"; targets: BranchDeleteTarget_Serialize[] } | { kind: "deleteBranch"; name: string } | { kind: "fetch"; prune: boolean } | { kind: "pull" } | { kind: "push" } | { kind: "createBranch"; name: string; checkout: boolean; 
 /**  시작점 ref. 없으면 저장소마다 자기 HEAD. 이 ref 가 없는 저장소는 건너뛴다 */
 startPoint: string | null } | { kind: "checkout"; name: string } | 
 /**  원격 브랜치 `<remote>/<branch>` 를 로컬 추적 브랜치로 checkout */

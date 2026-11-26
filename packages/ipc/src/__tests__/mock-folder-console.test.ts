@@ -459,3 +459,55 @@ describe('repo 장면의 branch 업데이트 (BR-09, 저장소 탭)', () => {
     expect(await fail('nope')).toMatchObject({ kind: 'internal', message: 'branch 없음' });
   });
 });
+
+describe('폴더 로컬 브랜치 안전 삭제', () => {
+  it('빈 대상을 거부하고 현재 브랜치를 보존한다', async () => {
+    const { client, folder } = await folderScene();
+    await expect(
+      client.folderBatch(folder, { kind: 'deleteBranch', name: 'main' }, []),
+    ).rejects.toThrow();
+    const before = await client.folderBranches(folder, []);
+    const branch = before.branches.find(
+      (item) => !item.remote && item.repos.some((repo) => repo.current),
+    );
+    if (!branch) throw new Error('No current branch fixture');
+    const paths = branch.repos.filter((repo) => repo.current).map((repo) => repo.path);
+    const result = await client.folderBatch(
+      folder,
+      { kind: 'deleteBranch', name: branch.name },
+      paths,
+    );
+    expect(result.results.every((item) => !item.ok || item.skipped)).toBe(true);
+    expect(
+      (await client.folderBranches(folder, [])).branches.find(
+        (item) => item.name === branch.name && !item.remote,
+      )?.repos,
+    ).toEqual(branch.repos);
+  });
+  it('삭제 성공한 저장소만 로컬 목록에서 제거하고 원격은 보존한다', async () => {
+    const { client, folder } = await folderScene();
+    const before = await client.folderBranches(folder, []);
+    const branch = before.branches.find(
+      (item) => !item.remote && item.repos.some((repo) => !repo.current && (repo.ahead ?? 0) === 0),
+    );
+    if (!branch) throw new Error('No deletable branch fixture');
+    const result = await client.folderBatch(
+      folder,
+      { kind: 'deleteBranch', name: branch.name },
+      branch.repos.map((repo) => repo.path),
+    );
+    const deleted = result.results
+      .filter((item) => item.ok && !item.skipped)
+      .map((item) => item.path);
+    expect(deleted.length).toBeGreaterThan(0);
+    const after = await client.folderBranches(folder, []);
+    expect(
+      after.branches
+        .find((item) => item.name === branch.name && !item.remote)
+        ?.repos.map((repo) => repo.path) ?? [],
+    ).toEqual(branch.repos.filter((repo) => !deleted.includes(repo.path)).map((repo) => repo.path));
+    expect(after.branches.filter((item) => item.remote)).toEqual(
+      before.branches.filter((item) => item.remote),
+    );
+  });
+});

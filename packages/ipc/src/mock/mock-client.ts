@@ -28,6 +28,7 @@ import {
   mockFolderDeleteTargets,
 } from './mock-branch-delete';
 import {
+  applyMockBatchDeletes,
   applyMockBatchMoves,
   applyMockBatchRenames,
   createMockRecorder,
@@ -2039,6 +2040,7 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           applyMockBatchMoves(folder.data, result.results);
           // 이름을 바꾼 branch 는 브랜치 목록·요약에서 새 이름으로 — 아래 folderChanged 로 다시 읽으면 보인다
           applyMockBatchRenames(folder.data, op, result.results);
+          applyMockBatchDeletes(folder.data, op, result.results);
           const opId = nextOpId++;
           const total = result.results.length;
           folder.emit({

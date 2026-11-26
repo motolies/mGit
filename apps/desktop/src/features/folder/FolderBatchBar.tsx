@@ -625,6 +625,66 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     return { result: await run({ kind: 'renameBranch', from, to }, paths), to, paths };
   };
 
+  /** 로컬 브랜치는 사용 중인 저장소를 제외하고 선택한 곳에서만 안전 삭제한다. */
+  const deleteBranch = async (name: string, candidates: readonly CheckoutCandidate[]) => {
+    if (folderId === null || running || preparingRef.current || candidates.length === 0)
+      return null;
+    const live = getFolderStore(folderId)?.getState();
+    if (!live || live.batchRunning) return null;
+    const copy = S.folder.localDeletion;
+    const excluded = live.settings?.exclude ?? [];
+    const rows = candidates.map((repo) => ({
+      ...repo,
+      reason: excluded.includes(repo.name) ? t.excluded : repo.current ? copy.current : null,
+    }));
+    const eligible = rows.filter((repo) => repo.reason === null);
+    preparingRef.current = true;
+    setPreparing(true);
+    try {
+      const values = await dialogs.prompt({
+        title: copy.title(name),
+        message: copy.message,
+        danger: true,
+        fields: rows.map((repo) => ({
+          key: integrationRepoKey(repo.path),
+          label: repo.name,
+          type: 'checkbox' as const,
+          initial: repo.reason === null && (selected.length === 0 || selected.includes(repo.path)),
+          disabled: repo.reason !== null,
+          note: [repo.path, repo.reason].filter(Boolean).join(' · '),
+          group: t.repoGroup(rows.length),
+        })),
+        validate: requireChecked(
+          eligible.map((repo) => integrationRepoKey(repo.path)),
+          eligible.length === 0 ? copy.noneEligible : t.noneChecked,
+        ),
+        confirmLabel: copy.confirm,
+      });
+      const current = getFolderStore(folderId)?.getState();
+      if (
+        !values ||
+        !current ||
+        current.batchRunning ||
+        useAppStore.getState().activeSessionId !== folderId
+      )
+        return null;
+      const paths = eligible
+        .filter((repo) => bool(values, integrationRepoKey(repo.path)))
+        .map((repo) => repo.path);
+      if (paths.length === 0) return null;
+      const result = await current.runBatch({ kind: 'deleteBranch', name }, paths);
+      report?.(result);
+      await current.refresh();
+      return result;
+    } catch (error) {
+      notice({ kind: 'error', title: copy.title(name), message: describeError(error) });
+      return null;
+    } finally {
+      preparingRef.current = false;
+      setPreparing(false);
+    }
+  };
+
   return {
     dialogs,
     /** 고른 저장소 (빈 목록 = 전부) */
@@ -642,6 +702,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     checkoutBranch,
     createBranchFrom,
     renameBranch,
+    deleteBranch,
   };
 }
 

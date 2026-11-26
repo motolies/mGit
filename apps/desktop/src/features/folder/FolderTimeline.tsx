@@ -434,6 +434,43 @@ export function FolderTimeline() {
     [branchRepos, folderId],
   );
 
+  /** 삭제 후 어느 저장소에도 남지 않은 브랜치만 로그 조건에서 제거한다. */
+  const deleteBranch = useCallback(
+    async (branch: FolderBranch) => {
+      const result = await flowsRef.current.deleteBranch(
+        branch.name,
+        branch.repos.map((repo) => ({
+          path: repo.path,
+          name: repoNameIn(branchRepos, repo.path),
+          current: repo.current,
+        })),
+      );
+      const live = folderId === null ? undefined : getFolderStore(folderId)?.getState();
+      if (
+        !result?.succeeded ||
+        !live?.branches ||
+        live.branches.branches.some((item) => !item.remote && item.name === branch.name)
+      )
+        return;
+      const query = live.timeline.query;
+      const revs = query.revs;
+      const name = branch.name;
+      const next: GraphRevs =
+        revs.kind === 'solo' && (revs.name === name || revs.name === `refs/heads/${name}`)
+          ? headRevs()
+          : revs.kind === 'branches'
+            ? (() => {
+                const names = revs.names.filter(
+                  (value) => value !== name && value !== `refs/heads/${name}`,
+                );
+                return names.length > 0 ? { kind: 'branches' as const, names } : headRevs();
+              })()
+            : revs;
+      if (!sameRevs(revs, next)) void live.setTimelineQuery({ ...query, revs: next });
+    },
+    [branchRepos, folderId],
+  );
+
   /** 한 브랜치의 즐겨찾기를 뒤집는다 */
   const toggleFavorite = useCallback(
     (node: BranchTreeNode) => {
@@ -562,7 +599,14 @@ export function FolderTimeline() {
                 },
               },
             ]
-          : []),
+          : [
+              {
+                label: S.folder.localDeletion.menu,
+                danger: true,
+                disabled: running,
+                onSelect: () => void deleteBranch(branch),
+              },
+            ]),
         {
           label: S.branches.menu.showOnly,
           onSelect: () => setRevs({ kind: 'solo', name: branch.name }),
@@ -585,6 +629,7 @@ export function FolderTimeline() {
       toggleFavorite,
       branchRepos,
       renameBranch,
+      deleteBranch,
       deletion.running,
       deletion.execute,
       folderId,

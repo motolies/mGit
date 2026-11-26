@@ -103,6 +103,10 @@ pub enum BatchOp {
     DeleteLocalBranches {
         targets: Vec<BranchDeleteTarget>,
     },
+    /// 선택한 저장소의 로컬 브랜치를 미병합 커밋을 보호하며 삭제한다.
+    DeleteBranch {
+        name: String,
+    },
     Fetch {
         prune: bool,
     },
@@ -165,6 +169,10 @@ impl BatchOp {
             BatchOp::DeleteLocalBranches { .. } => {
                 pick("로컬 브랜치 강제 삭제", "Force delete local branches").into()
             }
+            BatchOp::DeleteBranch { name } => tr!(
+                "로컬 브랜치 일괄 삭제: {name}",
+                "Delete local branch: {name}"
+            ),
             BatchOp::Fetch { .. } => pick("원격 정보 일괄 가져오기", "Batch fetch").into(),
             BatchOp::Pull => pick("원격 변경 일괄 가져오기", "Batch pull").into(),
             BatchOp::Push => pick("일괄 푸시", "Batch push").into(),
@@ -233,7 +241,9 @@ impl BatchOp {
                 check_ref_name(name)?;
                 start_point.as_deref().map_or(Ok(()), check_ref_name)
             }
-            BatchOp::Checkout { name } | BatchOp::UpdateBranch { name } => check_ref_name(name),
+            BatchOp::Checkout { name }
+            | BatchOp::UpdateBranch { name }
+            | BatchOp::DeleteBranch { name } => check_ref_name(name),
             BatchOp::RenameBranch { from, to } => {
                 check_ref_name(from)?;
                 check_ref_name(to)?;
@@ -613,6 +623,37 @@ async fn run_batch_one(
         BatchOp::Merge { .. } | BatchOp::Rebase { .. } => unreachable!("integration handled above"),
         BatchOp::DeleteRemoteBranch { .. } | BatchOp::DeleteLocalBranches { .. } => {
             unreachable!("deletion handled above")
+        }
+        BatchOp::DeleteBranch { name } => {
+            if in_op {
+                r.skip(reason::in_progress());
+                return r;
+            }
+            let reference = format!("refs/heads/{name}");
+            let found = match ref_upstreams(runner, &d.work_tree, &[reference.as_str()]).await {
+                Ok(found) => found,
+                Err(error) => {
+                    r.message = error;
+                    return r;
+                }
+            };
+            if !found.contains_key(&reference) {
+                r.skip(reason::no_branch());
+                return r;
+            }
+            // Git 자체의 미병합·현재 및 연결 워크트리 보호를 유지하며 강제 삭제하지 않는다.
+            let (ok, message) = run_git_env_cancel(
+                &inner,
+                &d.work_tree,
+                &strs(&["branch", "-d", "--", name]),
+                false,
+                &[],
+                Some(cancel),
+            )
+            .await;
+            r.ok = ok;
+            r.message = message;
+            return r;
         }
         BatchOp::Fetch { prune } => {
             let mut a = strs(&["fetch", "--all"]);
@@ -1026,6 +1067,13 @@ impl Core {
         let inner = self.inner_arc();
         let folder = inner.folders_get(session)?;
         let settings = Arc::new(self.folder_settings(session)?);
+        // 삭제에서는 빈 선택을 전체 저장소로 확대하지 않고 등록된 경로만 받는다.
+        if matches!(&op, BatchOp::DeleteBranch { .. }) {
+            if repos.is_empty() {
+                return Err(CoreError::Invalid("No deletion targets".into()));
+            }
+            folder.select(repos)?;
+        }
         let all = if let BatchOp::DeleteRemoteBranch { targets, .. }
         | BatchOp::DeleteLocalBranches { targets } = &op
         {

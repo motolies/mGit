@@ -884,3 +884,102 @@ async fn batch_rename_branch_checked_out_in_other_worktree() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// 완료된 브랜치만 지우며 미병합 커밋·현재 및 연결 워크트리 브랜치를 보호한다.
+#[tokio::test]
+async fn batch_delete_branch_preserves_unmerged_and_checked_out_branches() {
+    let core = core().await;
+    let (root, mut merged, mut unmerged) = two_repos("delete-local");
+    merged.git_ok(["branch", "done"]);
+    unmerged.git_ok(["checkout", "-q", "-b", "done"]);
+    unmerged.commit("unfinished work");
+    unmerged.git_ok(["checkout", "-q", "main"]);
+    let mut current = init_at(&root.join("current"));
+    current.commit("base");
+    current.git_ok(["checkout", "-q", "-b", "done"]);
+    let mut linked = init_at(&root.join("linked"));
+    linked.commit("base");
+    let linked_path = root.join("linked-worktree");
+    linked.git_ok([
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "done",
+        linked_path.to_str().unwrap(),
+    ]);
+    let mut missing = init_at(&root.join("missing"));
+    missing.commit("base");
+    let (sink, _) = collector();
+    let folder = core.open_folder(&root, sink).await.unwrap();
+    let paths = ["a", "b", "current", "linked", "missing"].map(|name| root.join(name));
+    let result = core
+        .folder_batch(
+            folder.session,
+            BatchOp::DeleteBranch {
+                name: "done".into(),
+            },
+            &paths,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.results.len(), 5, "{result:?}");
+    assert_eq!(result.succeeded, 1, "{result:?}");
+    assert_eq!(result.skipped, 1, "{result:?}");
+    assert!(!has_branch(&mut merged, "done"));
+    assert!(has_branch(&mut unmerged, "done"));
+    assert!(has_branch(&mut current, "done"));
+    assert!(has_branch(&mut linked, "done"));
+    assert_eq!(current_branch(&mut current), "done");
+    assert_eq!(current_branch(&mut merged), "main");
+    assert_eq!(current_branch(&mut unmerged), "main");
+    for name in ["b", "current", "linked"] {
+        let outcome = result.results.iter().find(|row| row.name == name).unwrap();
+        assert!(
+            !outcome.ok && outcome.skipped.is_none() && !outcome.message.is_empty(),
+            "{outcome:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 빈 선택·폴더 밖 대상·잘못된 이름을 거부하고 선택하지 않은 저장소는 건드리지 않는다.
+#[tokio::test]
+async fn batch_delete_branch_requires_explicit_valid_targets() {
+    let core = core().await;
+    let (root, mut a, mut b) = two_repos("delete-targets");
+    a.git_ok(["branch", "done"]);
+    b.git_ok(["branch", "done"]);
+    let (sink, _) = collector();
+    let folder = core.open_folder(&root, sink).await.unwrap();
+    let op = BatchOp::DeleteBranch {
+        name: "done".into(),
+    };
+    assert!(
+        core.folder_batch(folder.session, op.clone(), &[])
+            .await
+            .is_err()
+    );
+    assert!(
+        core.folder_batch(folder.session, op.clone(), &[root.join("outside")])
+            .await
+            .is_err()
+    );
+    assert!(
+        core.folder_batch(
+            folder.session,
+            BatchOp::DeleteBranch { name: "-D".into() },
+            &[root.join("a")]
+        )
+        .await
+        .is_err()
+    );
+    let result = core
+        .folder_batch(folder.session, op, &[root.join("a")])
+        .await
+        .unwrap();
+    assert_eq!(result.succeeded, 1, "{result:?}");
+    assert!(!has_branch(&mut a, "done"));
+    assert!(has_branch(&mut b, "done"));
+    let _ = std::fs::remove_dir_all(root);
+}

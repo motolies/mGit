@@ -610,6 +610,15 @@ export const enRepository: Pick<
     button: 'Create',
   },
   folder: {
+    localDeletion: {
+      menu: 'Delete local branch…',
+      title: (name: string) => `Delete local branch: ${name}`,
+      message:
+        'Delete the local branch in the selected repositories. Remote branches are kept. Unmerged branches and branches used by another worktree are protected. Results are reported for each repository.',
+      current: 'This is the current branch.',
+      noneEligible: 'No repositories can be selected. Check the reason shown for each repository.',
+      confirm: 'Delete selected local branches',
+    },
     integration: {
       pendingEditor: 'There are unsaved edits or a file save in progress.',
       editorChanged: 'Wait for edited files to finish saving, then inspect the targets again.',
@@ -834,6 +843,7 @@ export const enRepository: Pick<
         merge: 'Batch merge',
         rebase: 'Batch rebase',
         deleteRemoteBranch: 'Batch delete remote branch',
+        deleteBranch: 'Batch delete local branch',
         deleteLocalBranches: 'Batch force-delete local branches',
         commit: 'Batch commit',
       },

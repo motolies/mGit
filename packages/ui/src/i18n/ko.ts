@@ -1486,6 +1486,15 @@ export const ko = {
     button: '만들기',
   },
   folder: {
+    localDeletion: {
+      menu: '로컬 브랜치 삭제…',
+      title: (name: string) => `로컬 브랜치 삭제: ${name}`,
+      message:
+        '선택한 저장소의 로컬 브랜치를 삭제합니다. 원격 브랜치는 유지합니다. 병합되지 않았거나 다른 워크트리에서 사용 중인 브랜치는 삭제하지 않으며 저장소별 결과를 표시합니다.',
+      current: '현재 사용 중인 브랜치입니다.',
+      noneEligible: '삭제할 수 있는 저장소가 없습니다. 각 저장소의 사유를 확인하세요.',
+      confirm: '선택한 로컬 브랜치 삭제',
+    },
     integration: {
       pendingEditor: '저장하지 않은 편집 내용 또는 저장 중인 파일이 있습니다.',
       editorChanged: '편집 내용의 저장이 끝난 뒤 대상을 다시 확인하고 실행하세요.',
@@ -1710,6 +1719,7 @@ export const ko = {
         merge: '일괄 병합',
         rebase: '일괄 리베이스',
         deleteRemoteBranch: '일괄 원격 브랜치 삭제',
+        deleteBranch: '로컬 브랜치 일괄 삭제',
         deleteLocalBranches: '일괄 로컬 브랜치 강제 삭제',
         commit: '일괄 커밋',
       },

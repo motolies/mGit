@@ -111,7 +111,7 @@ export function DiffPaneView({
       window.document.removeEventListener('pointerdown', track, true);
     };
   }, []);
-  // 자동 새로고침도 본문 DOM을 교체하므로 소유했던 포커스만 컨테이너와 새 본문에 이어 준다.
+  // 파일 전환으로 본문이 교체되면 소유했던 포커스만 컨테이너와 새 본문에 이어 준다.
   useLayoutEffect(() => {
     const pane = paneRef.current;
     if (!pane || !ownedFocus.current) return;
@@ -160,7 +160,8 @@ export function DiffPaneView({
     if (navigation?.moveHunk(direction)) return;
     if (hasFile(direction)) moveFile(direction);
   };
-  useEffect(() => {
+  // 포커스 복귀와 같은 커밋에 명령을 갱신해 이전 로딩 상태가 연속 F7을 삼키지 않게 한다.
+  useLayoutEffect(() => {
     const el = paneRef.current;
     if (!el) return;
     const cleanups = (
@@ -258,8 +259,7 @@ export function DiffPaneView({
             ↑ {S.diff.previousChange}
           </Button>
           <span aria-live="polite">
-            {loading || !diff ? 0 : (navigation?.current ?? 0)} /{' '}
-            {loading || !diff ? 0 : (navigation?.total ?? 0)}
+            {!diff ? 0 : (navigation?.current ?? 0)} / {!diff ? 0 : (navigation?.total ?? 0)}
           </span>
           <Button
             title={diff?.truncated && !navigation?.canMove(1) ? S.diff.loadFullFile : nextTitle}

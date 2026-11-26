@@ -1,7 +1,7 @@
 import { createNullClient } from '@mgit/ipc';
 import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComparisonDoc } from '../features/history/ComparisonDoc';
 import { handleGlobalKey } from '../global-keys';
 import type { ComparisonTarget } from '../store/workspace-store';
@@ -52,11 +52,30 @@ vi.mock('../features/history/comparison', () => ({
   comparisonDrafts: () => [['a.txt', 'draft']],
 }));
 
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get: () => 600,
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get: () => 800,
+  });
+});
 afterEach(cleanup);
 beforeEach(() => {
   state.tab = null;
   state.client = createNullClient();
   state.repo.status = {};
+  state.ws.options = {
+    ignoreWhitespace: false,
+    context: 3,
+    wrap: false,
+    tabWidth: 4,
+    fullFile: false,
+    horizontalSync: true,
+    highlightMode: 'word',
+  };
 });
 const doc = (): ComparisonTarget => ({
   kind: 'comparison',
@@ -89,7 +108,7 @@ describe('고정 비교 문서', () => {
       'b'.repeat(40),
       false,
       'a.txt',
-      state.ws.options,
+      { context: state.ws.options.context, ignoreWhitespace: state.ws.options.ignoreWhitespace },
       false,
     );
     mounted.unmount();
@@ -205,20 +224,32 @@ it.each(['keyboard', 'button'])(
     document.addEventListener('keydown', handler);
     try {
       const target = doc();
-      const mounted = render(<ComparisonDoc doc={target} />);
+      render(<ComparisonDoc doc={target} />);
       /** 갱신의 로딩 구간을 확정해 준비 전 화면을 준비 완료로 오인하지 않는다. */
       const refresh = async () => {
         let release = () => {};
         refreshGate = new Promise<void>((resolve) => {
           release = resolve;
         });
-        state.repo.status = {};
-        mounted.rerender(<ComparisonDoc doc={target} />);
-        await waitFor(() => expect(screen.queryByRole('grid', { name: 'b.txt' })).toBeNull());
+        const grid = screen.getByRole('grid', { name: 'b.txt' });
+        grid.scrollTop = 57;
+        fireEvent.click(screen.getByRole('button', { name: S.comparison.refresh }));
+        await waitFor(() =>
+          expect(
+            screen.getByRole('button', { name: `↓ ${S.diff.nextChange}` }).hasAttribute('disabled'),
+          ).toBe(true),
+        );
+        expect(screen.getByRole('grid', { name: 'b.txt' })).toBe(grid);
+        expect(grid.scrollTop).toBe(57);
         await act(async () => {
           release();
         });
-        await screen.findByRole('grid', { name: 'b.txt' });
+        await waitFor(() =>
+          expect(
+            screen.getByRole('button', { name: `↓ ${S.diff.nextChange}` }).hasAttribute('disabled'),
+          ).toBe(false),
+        );
+        expect(screen.getByRole('grid', { name: 'b.txt' })).toBe(grid);
         refreshGate = null;
       };
       const first = await screen.findByRole('grid', { name: 'a.txt' });
@@ -226,6 +257,7 @@ it.each(['keyboard', 'button'])(
       if (start === 'keyboard') fireEvent.keyDown(document.activeElement ?? first, { key: 'F7' });
       else fireEvent.click(screen.getByRole('button', { name: `↓ ${S.diff.nextChange}` }));
       expect(document.activeElement?.hasAttribute('data-diff-pane')).toBe(true);
+      expect(screen.queryByRole('grid', { name: 'a.txt' })).toBeNull();
       const repeated = new KeyboardEvent('keydown', {
         key: 'F7',
         repeat: true,
@@ -261,3 +293,122 @@ it.each(['keyboard', 'button'])(
     }
   },
 );
+
+/** 동일 파일의 자동 갱신 동안 본문 DOM과 읽던 위치를 보존한다. */
+it('로컬 감시 갱신은 완료될 때까지 기존 본문과 스크롤을 유지하고 오류도 표시한다', async () => {
+  const client = createNullClient();
+  const patch = documentOf({ ...documentOf().diff, oldPath: 'a.txt', newPath: 'a.txt' });
+  client.compareLocalFiles = vi.fn(async () => ({
+    base: 'main',
+    files: [{ path: 'a.txt', oldPath: null, change: { kind: 'modified' as const } }],
+  }));
+  client.compareLocalDocument = vi.fn(async () => patch);
+  state.client = client;
+  const target = { ...doc(), b: '@LOCAL' };
+  const mounted = render(<ComparisonDoc doc={target} />);
+  const grid = await screen.findByRole('grid', { name: 'a.txt' });
+  grid.scrollTop = 67;
+  grid.focus();
+  let finish: (value: typeof patch) => void = () => {};
+  client.compareLocalDocument = vi.fn(
+    () =>
+      new Promise<typeof patch>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  state.repo.status = {};
+  mounted.rerender(<ComparisonDoc doc={target} />);
+  await waitFor(() => expect(client.compareLocalDocument).toHaveBeenCalled());
+  expect(screen.getByRole('grid', { name: 'a.txt' })).toBe(grid);
+  expect(grid.scrollTop).toBe(67);
+  expect(document.activeElement).toBe(grid);
+  expect(screen.queryByText(S.history.loading)).toBeNull();
+  await act(async () => finish(patch));
+  expect(screen.getByRole('grid', { name: 'a.txt' })).toBe(grid);
+  client.compareLocalFiles = vi.fn(async () => {
+    throw new Error('refresh failed');
+  });
+  state.repo.status = {};
+  mounted.rerender(<ComparisonDoc doc={target} />);
+  await screen.findByRole('alert');
+  expect(screen.getByRole('alert').textContent).toContain('refresh failed');
+  expect(screen.getByRole('grid', { name: 'a.txt' })).toBe(grid);
+});
+
+/** 고정 커밋과 표시 옵션은 파일 원문을 다시 읽을 이유가 아니다. */
+it('고정 비교는 감시와 표시 옵션으로 재조회하지 않고 공백 옵션만 재조회한다', async () => {
+  const client = createNullClient();
+  client.compareRefs = vi.fn(async () => [
+    { path: 'a.txt', oldPath: null, change: { kind: 'modified' as const } },
+  ]);
+  client.compareFileDiffDocument = vi.fn(async () =>
+    documentOf({ ...documentOf().diff, oldPath: 'a.txt', newPath: 'a.txt' }),
+  );
+  state.client = client;
+  const target = doc();
+  const mounted = render(<ComparisonDoc doc={target} />);
+  await screen.findByRole('grid', { name: 'a.txt' });
+  state.repo.status = {};
+  state.repo.refs = { labels: [] };
+  state.ws.options = {
+    ...state.ws.options,
+    wrap: true,
+    fullFile: true,
+    horizontalSync: false,
+    tabWidth: 8,
+    highlightMode: 'character',
+  };
+  mounted.rerender(<ComparisonDoc doc={target} />);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  expect(client.compareRefs).toHaveBeenCalledTimes(1);
+  expect(client.compareFileDiffDocument).toHaveBeenCalledTimes(1);
+  state.ws.options = { ...state.ws.options, ignoreWhitespace: true };
+  mounted.rerender(<ComparisonDoc doc={target} />);
+  await waitFor(() => expect(client.compareFileDiffDocument).toHaveBeenCalledTimes(2));
+});
+
+/** 늦게 도착한 문서 응답은 최신 조회 옵션의 결과를 덮지 않는다. */
+it('이전 문서 응답이 늦게 도착해도 최신 문서를 유지한다', async () => {
+  const client = createNullClient();
+  const makeDocument = (text: string) =>
+    documentOf({
+      ...documentOf().diff,
+      oldPath: 'a.txt',
+      newPath: 'a.txt',
+      totalLines: 1,
+      hunks: [
+        {
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 1,
+          section: '',
+          lines: [{ kind: 'add', oldNo: 1, newNo: 1, text, noNewline: false }],
+        },
+      ],
+    });
+  client.compareRefs = vi.fn(async () => [
+    { path: 'a.txt', oldPath: null, change: { kind: 'modified' as const } },
+  ]);
+  let finish: (value: ReturnType<typeof documentOf>) => void = () => {};
+  client.compareFileDiffDocument = vi.fn((_session, _a, _b, _three, _path, options) =>
+    options.ignoreWhitespace
+      ? Promise.resolve(makeDocument('fresh result'))
+      : new Promise<ReturnType<typeof documentOf>>((resolve) => {
+          finish = resolve;
+        }),
+  );
+  state.client = client;
+  const target = doc();
+  const mounted = render(<ComparisonDoc doc={target} />);
+  await waitFor(() => expect(client.compareFileDiffDocument).toHaveBeenCalledTimes(1));
+  state.ws.options = { ...state.ws.options, ignoreWhitespace: true };
+  mounted.rerender(<ComparisonDoc doc={target} />);
+  await screen.findByRole('grid', { name: 'a.txt' });
+  expect(screen.getByRole('grid', { name: 'a.txt' }).textContent).toContain('fresh result');
+  await act(async () => finish(makeDocument('stale result')));
+  expect(screen.getByRole('grid', { name: 'a.txt' }).textContent).toContain('fresh result');
+  expect(screen.queryByText('stale result')).toBeNull();
+});

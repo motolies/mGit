@@ -457,6 +457,7 @@ export function DiffView({
   const cursorRef = useRef(cursorRow);
   cursorRef.current = cursorRow;
   const position = useRef({ path: '', ordinal: 0 });
+  const positioned = useRef<{ key: string; element: HTMLElement } | null>(null);
 
   /** 커서만 옮긴다. 구간 이동은 줄 선택·stage 를 실행하지 않는다 */
   const moveCursor = useCallback(
@@ -478,6 +479,15 @@ export function DiffView({
     // 경로가 먼저 바뀌고 원문이 나중에 도착하는 중간 렌더에서는 도착 요청을 소비하지 않는다.
     if (loading || !diff || (diff.newPath ?? diff.oldPath) !== path || !scrollRef.current) return;
     const fresh = !!arrival && !consumedArrivals.has(arrival);
+    const layoutKey = JSON.stringify([contentKey, mode, fullFile]);
+    // 같은 내용의 자동 재조회는 현재 스크롤과 키보드 커서를 다시 이동시키지 않는다.
+    if (
+      !fresh &&
+      positioned.current?.key === layoutKey &&
+      positioned.current.element === scrollRef.current
+    )
+      return;
+    positioned.current = { key: layoutKey, element: scrollRef.current };
     const changedPath = position.current.path !== path;
     const ordinal = fresh
       ? arrival.edge === 'last'

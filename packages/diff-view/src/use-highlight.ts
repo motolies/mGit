@@ -1,11 +1,13 @@
 import type { FileDiff } from '@mgit/ipc';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { highlightHunk, tokenize } from './highlight';
 import { isMarkdownPath, parserFor } from './languages';
 import type { Span } from './word-diff';
 
 /** hunk 번호 → (줄 인덱스 → 조각) */
 export type HighlightMap = Map<number, Map<number, Span[]>>;
+
+const EMPTY_HIGHLIGHT: HighlightMap = new Map();
 
 const MAX_HIGHLIGHT_LINES = 5000;
 const MAX_HIGHLIGHT_CHARS = 128 * 1024;
@@ -74,18 +76,23 @@ export function useHighlight(
   path: string,
   originals?: { old: string; new: string },
 ): HighlightMap {
-  const [map, setMap] = useState<HighlightMap>(() => new Map());
+  const key = useMemo(() => JSON.stringify([path, diff, originals]), [path, diff, originals]);
+  const [result, setResult] = useState<{ key: string; map: HighlightMap }>(() => ({
+    key: '',
+    map: new Map(),
+  }));
   useEffect(() => {
     let cancelled = false;
-    setMap(new Map());
+    if (result.key === key) return;
     if (diff) {
       void highlightDiff(diff, path, originals).then((next) => {
-        if (!cancelled) setMap(next);
+        if (!cancelled) setResult({ key, map: next });
       });
     }
     return () => {
       cancelled = true;
     };
-  }, [diff, path, originals]);
-  return map;
+  }, [diff, path, originals, key, result.key]);
+  // 내용이 같으면 완료된 강조를 유지하고, 다른 파일에는 이전 색상 지도를 노출하지 않는다.
+  return result.key === key ? result.map : EMPTY_HIGHLIGHT;
 }

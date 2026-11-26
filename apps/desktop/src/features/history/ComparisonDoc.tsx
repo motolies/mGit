@@ -2,7 +2,7 @@ import type { DiffArrival } from '@mgit/diff-view';
 import type { ChangedFile, DiffDocument } from '@mgit/ipc';
 import { settingsStorage } from '@mgit/storage';
 import { Button, S } from '@mgit/ui';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import {
   getSessionStore,
@@ -145,13 +145,31 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
     a: string;
     b: string;
     drafts: [string, string][];
+    request: ComparisonRequest;
   } | null>(null);
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [path, setPath] = useState<string | null>(chosenPaths.get(doc) ?? null);
   useEffect(() => {
     if (path) chosenPaths.set(doc, path);
   }, [doc, path]);
-  const [document, setDocument] = useState<DiffDocument | null>(null);
+  const [loadedDocument, setDocument] = useState<{ key: string; value: DiffDocument } | null>(null);
+  // 재조회 횟수는 표시 정체성이 아니다. 같은 파일은 유지하고 다른 기준·파일은 즉시 가린다.
+  const documentKey = JSON.stringify([
+    session,
+    doc.repoPath,
+    request.a,
+    request.b,
+    request.three,
+    path,
+  ]);
+  const document = loadedDocument?.key === documentKey ? loadedDocument.value : null;
+  const queryOptions = useMemo(
+    () => ({
+      context: ws.options.context,
+      ignoreWhitespace: ws.options.ignoreWhitespace,
+    }),
+    [ws.options.context, ws.options.ignoreWhitespace],
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -163,6 +181,8 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
       [request.a, request.b].some((v) => v === r.fullName || v === r.shortName),
   );
   const localEpoch = request.b === LOCAL ? epoch : 0;
+  const localStatus = request.b === LOCAL ? repo.status : null;
+  const localRefs = request.b === LOCAL ? repo.refs : null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: 초안과 Git 감시 변화는 조회 무효화 신호다.
   useEffect(() => {
     if (session === null) return;
@@ -171,8 +191,7 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
       () => {
         setLoading(true);
         setError(null);
-        setDocument(null);
-        setResolved(null);
+
         const drafts = comparisonDrafts(doc.repoPath);
         void (async () => {
           const fixed = fixedComparisons.get(doc);
@@ -193,8 +212,7 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
           if (live) {
             fixedComparisons.set(doc, { request, a: base, b: target });
             setFiles(orderedDiffFiles(changed));
-            setFull(false);
-            setResolved({ a: base, b: target, drafts });
+            setResolved({ a: base, b: target, drafts, request });
             setPath((previous) => {
               if (changed.some((f) => f.path === previous)) return previous;
               const sorted = orderedDiffFiles(changed);
@@ -205,7 +223,7 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
           .catch((e) => {
             if (live) {
               setError(String(e));
-              setFiles([]);
+              if (!document) setFiles([]);
             }
           })
           .finally(() => {
@@ -226,13 +244,15 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
     doc.filterPath,
     request,
     localEpoch,
-    repo.status,
-    repo.refs,
+    localStatus,
+    localRefs,
   ]);
   useEffect(() => {
     let live = true;
-    setDocument(null);
-    if (!resolved || !path || session === null) return;
+    if (!resolved || resolved.request !== request || !path || session === null) {
+      setDiffLoading(false);
+      return;
+    }
     setDiffLoading(true);
     setError(null);
     const promise =
@@ -242,7 +262,7 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
             resolved.a,
             path,
             resolved.drafts.find(([p]) => p === path)?.[1] ?? null,
-            ws.options,
+            queryOptions,
             full,
           )
         : client.compareFileDiffDocument(
@@ -251,13 +271,13 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
             resolved.b,
             request.three,
             path,
-            ws.options,
+            queryOptions,
             full,
           );
     void promise
       .then(
         (d) => {
-          if (live) setDocument(d);
+          if (live) setDocument({ key: documentKey, value: d });
         },
         (e) => {
           if (live) setError(String(e));
@@ -269,7 +289,7 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
     return () => {
       live = false;
     };
-  }, [client, session, resolved, path, ws.options, request.three, full]);
+  }, [client, session, resolved, path, queryOptions, request, documentKey, full]);
   return (
     <section className={styles.box} style={{ height: '100%', maxHeight: 'none', minHeight: 0 }}>
       <header className={styles.header} style={{ flexWrap: 'wrap' }}>
@@ -369,7 +389,9 @@ export function ComparisonDoc({ doc }: { doc: ComparisonTarget }) {
           {error}
         </div>
       )}
-      {(loading || session === null) && !error && <div role="status">{S.history.loading}</div>}
+      {!document && (loading || session === null) && !error && (
+        <div role="status">{S.history.loading}</div>
+      )}
       <Group
         orientation="horizontal"
         defaultLayout={defaultLayout}

@@ -818,3 +818,37 @@ it('배율 변경은 코드 크기와 행 높이를 함께 갱신하며 본문�
   expect(root.style.getPropertyValue('--diff-font-size')).toBe('24px');
   expect(root.style.getPropertyValue('--diff-line-height')).toBe('40px');
 });
+
+it('같은 본문의 자동 갱신은 스크롤을 재배치하지 않고 새 도착 요청만 이동한다', async () => {
+  const value = diff('a');
+  const spy = vi.fn();
+  try {
+    const view = render(<DiffView diff={value} path="a.txt" mode="split" />);
+    await flush();
+    const grid = screen.getByRole('grid');
+    grid.scrollTo = spy;
+    grid.focus();
+    spy.mockClear();
+    view.rerender(<DiffView diff={value} path="a.txt" mode="split" loading />);
+    await flush();
+    view.rerender(
+      <DiffView diff={structuredClone(value)} path="a.txt" mode="split" loading={false} />,
+    );
+    await flush();
+    expect(screen.getByRole('grid')).toBe(grid);
+    expect(document.activeElement).toBe(grid);
+    expect(spy).not.toHaveBeenCalled();
+    view.rerender(
+      <DiffView
+        diff={value}
+        path="a.txt"
+        mode="split"
+        arrival={{ token: 999, edge: 'first', focus: true }}
+      />,
+    );
+    await flush();
+    expect(spy).toHaveBeenCalled();
+  } finally {
+    cleanup();
+  }
+});

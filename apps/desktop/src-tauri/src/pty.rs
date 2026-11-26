@@ -190,7 +190,7 @@ impl PtyState {
             .try_send(data.as_bytes().to_vec())
             .map_err(|e| match e {
                 TrySendError::Full(_) => internal(pick(
-                    "터미널이 입력을 읽지 않아 대기열이 찼습니다",
+                    "터미널이 입력을 처리하지 못해 대기열이 가득 찼습니다",
                     "The terminal is not reading input, so the input queue is full",
                 )),
                 TrySendError::Disconnected(_) => {

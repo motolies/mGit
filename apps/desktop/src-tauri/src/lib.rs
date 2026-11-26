@@ -355,7 +355,9 @@ pub fn bindings_path() -> &'static str {
 
 /// Tauri 앱 조립: 플러그인, 상태(코어·저장소·감시자), 커맨드 핸들러, 디버그 빌드에서 바인딩 내보내기
 pub fn run() {
-    let profile = runtime_profile::RuntimeProfile::detect().expect("실행 환경 초기화 실패");
+    // 저장된 언어 설정을 전달받기 전의 시작 오류도 기본 영어로 표시한다.
+    mgit_l10n::set(mgit_l10n::Lang::En);
+    let profile = runtime_profile::RuntimeProfile::detect().expect("Failed to initialize runtime");
     let mut context = tauri::generate_context!();
     profile.configure(context.config_mut());
     let builder = specta_builder();

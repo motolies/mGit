@@ -1,5 +1,5 @@
 import type { OpKind } from '@mgit/ipc';
-import { Button, Icon, S } from '@mgit/ui';
+import { Button, Icon, repositoryColor, S } from '@mgit/ui';
 import { type CSSProperties, type ReactNode, useId } from 'react';
 import { focusPanel } from '../../actions';
 import { useRovingGrid } from '../../components/roving';
@@ -113,7 +113,7 @@ export function OpRowView({
           {subject.color === null ? null : (
             <span
               className={styles.swatch}
-              style={{ '--repo-color': `var(--graph-lane-${subject.color})` } as CSSProperties}
+              style={{ '--repo-color': repositoryColor(subject.color) } as CSSProperties}
             />
           )}
           <span id={subjectId} className={styles.name}>

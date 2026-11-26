@@ -307,7 +307,7 @@ describe('결과 없음 상태의 조건 요약과 로그 영역 상태 (LG-11)'
       }),
     ).toEqual([
       S.filterBar.textCondition('^fix', true),
-      'branch: main',
+      '브랜치: main',
       '작성자: 서하린',
       `날짜: ${S.filterBar.dates.last7}`,
       '저장소: api-gateway +1',

@@ -20,7 +20,7 @@ struct Lane<K> {
     expected: K,
     /// 구간 시작 행. 가상 고정 레인은 첫 노드·합류가 들어올 때까지 `UNSET`
     seg_start: u32,
-    color: u8,
+    color: u16,
     /// GRAPH-13 고정 레인(레인 0). 첫 부모 체인이 다른 레인으로 합류하지 않는다
     pinned: bool,
 }
@@ -152,7 +152,7 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
                     ln.seg_start = r;
                 }
                 if let Some(&c) = self.opts.ref_colors.get(&key) {
-                    self.recolor(l, r, c);
+                    self.recolor(l, r, u16::from(c));
                 }
                 l
             }
@@ -253,7 +253,7 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
 
     /// 나머지 부모: 기존 레인으로 머지 곡선, 새 분기 레인, 또는 긴 엣지 스텁.
     /// 첫 부모 처리로 `lane` 이 이미 닫혔을 수 있어 스텁 색은 호출자가 넘긴 노드 색을 쓴다
-    fn link_other_parent(&mut self, key: K, lane: u16, r: u32, p: K, color: u8) {
+    fn link_other_parent(&mut self, key: K, lane: u16, r: u32, p: K, color: u16) {
         if let Some(&w) = self.waiting.get(&p) {
             if self.is_virtual(w) && self.is_far(r, &p) {
                 self.push_down_stub(key, lane, r, p, color);
@@ -316,7 +316,7 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
     }
 
     /// 자식 행에 Down 스텁을 두고 부모 도착을 기다린다
-    fn push_down_stub(&mut self, child: K, lane: u16, r: u32, parent: K, color: u8) {
+    fn push_down_stub(&mut self, child: K, lane: u16, r: u32, parent: K, color: u16) {
         let idx = self.stubs.len() as u32;
         self.stubs.push(Stub {
             row: r,
@@ -333,7 +333,7 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
     }
 
     /// ref 팁에서 레인 색을 바꾼다: 이전 구간을 r-1 에서 닫고 같은 레인 이음선으로 잇는다
-    fn recolor(&mut self, lane: u16, r: u32, color: u8) {
+    fn recolor(&mut self, lane: u16, r: u32, color: u16) {
         let Some(ln) = self.lanes[lane as usize] else {
             return;
         };
@@ -563,7 +563,7 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
     }
 
     /// 구간을 기록하고 청크 인덱스에 넣는다 (레인 상태는 건드리지 않는다)
-    fn record_segment(&mut self, lane: u16, start: u32, end: u32, color: u8) {
+    fn record_segment(&mut self, lane: u16, start: u32, end: u32, color: u16) {
         debug_assert!(start <= end, "빈 구간은 생길 수 없다");
         let id = self.segments.len() as u32;
         self.segments.push(Segment {
@@ -604,25 +604,25 @@ impl<K: Copy + Eq + Hash + Debug> GraphLayout<K> {
     }
 
     /// 새 레인의 색: 기다릴 키의 ref 색 → 옵션의 키 색 → 팔레트 순환
-    fn color_for_new_lane(&mut self, waits_for: &K) -> u8 {
+    fn color_for_new_lane(&mut self, waits_for: &K) -> u16 {
         if let Some(&c) = self.opts.ref_colors.get(waits_for) {
-            return c;
+            return u16::from(c);
         }
         if let Some(f) = self.opts.lane_color {
-            return f(waits_for) % PALETTE_SIZE;
+            return f(waits_for);
         }
         self.next_color()
     }
 
     /// 다음 팔레트 색
-    fn next_color(&mut self) -> u8 {
+    fn next_color(&mut self) -> u16 {
         let c = self.next_color;
         self.next_color = (self.next_color + 1) % PALETTE_SIZE;
-        c
+        u16::from(c)
     }
 
     /// 열린 레인의 색. 닫힌 레인이면 0
-    fn lane_color(&self, lane: u16) -> u8 {
+    fn lane_color(&self, lane: u16) -> u16 {
         self.lanes[lane as usize].map(|l| l.color).unwrap_or(0)
     }
 }

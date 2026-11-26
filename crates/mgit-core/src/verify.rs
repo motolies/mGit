@@ -222,7 +222,7 @@ impl Core {
         let cmd = self.verify_command(session)?.ok_or_else(|| {
             CoreError::Invalid(
                 pick(
-                    "검증 명령이 설정돼 있지 않습니다",
+                    "검증 명령이 설정되지 않았습니다",
                     "No verification command is set",
                 )
                 .into(),

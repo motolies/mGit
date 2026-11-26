@@ -164,7 +164,7 @@ describe('작업 진행 띠 (WS-10)', () => {
     const open = vi.spyOn(mock, 'folderOpenRepoSession');
     const row = bandRow('catalog-service');
     expect(band()?.children).toHaveLength(1);
-    expect(row.textContent).toContain('REBASING');
+    expect(row.textContent).toContain('리베이스 중');
     expect(within(row).getByRole('button', { name: /충돌 1/ })).toBeTruthy();
     const cont = within(row).getByRole('button', { name: S.op.continueLabel }) as HTMLButtonElement;
     expect(cont.disabled).toBe(true);
@@ -180,7 +180,7 @@ describe('작업 진행 띠 (WS-10)', () => {
     const rows = [...(band()?.children ?? [])].map((r) => r.textContent ?? '');
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain('billing-service');
-    expect(rows[0]).toContain('MERGING');
+    expect(rows[0]).toContain(S.status.op.merge);
     expect(rows[1]).toContain('catalog-service');
     expect(rows[2]).toContain('design-system');
     // cherry-pick 은 충돌이 없어 Continue 가 켜져 있다
@@ -198,7 +198,7 @@ describe('작업 진행 띠 (WS-10)', () => {
     expect(ws()?.activeRepo).toBe(WEB);
     await click(within(bandRow('catalog-service')).getByRole('button', { name: S.op.abort }));
     expect(dialog()?.querySelector('h2')?.textContent).toBe(
-      S.opBand.abortTitle('catalog-service', 'rebase'),
+      S.opBand.abortTitle('catalog-service', '리베이스'),
     );
     expect(dialog()?.textContent).toContain(S.opBand.abortMessage);
     // 취소하면 아무것도 하지 않는다
@@ -215,7 +215,7 @@ describe('작업 진행 띠 (WS-10)', () => {
     expect(session(CATALOG)).not.toBe(session(WEB));
     expect(band()).toBeNull();
     expect(useAppStore.getState().toasts.at(-1)?.title).toBe(
-      S.opBand.aborted('catalog-service', 'rebase'),
+      S.opBand.aborted('catalog-service', '리베이스'),
     );
   });
 
@@ -246,7 +246,7 @@ describe('작업 진행 띠 (WS-10)', () => {
     await tick();
     await tick();
     expect(useAppStore.getState().toasts.at(-1)?.title).toBe(
-      S.opBand.finished('design-system', 'cherry-pick'),
+      S.opBand.finished('design-system', '체리픽'),
     );
     expect(
       [...(band()?.children ?? [])].some((r) => r.textContent?.includes('design-system')),
@@ -344,7 +344,7 @@ describe('작업 진행 띠 (WS-10)', () => {
       const titles = useAppStore.getState().toasts.map((t) => t.title);
       expect(titles).toContain(S.conflict.droppedByAbort(FACET));
       expect(titles).not.toContain(S.conflict.externallyResolved(FACET));
-      expect(titles.at(-1)).toBe(S.opBand.aborted('catalog-service', 'rebase'));
+      expect(titles.at(-1)).toBe(S.opBand.aborted('catalog-service', '리베이스'));
       expect(getSessionStore(session(CATALOG))?.getState().conflictDrafts).toEqual({});
     } finally {
       notifyHub.setHandler(before);

@@ -216,7 +216,7 @@ impl Core {
             .ok_or_else(|| {
                 CoreError::Invalid(
                     pick(
-                        "detached HEAD 에서는 push 할 수 없습니다",
+                        "분리된 HEAD 상태에서는 푸시할 수 없습니다",
                         "Cannot push from a detached HEAD",
                     )
                     .into(),
@@ -284,7 +284,7 @@ fn default_remote(remotes: &[&str]) -> Result<String, CoreError> {
         many if many.contains(&"origin") => Ok("origin".to_string()),
         _ => Err(CoreError::Invalid(
             pick(
-                "원격이 여러 개라 보낼 곳을 정할 수 없습니다. 원격을 고르세요",
+                "원격 저장소가 여러 개입니다. 푸시할 원격 저장소를 선택하세요.",
                 "There are multiple remotes, so the push target is ambiguous. Choose a remote",
             )
             .into(),

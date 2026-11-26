@@ -122,7 +122,7 @@ fn text(pattern: &str) -> CommitFilter {
 }
 
 /// (제목, 저장소 번호, 레인, 색) 목록 (행 순서)
-fn rows(core: &Core, fid: SessionId) -> Vec<(String, u16, u16, u8)> {
+fn rows(core: &Core, fid: SessionId) -> Vec<(String, u16, u16, u16)> {
     core.folder_timeline_window(fid, 0, 1000)
         .unwrap()
         .rows
@@ -161,11 +161,7 @@ async fn every_repo_gets_the_same_filter() {
     );
     for (subject, repo, lane, color) in rows(&core, fid) {
         assert_eq!(lane, 0, "{subject}");
-        assert_eq!(
-            u16::from(color),
-            repo,
-            "색은 저장소 색 (순번 % 10): {subject}"
-        );
+        assert_eq!(color, repo, "색은 저장소 색 (순번 % 10): {subject}");
         let expected = match subject.chars().nth(5) {
             Some('a') => 0,
             Some('b') => 1,
@@ -271,7 +267,7 @@ async fn scope_keeps_numbers_and_colors_and_skips_git() {
     );
     let info = core.folder_timeline_info(fid).unwrap();
     assert!(info.scoped);
-    let brief: Vec<(&str, u16, u8, bool, Option<&str>)> = info
+    let brief: Vec<(&str, u16, u16, bool, Option<&str>)> = info
         .repos
         .iter()
         .map(|r| {

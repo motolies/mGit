@@ -233,7 +233,7 @@ async fn reword_and_squash_refuse_ranges_with_merges() {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, CoreError::Invalid(m) if m.contains("머지")),
+            matches!(&err, CoreError::Invalid(m) if m.contains("병합")),
             "{err:?}"
         );
     }
@@ -242,7 +242,7 @@ async fn reword_and_squash_refuse_ranges_with_merges() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, CoreError::Invalid(m) if m.contains("머지")),
+        matches!(&err, CoreError::Invalid(m) if m.contains("병합")),
         "{err:?}"
     );
     // 부모가 머지인 커밋을 합치는 경우도 같다
@@ -251,7 +251,7 @@ async fn reword_and_squash_refuse_ranges_with_merges() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, CoreError::Invalid(m) if m.contains("머지")),
+        matches!(&err, CoreError::Invalid(m) if m.contains("병합")),
         "{err:?}"
     );
     assert_eq!(repo.head(), head, "이력을 건드리지 않는다");

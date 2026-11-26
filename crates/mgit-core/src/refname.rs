@@ -17,7 +17,7 @@ fn has_basic_problem(name: &str) -> bool {
 pub(crate) fn check_ref_name(name: &str) -> Result<(), CoreError> {
     if has_basic_problem(name) {
         return Err(CoreError::Invalid(tr!(
-            "잘못된 branch 이름: {name:?}",
+            "올바르지 않은 브랜치 이름입니다: {name:?}",
             "Invalid branch name: {name:?}"
         )));
     }
@@ -35,7 +35,7 @@ pub(crate) fn check_tag_name(name: &str) -> Result<(), CoreError> {
         || name.ends_with('/');
     if has_basic_problem(name) || refspec_problem {
         return Err(CoreError::Invalid(tr!(
-            "잘못된 tag 이름: {name:?}",
+            "올바르지 않은 태그 이름입니다: {name:?}",
             "Invalid tag name: {name:?}"
         )));
     }

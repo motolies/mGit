@@ -17,7 +17,7 @@ pub enum CoreError {
         path: std::path::PathBuf,
         repos: Vec<std::path::PathBuf>,
     },
-    #[error("{}", pick("잘못된 범위", "Invalid range"))]
+    #[error("{}", pick("올바르지 않은 범위입니다", "Invalid range"))]
     BadRange,
     /// 쓰기 명령이 0이 아닌 코드로 끝났다. `hint` 는 stderr 분류 결과
     #[error("{}", messages::command_failed(.args, .status, .stderr))]

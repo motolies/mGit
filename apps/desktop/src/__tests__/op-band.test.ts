@@ -69,7 +69,7 @@ describe('작업 진행 띠의 줄 (WS-10)', () => {
         repoName: 'catalog',
         color: 3,
         kind: 'rebase',
-        label: 'REBASING',
+        label: S.project.rebasing,
         conflicts: 2,
         busy: false,
         kept: 0,
@@ -142,7 +142,7 @@ describe('버튼 조건과 확인창 (저장소 탭 배너와 공용)', () => {
       `${S.op.abortMessage} ${S.op.abortKept(2)}`,
     );
     const folder = abortConfirm({ kind: 'rebase', kept: 1, repoName: 'catalog-service' });
-    expect(folder.title).toBe(S.opBand.abortTitle('catalog-service', 'rebase'));
+    expect(folder.title).toBe(S.opBand.abortTitle('catalog-service', '리베이스'));
     expect(folder.title).toContain('catalog-service');
     expect(folder.message).toBe(`${S.opBand.abortMessage} ${S.op.abortKept(1)}`);
     expect(folder.danger).toBe(true);

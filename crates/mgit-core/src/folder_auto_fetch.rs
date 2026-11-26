@@ -176,7 +176,9 @@ impl CoreInner {
             match (ok, msg.is_empty()) {
                 (true, _) => Ok(()),
                 (false, false) => Err(msg),
-                (false, true) => Err(pick("fetch 실패", "fetch failed").to_string()),
+                (false, true) => {
+                    Err(pick("원격 정보를 가져오지 못했습니다", "fetch failed").to_string())
+                }
             }
         })
         .await;

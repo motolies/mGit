@@ -444,7 +444,7 @@ pub async fn ssh_keygen(
 pub fn open_url(url: String) -> Result<(), IpcError> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(IpcError::Internal {
-            message: tr!("열 수 없는 URL: {url}", "Cannot open URL: {url}"),
+            message: tr!("열 수 없는 URL입니다: {url}", "Cannot open URL: {url}"),
         });
     }
     tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| IpcError::Internal {

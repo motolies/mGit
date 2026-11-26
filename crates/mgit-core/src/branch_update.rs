@@ -80,7 +80,7 @@ impl NotUpdatable {
             NotUpdatable::NoBranch => crate::folder_batch::reason::no_branch().into(),
             NotUpdatable::NoUpstream => crate::folder_batch::reason::no_upstream().into(),
             NotUpdatable::OtherWorktree(path) => tr!(
-                "다른 워크트리에서 checkout 중 ({path})",
+                "다른 워크트리에서 사용 중인 브랜치입니다 ({path})",
                 "Checked out in another worktree ({path})"
             ),
             NotUpdatable::Failed(e) => e.clone(),
@@ -91,7 +91,7 @@ impl NotUpdatable {
 /// 로컬이 앞선 결과의 사유 (일괄 건너뜀·저장소 탭 알림 공용)
 pub(crate) fn ahead_reason(commits: u32) -> String {
     tr!(
-        "로컬이 앞섬 (⇡{commits}), 받을 것 없음",
+        "로컬 브랜치가 앞서 있습니다 (⇡{commits}). 가져올 변경이 없습니다.",
         "Local is ahead (⇡{commits}), nothing to update"
     )
 }
@@ -99,7 +99,7 @@ pub(crate) fn ahead_reason(commits: u32) -> String {
 /// 갈라진 결과의 사유 (일괄 건너뜀·저장소 탭 알림 공용)
 pub(crate) fn diverged_reason(ahead: u32, behind: u32) -> String {
     tr!(
-        "갈라져 갱신하지 않음 (⇡{ahead} ⇣{behind})",
+        "로컬과 원격 이력이 갈라져 업데이트하지 않았습니다 (⇡{ahead} ⇣{behind})",
         "Diverged, not updated (⇡{ahead} ⇣{behind})"
     )
 }
@@ -205,7 +205,7 @@ pub(crate) async fn compare(
     .map_err(|e| {
         if e.is_empty() {
             tr!(
-                "업스트림 ref 가 없습니다: {}",
+                "업스트림 참조가 없습니다: {}",
                 "Upstream ref not found: {}",
                 target.upstream
             )
@@ -333,7 +333,7 @@ impl Core {
         {
             // 비교와 이동 사이에 다른 곳에서 branch 가 움직였다 (쓰기 잠금 밖의 외부 git)
             return Err(CoreError::Invalid(tr!(
-                "{name} 이(가) 그 사이 바뀌어 갱신하지 않았습니다. 다시 시도하세요",
+                "확인 이후 {name}이(가) 변경되어 업데이트하지 않았습니다. 다시 시도하세요.",
                 "{name} changed in the meantime, so it was not updated. Try again"
             )));
         }

@@ -1,5 +1,5 @@
 import type { ChangedFile } from '@mgit/ipc';
-import { Button, Icon, S } from '@mgit/ui';
+import { Button, Icon, repositoryColor, S } from '@mgit/ui';
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -327,9 +327,7 @@ export function ChangedFilesTree({
                       <span
                         className={styles.swatch}
                         data-testid="repo-swatch"
-                        style={
-                          { '--repo-color': `var(--graph-lane-${root.color})` } as CSSProperties
-                        }
+                        style={{ '--repo-color': repositoryColor(root.color) } as CSSProperties}
                       />
                     )
                   ) : row.kind === 'dir' ? (

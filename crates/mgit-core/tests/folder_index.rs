@@ -660,7 +660,7 @@ async fn staging_is_allowed_during_a_merge_but_folder_commit_skips_it() {
     let ra = &result.results[0];
     assert_eq!(
         ra.skipped.as_deref(),
-        Some("진행 중인 작업이 있음"),
+        Some("진행 중인 작업이 있습니다"),
         "{ra:?}"
     );
     assert_eq!(a.head(), head);
@@ -1105,7 +1105,7 @@ async fn folder_stage_waits_for_a_folder_commit_on_the_same_repo() {
 // ── 일괄 커밋 (stage 된 것만) ──────────────────────────────────────────────────
 
 /// `folder_commit(…, stage_all = false)` 조사표: stage 된 변경만 커밋하고(작업 트리 변경·untracked 는 남는다),
-/// stage 된 것이 없으면 "stage 된 변경 없음", 충돌·진행 중 작업이면 "진행 중인 작업이 있음" 으로 건너뛰고, 훅이
+/// stage 된 것이 없으면 "스테이징된 변경이 없습니다", 충돌·진행 중 작업이면 "진행 중인 작업이 있습니다" 으로 건너뛰고, 훅이
 /// 실패하거나 충돌 마커가 stage 됐으면 실패로 남긴다. 커밋 없는 저장소는 첫 커밋이 된다. 모든 대상 저장소에
 /// `FolderChanged{refs: true}` 가 온다
 #[tokio::test]
@@ -1156,8 +1156,8 @@ async fn folder_commit_with_staged_only_commits_the_index_and_reports_skips() {
         let x = by(name);
         (x.ok, x.skipped.clone())
     };
-    let none = Some("stage 된 변경 없음".to_string());
-    let busy = Some("진행 중인 작업이 있음".to_string());
+    let none = Some("스테이징된 변경이 없습니다".to_string());
+    let busy = Some("진행 중인 작업이 있습니다".to_string());
     assert_eq!(outcome("clean"), (true, none.clone()));
     assert_eq!(outcome("unstaged"), (true, none));
     assert_eq!(outcome("staged"), (true, None));

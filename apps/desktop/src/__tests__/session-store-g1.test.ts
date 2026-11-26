@@ -116,6 +116,8 @@ describe('그래프 레이아웃·보기 설정 (G1)', () => {
     expect(isDefaultGraphQuery(q)).toBe(false);
     // ref 범위(main 만)는 보기 옵션이 아니라 branch 드롭다운이 보인다
     expect(changedViewOptions(q)).toEqual(['날짜순', '원격 숨김', '첫 부모만']);
-    expect(changedViewOptions({ ...DEFAULT_GRAPH_QUERY, noMerges: true })).toEqual(['머지 제외']);
+    expect(changedViewOptions({ ...DEFAULT_GRAPH_QUERY, noMerges: true })).toEqual([
+      '병합 커밋 제외',
+    ]);
   });
 });

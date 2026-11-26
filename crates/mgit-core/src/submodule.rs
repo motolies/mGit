@@ -74,7 +74,10 @@ fn check_path(path: &str) -> Result<(), CoreError> {
 
 /// 옵션으로 읽힐 수 있는 브랜치 이름 (지금 언어)
 fn bad_branch(branch: &str) -> String {
-    tr!("잘못된 branch: {branch:?}", "Invalid branch: {branch:?}")
+    tr!(
+        "올바르지 않은 브랜치입니다: {branch:?}",
+        "Invalid branch: {branch:?}"
+    )
 }
 
 /// `.gitmodules` 의 이름은 저장소가 정하는 값이다. `.git/modules` 밖을 가리킬 수 있으면 쓰지 않는다
@@ -346,7 +349,7 @@ impl Core {
         check_path(path)?;
         if url.trim().is_empty() || url.starts_with('-') {
             return Err(CoreError::Invalid(
-                pick("URL 을 입력하세요", "Enter a URL").into(),
+                pick("URL을 입력하세요.", "Enter a URL").into(),
             ));
         }
         let mut args: Vec<String> = vec!["submodule".into(), "add".into(), "--progress".into()];
@@ -381,7 +384,7 @@ impl Core {
         let out = inner.runner().run(req).await?;
         if !out.exit.success() {
             return Err(CoreError::Invalid(tr!(
-                "{path} 에 origin 원격이 없어 서브모듈로 등록할 수 없습니다",
+                "{path}에 origin 원격 저장소가 없어 서브모듈로 등록할 수 없습니다",
                 "Cannot register {path} as a submodule because it has no origin remote"
             )));
         }
@@ -416,7 +419,7 @@ impl Core {
             .into_iter()
             .find(|n| is_safe_module_name(n))
             .ok_or_else(|| {
-                CoreError::Invalid(tr!("서브모듈 이름이 안전하지 않아 제거를 거부합니다. .gitmodules 를 확인하세요: {path}", "Refusing to remove: the submodule name is unsafe. Check .gitmodules: {path}"))
+                CoreError::Invalid(tr!("서브모듈 이름이 올바르지 않아 제거할 수 없습니다. .gitmodules를 확인하세요: {path}", "Refusing to remove: the submodule name is unsafe. Check .gitmodules: {path}"))
             })?;
         let common_dir = self.inner_arc().get(session)?.info.common_dir.clone();
         // git 을 실행하기 전에 한 번, 지우기 직전에 한 번 확인한다

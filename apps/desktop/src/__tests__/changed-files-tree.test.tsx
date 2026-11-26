@@ -246,7 +246,9 @@ describe('ChangedFilesTree (CD-01·04)', () => {
     expect(root.textContent).toContain(S.detail.fileCount(4));
     // 색은 데이터의 색 번호로 레인 토큰을 가리킨다 (LF-09)
     const swatch = within(root).getByTestId('repo-swatch');
-    expect(swatch.style.getPropertyValue('--repo-color')).toBe('var(--graph-lane-3)');
+    expect(swatch.style.getPropertyValue('--repo-color')).toBe(
+      'var(--repo-color-3, var(--graph-lane-3))',
+    );
     expect(item('src').textContent).toContain(S.detail.fileCount(3));
   });
 

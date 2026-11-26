@@ -522,7 +522,7 @@ impl Core {
         if stages[1].is_none() || stages[2].is_none() {
             return Err(CoreError::Invalid(
                 pick(
-                    "양쪽 내용이 있는 충돌만 union 할 수 있습니다",
+                    "양쪽 파일 내용이 모두 있는 충돌만 결합할 수 있습니다",
                     "Only conflicts with content on both sides can be unioned",
                 )
                 .into(),
@@ -621,7 +621,7 @@ impl Core {
     pub async fn open_mergetool(&self, session: SessionId, path: &str) -> Result<(), CoreError> {
         check_path(path)?;
         if self.merge_tool_name(session).await?.is_none() {
-            return Err(CoreError::Invalid(pick("merge.tool 이 설정돼 있지 않습니다. `git config --global merge.tool <이름>` 으로 지정하세요", "merge.tool is not set. Set it with `git config --global merge.tool <name>`").into()));
+            return Err(CoreError::Invalid(pick("외부 병합 도구가 설정되지 않았습니다. `git config --global merge.tool <이름>`으로 지정하세요.", "merge.tool is not set. Set it with `git config --global merge.tool <name>`").into()));
         }
         let stages = self.stage_oids(session, path).await;
         let inner = self.inner_arc();
@@ -685,7 +685,7 @@ impl Core {
             })
             .next()
             .ok_or_else(|| {
-                CoreError::Invalid(pick("stage 된 결과가 없습니다", "No staged result").into())
+                CoreError::Invalid(pick("스테이징된 결과가 없습니다", "No staged result").into())
             })?;
         let mut tree_in = String::new();
         for (name, oid) in [
@@ -718,7 +718,10 @@ impl Core {
             time: mgit_model::now_millis(),
         };
         let msg = serde_json::to_string(&meta).map_err(|e| {
-            CoreError::Invalid(tr!("직렬화 실패: {e}", "Serialization failed: {e}"))
+            CoreError::Invalid(tr!(
+                "데이터를 저장할 형식으로 변환하지 못했습니다: {e}",
+                "Serialization failed: {e}"
+            ))
         })?;
         let req =
             GitRequest::new(wt, ["commit-tree", &tree, "-m", &msg]).with_env(EnvProfile::Write);
@@ -873,7 +876,7 @@ impl Core {
             .find(|k| k.path == path)
             .ok_or_else(|| {
                 CoreError::Invalid(tr!(
-                    "보관된 해결이 없습니다: {path}",
+                    "저장된 충돌 해결 결과가 없습니다: {path}",
                     "No kept resolution: {path}"
                 ))
             })?;

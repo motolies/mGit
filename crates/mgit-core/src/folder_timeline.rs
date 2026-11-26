@@ -46,7 +46,7 @@ pub struct TimelineRepo {
     pub index: u16,
     pub path: PathBuf,
     pub name: String,
-    pub color: u8,
+    pub color: u16,
     pub head: Option<Oid>,
     pub head_branch: Option<String>,
     pub refs: RefIndex,
@@ -199,7 +199,7 @@ pub struct TimelineRepoInfo {
     pub index: u16,
     pub name: String,
     pub path: PathBuf,
-    pub color: u8,
+    pub color: u16,
     pub head_branch: Option<String>,
     /// 저장소당 상한을 넘어 오래된 커밋이 잘렸는지. 필터가 있으면 "걸러진 결과가 상한을 넘었는지"다
     pub truncated: bool,
@@ -410,7 +410,7 @@ fn merge_loads(
 }
 
 /// 레인 색 = 저장소 색. 키의 저장소 번호가 폴더 세션의 순번이라 요약·브랜치 목록의 색과 같다
-fn repo_lane_color(key: &(u16, Oid)) -> u8 {
+fn repo_lane_color(key: &(u16, Oid)) -> u16 {
     repo_color(key.0)
 }
 
@@ -474,7 +474,7 @@ async fn load_timeline(
             None => RepoLoad {
                 error: Some(
                     pick(
-                        "타임라인 읽기가 중단됐습니다",
+                        "타임라인 읽기가 중단되었습니다",
                         "Reading the timeline was interrupted",
                     )
                     .into(),

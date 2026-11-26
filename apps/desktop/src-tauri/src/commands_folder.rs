@@ -465,7 +465,7 @@ pub struct FolderBranchRepoDto {
     pub path: String,
     pub name: String,
     /// 저장소 색 번호 (요약·타임라인과 같은 값)
-    pub color: u8,
+    pub color: u16,
     /// HEAD: 현재 브랜치, 분리 HEAD(커밋), 또는 커밋 없음. 읽지 못했으면 없다
     pub head: Option<HeadState>,
     /// ref 를 읽지 못한 이유
@@ -477,7 +477,7 @@ pub struct FolderBranchRepoDto {
 #[serde(rename_all = "camelCase")]
 pub struct FolderBranchInDto {
     pub path: String,
-    pub color: u8,
+    pub color: u16,
     /// 이 저장소에서 현재 브랜치인지
     pub current: bool,
     /// 업스트림의 짧은 이름 (`origin/main`). 로컬 브랜치에만 있다
@@ -578,7 +578,7 @@ pub struct TimelineRepoDto {
     pub index: u16,
     pub name: String,
     pub path: String,
-    pub color: u8,
+    pub color: u16,
     pub head_branch: Option<String>,
     /// 저장소당 상한에 걸려 오래된 커밋이 잘렸는지. 필터가 있으면 걸러진 결과가 상한을 넘었다는 뜻이다
     pub truncated: bool,

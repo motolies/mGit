@@ -8,14 +8,17 @@ use mgit_l10n::tr;
 /// git 이 지원하는 최소 버전보다 낮다
 pub(crate) fn git_too_old(found: &str, required: &str) -> String {
     tr!(
-        "git {found} 는 최소 버전 {required} 미만입니다",
+        "설치된 Git 버전({found})이 최소 요구 버전({required})보다 낮습니다",
         "git {found} is older than the minimum version {required}"
     )
 }
 
 /// git 프로세스를 띄우지 못했다
 pub(crate) fn git_spawn_failed(error: &std::io::Error) -> String {
-    tr!("git 실행 실패: {error}", "Failed to run git: {error}")
+    tr!(
+        "Git을 실행하지 못했습니다: {error}",
+        "Failed to run git: {error}"
+    )
 }
 
 /// git 이 0 이 아닌 코드로 끝났다
@@ -29,7 +32,7 @@ pub(crate) fn git_exit(status: &Option<i32>, stderr: &str) -> String {
 /// 경로가 git 저장소가 아니다
 pub(crate) fn not_a_repository(path: &Path) -> String {
     tr!(
-        "git 저장소가 아닙니다: {}",
+        "Git 저장소가 아닙니다: {}",
         "Not a git repository: {}",
         path.display()
     )
@@ -37,12 +40,18 @@ pub(crate) fn not_a_repository(path: &Path) -> String {
 
 /// 지원하지 않는 대상이다 (`what` 은 대상 설명)
 pub(crate) fn unsupported(what: &str) -> String {
-    tr!("지원하지 않음: {what}", "Unsupported: {what}")
+    tr!(
+        "지원하지 않는 기능 또는 형식입니다: {what}",
+        "Unsupported: {what}"
+    )
 }
 
 /// 객체 ID 꼴이 아니다
 pub(crate) fn bad_oid(text: &str) -> String {
-    tr!("잘못된 객체 ID: {text:?}", "Invalid object ID: {text:?}")
+    tr!(
+        "올바르지 않은 객체 ID입니다: {text:?}",
+        "Invalid object ID: {text:?}"
+    )
 }
 
 /// 레코드의 필드 값이 올바르지 않다
@@ -56,7 +65,7 @@ pub(crate) fn bad_field(record: &usize, field: &usize) -> String {
 /// 스트림이 레코드 중간에서 끝났다
 pub(crate) fn truncated(fields_seen: &usize) -> String {
     tr!(
-        "스트림이 레코드 중간에서 끝났습니다 (필드 {fields_seen}개)",
+        "데이터를 모두 읽기 전에 전송이 끝났습니다 (읽은 필드 {fields_seen}개)",
         "Stream ended in the middle of a record ({fields_seen} fields)"
     )
 }
@@ -64,7 +73,7 @@ pub(crate) fn truncated(fields_seen: &usize) -> String {
 /// 레코드 경계가 어긋났다
 pub(crate) fn desync(record: &usize) -> String {
     tr!(
-        "레코드 {record}에서 동기화가 깨졌습니다",
+        "데이터 구분 위치가 일치하지 않습니다 (레코드 {record})",
         "Lost sync at record {record}"
     )
 }

@@ -33,7 +33,7 @@ pub struct GraphRow {
     pub commit_time: i64,
     pub subject: String,
     pub lane: u16,
-    pub color: u8,
+    pub color: u16,
     pub refs: Vec<RefLabel>,
     pub is_head: bool,
     /// HEAD(현재 브랜치)에서 닿는 커밋인지. 아니면 흐리게 그린다.

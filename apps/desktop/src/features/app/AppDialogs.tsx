@@ -87,10 +87,10 @@ const EMPTY: ExternalApps = { editor: '', editorCustom: '', terminal: '', termin
 /** 자동 fetch 간격 select 의 기본 선택지 (분, 0 = 끔) */
 const AUTO_FETCH_CHOICES: readonly number[] = [0, 5, 10, 15, 30, 60];
 
-/** 언어 select 의 값을 선호로 읽는다. 모르는 값이면 system */
+/** 언어 select 의 값을 선호로 읽는다. 모르는 값이면 영어 */
 function languageOf(values: Record<string, string | boolean>): LanguagePreference {
   const v = str(values, 'language');
-  return v === 'ko' || v === 'en' ? v : 'system';
+  return v === 'ko' || v === 'system' ? v : 'en';
 }
 
 /**
@@ -198,9 +198,9 @@ function SettingsForm({
       type: 'select',
       initial: initialLanguage,
       options: [
-        { value: 'system', label: S.settings.languageSystem },
-        { value: 'ko', label: S.settings.languageKo },
         { value: 'en', label: S.settings.languageEn },
+        { value: 'ko', label: S.settings.languageKo },
+        { value: 'system', label: S.settings.languageSystem },
       ],
     },
     {

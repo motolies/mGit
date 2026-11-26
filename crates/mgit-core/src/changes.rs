@@ -123,7 +123,7 @@ fn apply_flags(opts: &DiffOptions) -> Vec<String> {
 fn refuse_non_utf8(diff: &FileDiff, path: &str) -> Result<(), CoreError> {
     if diff.non_utf8 {
         return Err(CoreError::Invalid(tr!(
-            "UTF-8 이 아닌 파일은 줄 단위로 처리할 수 없습니다. 파일 전체를 stage 하거나 되돌리세요: {path}",
+            "UTF-8이 아닌 파일은 줄 단위로 처리할 수 없습니다. 파일 전체를 스테이징하거나 되돌리세요: {path}",
             "Non-UTF-8 files cannot be processed line by line. Stage or revert the whole file: {path}"
         )));
     }
@@ -198,7 +198,7 @@ fn plan_rollback(
             .collect();
         if !staged.is_empty() {
             return Err(CoreError::Invalid(tr!(
-                "merge·rebase 같은 작업이 진행 중이라 stage 된 변경은 되돌리지 않습니다 (해결 결과 보호): {}",
+                "병합·리베이스 등이 진행 중이므로 충돌 해결 결과를 보호하기 위해 스테이징된 변경을 되돌리지 않습니다: {}",
                 "An operation such as merge or rebase is in progress, so staged changes are not rolled back (protecting resolutions): {}",
                 staged.join(", ")
             )));
@@ -842,7 +842,7 @@ impl Core {
         head.ok_or_else(|| {
             CoreError::Invalid(
                 pick(
-                    "커밋 뒤 HEAD 를 찾을 수 없습니다",
+                    "커밋 후 HEAD를 찾을 수 없습니다",
                     "Cannot find HEAD after commit",
                 )
                 .into(),

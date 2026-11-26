@@ -245,7 +245,11 @@ describe('저장소 탭의 화면 틀 (WS-15, W21)', () => {
     expect(useAppStore.getState().leftTool).toBe('commit');
     expect(useAppStore.getState().commitTab).toBe('changes');
     expect(area('project')).toBeNull();
-    expect(inArea('commit').getByText(S.commitTool.title)).toBeTruthy();
+    expect(
+      inArea('commit')
+        .getAllByText(S.commitTool.title)
+        .some((element) => element.closest('header')),
+    ).toBe(true);
     expect(inArea('commit').getByText(S.changes.title)).toBeTruthy();
     expect(inArea('commit').getByPlaceholderText(S.commit.summary)).toBeTruthy();
   });

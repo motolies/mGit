@@ -95,9 +95,9 @@ describe('우클릭 메뉴 (옛 사이드바 그대로)', () => {
     expect(shape(stashMenu(A, deps()))).toEqual([
       '내용 보기',
       '---',
-      'apply',
-      'pop (적용 후 삭제)',
-      'drop… [danger]',
+      '적용',
+      '적용 후 삭제',
+      '스태시 삭제… [danger]',
     ]);
   });
 
@@ -105,16 +105,16 @@ describe('우클릭 메뉴 (옛 사이드바 그대로)', () => {
     expect(shape(stashMenu(A, deps({ busy: true, inOp: false })))).toEqual([
       '내용 보기',
       '---',
-      'apply [off]',
-      'pop (적용 후 삭제) [off]',
-      'drop… [off] [danger]',
+      '적용 [off]',
+      '적용 후 삭제 [off]',
+      '스태시 삭제… [off] [danger]',
     ]);
     expect(shape(stashMenu(A, deps({ busy: false, inOp: true })))).toEqual([
       '내용 보기',
       '---',
-      'apply [off]',
-      'pop (적용 후 삭제) [off]',
-      'drop… [danger]',
+      '적용 [off]',
+      '적용 후 삭제 [off]',
+      '스태시 삭제… [danger]',
     ]);
   });
 
@@ -142,8 +142,8 @@ describe('우클릭 메뉴 (옛 사이드바 그대로)', () => {
       confirmLabel: S.dialog.delete,
       danger: true,
     });
-    expect(S.stash.dropTitle('stash@{1}')).toBe('stash@{1} 을(를) 지울까요?');
-    expect(S.stash.dropMessage).toBe('지운 stash 는 되돌릴 수 없습니다.');
+    expect(S.stash.dropTitle('stash@{1}')).toBe('stash@{1}을(를) 지울까요?');
+    expect(S.stash.dropMessage).toBe('지운 스태시는 되돌릴 수 없습니다.');
     expect(S.dialog.delete).toBe('삭제');
     expect(cancel.session.stashDrop).not.toHaveBeenCalled();
     expect(cancel.onDropped).not.toHaveBeenCalled();
@@ -191,10 +191,10 @@ describe('stash 저장 대화상자 (ST-01, 옛 사이드바 그대로)', () => 
       S.stash.includeUntracked,
       S.stash.stagedOnly,
     ]).toEqual([
-      'stash 저장',
+      '스태시 저장',
       '메시지 (선택)',
-      'untracked 파일 포함',
-      'stage 된 변경만 (--staged)',
+      '미추적 파일 포함',
+      '스테이징된 변경만 (--staged)',
     ]);
     expect(S.dialog.create).toBe('만들기');
     expect(d.session.stashPush).not.toHaveBeenCalled();

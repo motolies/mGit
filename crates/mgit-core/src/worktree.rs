@@ -198,7 +198,7 @@ impl Core {
         if wt.is_main {
             return Err(CoreError::Invalid(
                 pick(
-                    "메인 워크트리는 지울 수 없습니다",
+                    "메인 워크트리는 삭제할 수 없습니다",
                     "Cannot remove the main worktree",
                 )
                 .into(),
@@ -207,7 +207,7 @@ impl Core {
         if same_path(&wt.path, &s.info.work_tree) {
             return Err(CoreError::Invalid(
                 pick(
-                    "지금 열려 있는 워크트리입니다. 메인 워크트리 탭에서 지우세요",
+                    "현재 열려 있는 워크트리입니다. 메인 워크트리 탭에서 삭제하세요.",
                     "This worktree is currently open. Remove it from the main worktree tab",
                 )
                 .into(),

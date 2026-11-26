@@ -141,8 +141,8 @@ describe('서브모듈 행 메뉴 — 옛 사이드바와 같은 4개 (`submodul
     const { dialogs } = fakeDialogs({});
     expect(shape(submoduleItems(SUBMODULES[0] as SubmoduleInfo, a, dialogs, vi.fn()))).toEqual([
       '열기',
-      '추적 branch 최신으로 (update --remote)',
-      '추적 branch 지정…',
+      '추적 브랜치 최신으로 (update --remote)',
+      '추적 브랜치 지정…',
       '─',
       '제거… [danger]',
     ]);
@@ -158,8 +158,8 @@ describe('서브모듈 행 메뉴 — 옛 사이드바와 같은 4개 (`submodul
     );
     expect(shape(uninit)).toEqual([
       '열기',
-      '추적 branch 최신으로 (update --remote) [disabled]',
-      '추적 branch 지정…',
+      '추적 브랜치 최신으로 (update --remote) [disabled]',
+      '추적 브랜치 지정…',
       '─',
       '제거… [danger]',
     ]);
@@ -192,9 +192,9 @@ describe('서브모듈 행 메뉴 — 옛 사이드바와 같은 4개 (`submodul
     const d = fakeDialogs({ prompt: { branch: 'release/2.0' } });
     await select(submoduleItems(target, a, d.dialogs, vi.fn()), S.submodule.setBranch);
     expect(d.prompt).toHaveBeenCalledWith({
-      title: 'vendor/payment-sdk 추적 branch',
-      message: '비우면 추적 branch 를 해제합니다 (기본 HEAD)',
-      fields: [{ key: 'branch', label: 'branch' }],
+      title: S.submodule.setBranchTitle('vendor/payment-sdk'),
+      message: S.submodule.setBranchHint,
+      fields: [{ key: 'branch', label: S.submodule.branch }],
       confirmLabel: S.dialog.apply,
     });
     expect(a.submoduleSetBranch).toHaveBeenCalledWith('vendor/payment-sdk', 'release/2.0');
@@ -212,9 +212,8 @@ describe('서브모듈 행 메뉴 — 옛 사이드바와 같은 4개 (`submodul
     const cancel = fakeDialogs({ confirm: false });
     await select(submoduleItems(target, a, cancel.dialogs, vi.fn()), S.submodule.remove);
     expect(cancel.confirm).toHaveBeenCalledWith({
-      title: '서브모듈 vendor/payment-sdk 를 제거할까요?',
-      message:
-        'deinit → rm → .git/modules 삭제 순서로 지웁니다. 제거는 stage 되며 commit 은 직접 합니다.',
+      title: S.submodule.removeTitle('vendor/payment-sdk'),
+      message: S.submodule.removeMessage,
       confirmLabel: '제거',
       danger: true,
     });
@@ -237,7 +236,7 @@ describe('서브모듈 머리 동작 (`promptSubmoduleAdd`·`promptSubmoduleBatc
       fields: [
         { key: 'url', label: 'URL', required: true },
         { key: 'path', label: '경로', required: true },
-        { key: 'branch', label: 'branch' },
+        { key: 'branch', label: S.submodule.branch },
       ],
       confirmLabel: S.dialog.create,
     });
@@ -264,7 +263,7 @@ describe('서브모듈 머리 동작 (`promptSubmoduleAdd`·`promptSubmoduleBatc
             { value: 'push', label: 'push' },
           ],
         },
-        { key: 'prune', label: 'fetch 때 --prune', type: 'checkbox', initial: true },
+        { key: 'prune', label: S.submodule.batchPrune, type: 'checkbox', initial: true },
       ],
       confirmLabel: S.dnd.run,
     });
@@ -365,10 +364,10 @@ describe('행 장식 (`repo-structure.ts`)', () => {
       bold: true,
       // 상태가 앞이다: 좁은 창에서 행 끝이 잘리면 늘 같은 "서브모듈" 이 먼저 잘린다
       badges: [
-        { tone: 'state', text: 'commit 다름' },
+        { tone: 'state', text: '커밋 다름' },
         { tone: 'kind', text: S.folder.kind.submodule },
       ],
-      title: 'vendor/payment-sdk (v1.8.0-4-g1a2b3c4)\ncommit 다름',
+      title: 'vendor/payment-sdk (v1.8.0-4-g1a2b3c4)\n커밋 다름',
     });
     expect(decos.get('vendor/analytics')?.badges?.[0]).toEqual({
       tone: 'state',
@@ -532,8 +531,8 @@ describe('행 메뉴 (`repoTreeMenu`, W25): 옛 사이드바의 항목이 디렉
     const items = repoTreeMenu(input(dirRow('vendor/payment-sdk')), act);
     expect(shape(items)).toEqual([
       '열기',
-      '추적 branch 최신으로 (update --remote)',
-      '추적 branch 지정…',
+      '추적 브랜치 최신으로 (update --remote)',
+      '추적 브랜치 지정…',
       '─',
       '제거… [danger]',
       '─',
@@ -575,8 +574,8 @@ describe('행 메뉴 (`repoTreeMenu`, W25): 옛 사이드바의 항목이 디렉
     const { act } = actions();
     expect(shape(repoTreeMenu(input(dirRow('vendor/design-system')), act))).toEqual([
       '열기',
-      '추적 branch 최신으로 (update --remote)',
-      '추적 branch 지정…',
+      '추적 브랜치 최신으로 (update --remote)',
+      '추적 브랜치 지정…',
       '─',
       '제거… [danger]',
       '─',
@@ -705,7 +704,7 @@ describe('머리 메뉴 (`structure-menu.ts`) — 접힌 곳에 있어도 닿게
       S.submodule.updateRecursive,
       '─',
       'vendor/design-system',
-      'vendor/payment-sdk · commit 다름',
+      'vendor/payment-sdk · 커밋 다름',
       'vendor/analytics · 변경 있음',
       'vendor/legacy-theme · 미초기화',
       'libs/shared-proto · 충돌',

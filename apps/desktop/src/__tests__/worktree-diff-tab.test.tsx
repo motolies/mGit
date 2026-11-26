@@ -255,7 +255,7 @@ describe('작업 트리 diff 탭 (ED-05, 저장소당 하나)', () => {
     act(() => fireEvent.click(editor().getByText(S.diff.discardHunk)));
     await tick();
     const dialog = document.querySelector<HTMLDialogElement>('dialog[open]') as HTMLDialogElement;
-    expect(dialog.textContent).toContain('Index');
+    expect(dialog.textContent).toContain('스테이징 영역');
     expect(dialog.textContent).toContain('작업 파일');
     const store = getSessionStore(session(WEB));
     await act(async () => {

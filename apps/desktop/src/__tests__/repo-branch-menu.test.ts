@@ -238,23 +238,23 @@ const offLabels = (items: readonly MenuItem[]) =>
 describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·하위 메뉴·꺼짐 — 손대기 전 화면에서 모은 그대로)', () => {
   const menu = (target: RepoBranchTarget, state: Partial<RepoBranchMenuState> = {}) =>
     shape(repoBranchMenu(target, setup(state).deps));
-  const MERGE_SUB = '▸ {merge, merge (--no-ff), merge (--ff-only), merge (--squash)}';
+  const MERGE_SUB = `▸ {merge, ${S.menu.mergeIntoNoFf}, ${S.menu.mergeIntoFfOnly}, ${S.menu.mergeIntoSquash}}`;
 
   it('로컬 (현재가 아닌 branch, 업스트림 있음) — 13개 (옛 12개 + checkout 다음의 업데이트, BR-09)', () => {
     const items = repoBranchMenu(T.development, setup().deps);
     expect(items).toHaveLength(15);
     expect(shape(items)).toEqual([
-      'checkout',
-      'upstream과 비교',
+      '브랜치 전환',
+      '업스트림과 비교',
       '업데이트',
-      '이 branch 만 그래프에 표시',
+      '이 브랜치만 그래프에 표시',
       '현재 로컬 내용과 비교',
-      '현재 branch 와 development 비교…',
-      `development 을(를) 현재 branch 에 merge${MERGE_SUB}`,
-      'development merge 미리보기…',
-      'development 위로 rebase 예측…',
+      '현재 브랜치와 development 비교…',
+      `${S.menu.mergeInto('development')}${MERGE_SUB}`,
+      'development 병합 미리보기…',
+      'development 위로 리베이스 예측…',
       'development 격리 병합…',
-      '현재 branch 를 development 위로 rebase',
+      '현재 브랜치를 development 위로 리베이스',
       '---',
       '이름 변경…',
       '업스트림 해제',
@@ -266,18 +266,18 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
 
   it('로컬 (현재 branch main) — checkout·비교·merge·미리보기·격리 병합·rebase·삭제가 꺼진다', () => {
     expect(menu(T.main)).toEqual([
-      'checkout [off]',
+      '브랜치 전환 [off]',
       // 현재 branch 도 업데이트할 수 있다 (작업 트리까지 fast-forward)
-      'upstream과 비교',
+      '업스트림과 비교',
       '업데이트',
-      '이 branch 만 그래프에 표시',
+      '이 브랜치만 그래프에 표시',
       '현재 로컬 내용과 비교',
-      '현재 branch 와 main 비교… [off]',
-      'main 을(를) 현재 branch 에 merge▸ [off]',
-      'main merge 미리보기… [off]',
-      'main 위로 rebase 예측… [off]',
+      '현재 브랜치와 main 비교… [off]',
+      `${S.menu.mergeInto('main')}▸ [off]`,
+      'main 병합 미리보기… [off]',
+      'main 위로 리베이스 예측… [off]',
       'main 격리 병합… [off]',
-      '현재 branch 를 main 위로 rebase [off]',
+      '현재 브랜치를 main 위로 리베이스 [off]',
       '---',
       '이름 변경…',
       '업스트림 해제',
@@ -301,9 +301,9 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     const items = repoBranchMenu(T.origin, setup().deps);
     expect(items).toHaveLength(4);
     expect(shape(items)).toEqual([
-      'origin 만 fetch',
-      'origin 로 push',
-      'origin 로 push 하고 업스트림 지정',
+      S.remote.fetchOnly('origin'),
+      'origin로 푸시',
+      'origin로 푸시하고 업스트림 지정',
       '---',
       '이름 복사',
     ]);
@@ -313,14 +313,14 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     const items = repoBranchMenu(T.originMain, setup().deps);
     expect(items).toHaveLength(8);
     expect(shape(items)).toEqual([
-      'checkout',
-      '이 branch 만 그래프에 표시',
+      '브랜치 전환',
+      '이 브랜치만 그래프에 표시',
       '현재 로컬 내용과 비교',
-      '현재 branch 와 origin/main 비교…',
-      'origin/main 을(를) 현재 branch 에 merge',
-      '현재 branch 를 origin/main 위로 rebase',
+      '현재 브랜치와 origin/main 비교…',
+      'origin/main → 현재 브랜치 병합',
+      '현재 브랜치를 origin/main 위로 리베이스',
       '---',
-      '원격에서 삭제… [danger]',
+      `${S.menu.deleteRemote} [danger]`,
       '---',
       '이름 복사',
     ]);
@@ -330,7 +330,7 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
     const items = repoBranchMenu(T.tag, setup().deps);
     expect(items).toHaveLength(4);
     expect(shape(items)).toEqual([
-      '이 commit 으로 checkout (detached)',
+      '이 커밋으로 전환 (분리된 HEAD)',
       '---',
       S.remote.pushTo('origin'),
       '삭제… [danger]',
@@ -341,7 +341,7 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
 
   it('태그 push: 원격이 없으면 꺼진 항목, 둘 이상이면 원격 이름 하위 메뉴', () => {
     expect(menu(T.tag, { remotes: [] })).toEqual([
-      '이 commit 으로 checkout (detached)',
+      '이 커밋으로 전환 (분리된 HEAD)',
       '---',
       `${S.tag.pushNoRemote} [off]`,
       '삭제… [danger]',
@@ -382,13 +382,13 @@ describe('옛 사이드바 메뉴와 같은 항목 (라벨·순서·구분선·�
   it('백업 — 3개: 현재 branch 의 백업도 다른 branch 의 백업도 항목은 같다', () => {
     expect(repoBranchMenu(T.backupMain, setup().deps)).toHaveLength(3);
     expect(menu(T.backupMain)).toEqual([
-      '새 branch 로 복원…',
+      '새 브랜치로 복원…',
       'main 를 이 시점으로 되돌리기',
       '---',
       '백업 삭제 [danger]',
     ]);
     expect(menu(T.backupStaging)).toEqual([
-      '새 branch 로 복원…',
+      '새 브랜치로 복원…',
       'staging 를 이 시점으로 되돌리기',
       '---',
       '백업 삭제 [danger]',

@@ -1,5 +1,5 @@
 import type { CommandLogRecord } from '@mgit/ipc';
-import { formatTime, isPrimaryModifier, S } from '@mgit/ui';
+import { formatTime, isPrimaryModifier, repositoryColor, S } from '@mgit/ui';
 import { type CSSProperties, type KeyboardEvent, memo, useEffect, useMemo, useState } from 'react';
 import { hasModifier, rovingIndex } from '../../components/roving';
 import {
@@ -32,7 +32,7 @@ function RepoSwatch({ color }: { color: number | null }) {
   return color === null ? null : (
     <span
       className={styles.swatch}
-      style={{ '--repo-color': `var(--graph-lane-${color})` } as CSSProperties}
+      style={{ '--repo-color': repositoryColor(color) } as CSSProperties}
     />
   );
 }

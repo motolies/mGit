@@ -9,7 +9,7 @@ use crate::messages;
 pub enum GitError {
     #[error(
         "{}",
-        pick("git 실행 파일을 찾을 수 없습니다", "Cannot find the git executable")
+        pick("Git 실행 파일을 찾을 수 없습니다", "Cannot find the git executable")
     )]
     NotFound,
     #[error("{}", messages::git_too_old(.found, .required))]

@@ -282,7 +282,7 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(messages::not_hosted_project().into()))?;
         let account_id = project.account_id.clone().ok_or_else(|| {
             CoreError::Invalid(tr!(
-                "{} 에 연결된 계정이 없습니다. 호스팅 계정을 추가하세요",
+                "{}에 연결된 계정이 없습니다. 호스팅 계정을 추가하세요.",
                 "No account is connected to {}. Add a hosting account",
                 project.host
             ))
@@ -315,13 +315,13 @@ impl Core {
     ) -> Result<PullRequest, CoreError> {
         if spec.title.trim().is_empty() {
             return Err(CoreError::Invalid(
-                pick("제목을 입력하세요", "Enter a title").into(),
+                pick("제목을 입력하세요.", "Enter a title").into(),
             ));
         }
         if spec.head.trim().is_empty() || spec.base.trim().is_empty() {
             return Err(CoreError::Invalid(
                 pick(
-                    "head·base 브랜치를 지정하세요",
+                    "소스(head) 브랜치와 대상(base) 브랜치를 지정하세요.",
                     "Specify the head and base branches",
                 )
                 .into(),
@@ -378,7 +378,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         if remote.starts_with('-') || refspec.starts_with('-') || branch.starts_with('-') {
             return Err(CoreError::Invalid(
-                pick("잘못된 인자", "Invalid argument").into(),
+                pick("올바르지 않은 인자입니다", "Invalid argument").into(),
             ));
         }
         let op = self.begin_operation(session, "fetch", &format!("fetch {remote} {refspec}"))?;
@@ -418,7 +418,7 @@ impl Core {
         .await?;
         let new = new.ok_or_else(|| {
             CoreError::Invalid(tr!(
-                "받은 ref 가 없습니다: {refspec}",
+                "가져온 참조를 찾을 수 없습니다: {refspec}",
                 "Fetched ref not found: {refspec}"
             ))
         })?;
@@ -447,8 +447,8 @@ impl Core {
                     .await?
                 {
                     return Err(CoreError::Invalid(tr!(
-                        "로컬 브랜치 {branch} 에 받은 커밋에 없는 내용이 있어 덮어쓰지 않았습니다. \
-                         브랜치 이름을 바꾸거나 지운 뒤 다시 시도하세요",
+                        "로컬 브랜치 {branch}에 가져온 이력에 없는 커밋이 있어 덮어쓰지 않았습니다. \
+                         브랜치 이름을 변경하거나 삭제한 뒤 다시 시도하세요.",
                         "Local branch {branch} has commits that are not in the fetched commits, so it was not overwritten. \
                          Rename or delete the branch and try again"
                     )));

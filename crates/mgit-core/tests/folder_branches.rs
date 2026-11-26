@@ -111,7 +111,7 @@ async fn branches_merge_repos_with_tracking_state_without_timeline() {
     );
 
     // 저장소: 워크트리는 원 저장소에 흡수된다. 색은 순번
-    let repos: Vec<(&str, u8)> = list
+    let repos: Vec<(&str, u16)> = list
         .repos
         .iter()
         .map(|r| (r.name.as_str(), r.color))
@@ -285,7 +285,7 @@ async fn wait_timeline(rx: &mut tokio::sync::mpsc::UnboundedReceiver<CoreEvent>,
 }
 
 /// 저장소 경로 → 색을 요약·브랜치 목록·타임라인 정보·레인 색에서 각각 읽어 서로 같은지 확인하고 돌려준다
-async fn agreed_colors(core: &Core, fid: SessionId) -> Vec<(String, u8)> {
+async fn agreed_colors(core: &Core, fid: SessionId) -> Vec<(String, u16)> {
     let summaries = core.folder_summaries(fid, &[]).await.unwrap();
     let branches = core.folder_branches(fid, &[]).await.unwrap();
     let info = core.folder_timeline_info(fid).unwrap();

@@ -645,7 +645,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
       expect(root.textContent).toContain('web');
       expect(root.textContent).toContain(S.detail.fileCount(3));
       expect(within(root).getByTestId('repo-swatch').style.getPropertyValue('--repo-color')).toBe(
-        'var(--graph-lane-1)',
+        'var(--repo-color-1, var(--graph-lane-1))',
       );
       expect(detailArea()?.textContent).toContain(`${OID.slice(0, 8)} 의 제목`);
       expect(detailArea()?.textContent).toContain('<jamie@acme.dev>');

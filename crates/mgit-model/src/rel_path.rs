@@ -15,7 +15,7 @@ pub const REL_PATH_COMPONENT_MAX_BYTES: usize = 255;
 /// 상대 경로를 거부한 이유
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RelPathError {
-    #[error("{}", pick("빈 경로", "Empty path"))]
+    #[error("{}", pick("경로가 비어 있습니다", "Empty path"))]
     Empty,
     #[error(
         "{}",
@@ -26,26 +26,32 @@ pub enum RelPathError {
     TooLong,
     #[error(
         "{}",
-        pick("절대 경로는 쓸 수 없습니다", "Absolute paths are not allowed")
+        pick("절대 경로는 사용할 수 없습니다", "Absolute paths are not allowed")
     )]
     Absolute,
-    #[error("{}", pick("빈 구성요소가 있습니다", "Path has an empty component"))]
+    #[error(
+        "{}",
+        pick("경로에 비어 있는 부분이 있습니다", "Path has an empty component")
+    )]
     EmptyComponent,
-    #[error("{}", pick("구성요소가 너무 깁니다", "Path component is too long"))]
+    #[error("{}", pick("경로의 일부가 너무 깁니다", "Path component is too long"))]
     ComponentTooLong,
     #[error(
         "{}",
-        pick("`.` 구성요소는 쓸 수 없습니다", "`.` components are not allowed")
+        pick("경로에 `.`을 사용할 수 없습니다", "`.` components are not allowed")
     )]
     CurrentDir,
     #[error(
         "{}",
-        pick("`..` 구성요소는 쓸 수 없습니다", "`..` components are not allowed")
+        pick("경로에 `..`을 사용할 수 없습니다", "`..` components are not allowed")
     )]
     ParentDir,
     #[error(
         "{}",
-        pick("`.git` 안은 다루지 않습니다", "Paths inside `.git` are not allowed")
+        pick(
+            "`.git` 내부에는 접근할 수 없습니다",
+            "Paths inside `.git` are not allowed"
+        )
     )]
     DotGit,
 }

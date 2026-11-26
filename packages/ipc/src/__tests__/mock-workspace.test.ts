@@ -1150,10 +1150,10 @@ describe('크기 조절값 (W18 ② 화면 측정)', () => {
       logs: 50_002,
       authors: 1_000,
     });
-    // 더한 저장소도 타임라인·브랜치 목록에 들고 색은 순번 % 10 이다
+    // 더한 저장소도 타임라인·브랜치 목록에 들고 색 슬롯은 순번을 그대로 유지한다
     const info = await client.folderTimelineInfo(session);
     expect(info.repos).toHaveLength(19);
-    expect(info.repos.map((r) => r.color)).toEqual(info.repos.map((r) => r.index % 10));
+    expect(info.repos.map((r) => r.color)).toEqual(info.repos.map((r) => r.index));
     // 더한 원격 브랜치는 타임라인 행의 라벨에도 붙는다
     const window = await client.folderTimelineWindow(session, 0, 20_000);
     const labels = new Set(window.rows.flatMap((r) => r.refs.map((l) => l.shortName)));

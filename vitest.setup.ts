@@ -1,3 +1,8 @@
+import { setStringsLocale } from './packages/ui/src/strings';
+
+// 기존 화면 회귀 픽스처는 한국어를 명시하며 제품의 초기 언어와 분리한다.
+setStringsLocale('ko');
+
 // jsdom 에 없는 브라우저 API를 스텁한다 (ResizeObserver, matchMedia)
 
 class ResizeObserverStub {

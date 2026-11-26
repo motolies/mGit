@@ -103,7 +103,7 @@ describe('repoDecorations (PT-02)', () => {
       { tone: 'op', text: S.status.op.merge },
     ]);
     expect(decoOf(decos, 'rebasing')).toMatchObject({
-      badges: [{ tone: 'op', text: 'REBASING' }],
+      badges: [{ tone: 'op', text: S.project.rebasing }],
       changed: 3,
     });
   });
@@ -162,7 +162,7 @@ describe('branchText·syncTexts (상태 바와 공유)', () => {
 
 describe('opBadgeText', () => {
   it('진행 중 작업 종류를 라벨로 바꾸고 없으면 빈 문자열이다', () => {
-    expect(opBadgeText('rebase')).toBe('REBASING');
+    expect(opBadgeText('rebase')).toBe('리베이스 중');
     expect(opBadgeText('merge')).toBe(S.status.op.merge);
     expect(opBadgeText('cherryPick')).toBe(S.status.op.cherryPick);
     expect(opBadgeText('revert')).toBe(S.status.op.revert);

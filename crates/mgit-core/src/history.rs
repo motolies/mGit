@@ -70,7 +70,7 @@ pub(crate) fn check_query(query: &GraphQuery) -> Result<(), CoreError> {
             if names.is_empty() {
                 return Err(CoreError::Invalid(
                     pick(
-                        "표시할 ref 를 하나 이상 고르세요",
+                        "표시할 브랜치 또는 태그를 하나 이상 선택하세요.",
                         "Choose at least one ref to show",
                     )
                     .into(),
@@ -400,7 +400,7 @@ impl Core {
             .await
             .is_none()
         {
-            return Err(CoreError::Invalid(pick("diff.tool 이 설정돼 있지 않습니다. `git config --global diff.tool <이름>` 으로 지정하세요", "diff.tool is not set. Set it with `git config --global diff.tool <name>`").into()));
+            return Err(CoreError::Invalid(pick("외부 비교 도구가 설정되지 않았습니다. `git config --global diff.tool <이름>`으로 지정하세요.", "diff.tool is not set. Set it with `git config --global diff.tool <name>`").into()));
         }
         let mut args: Vec<String> = vec!["difftool".into(), "-y".into()];
         match target {

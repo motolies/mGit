@@ -85,7 +85,7 @@ pub enum HostingError {
     #[error(
         "{}",
         pick(
-            "인증 실패 (토큰이 틀리거나 만료됨)",
+            "인증에 실패했습니다. 토큰이 올바르지 않거나 만료되었습니다.",
             "Authentication failed (token is wrong or expired)"
         )
     )]
@@ -102,12 +102,12 @@ pub enum HostingError {
     Parse(String),
     #[error(
         "{}",
-        pick("디바이스 인증이 거부됐습니다", "Device authorization was denied")
+        pick("디바이스 인증이 거부되었습니다", "Device authorization was denied")
     )]
     DeviceDenied,
     #[error(
         "{}",
-        pick("디바이스 인증 시간이 지났습니다", "Device authorization expired")
+        pick("디바이스 인증 시간이 만료되었습니다", "Device authorization expired")
     )]
     DeviceExpired,
     #[error("{0}")]

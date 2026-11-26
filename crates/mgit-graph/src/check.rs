@@ -346,7 +346,7 @@ fn check_ref_colors<K: Copy + Eq + Hash + Debug>(
     }
     for (r, (k, _)) in stream.iter().enumerate() {
         if let Some(&c) = colors.get(k)
-            && layout.rows()[r].color != c
+            && layout.rows()[r].color != u16::from(c)
         {
             return Err(format!(
                 "I13: 행 {r} 색 {} != ref 색 {c}",

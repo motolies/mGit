@@ -573,7 +573,7 @@ export function FileEditor({
             aria-label={S.fileEditor.history}
           >
             <Button onClick={repoTools.onHistory}>{S.fileEditor.history}</Button>
-            <Button onClick={repoTools.onBlame}>Blame</Button>
+            <Button onClick={repoTools.onBlame}>{S.fileView.blame}</Button>
           </div>
         ) : null}
       </header>

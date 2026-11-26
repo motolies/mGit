@@ -22,7 +22,7 @@ pub enum IpcError {
     MultiRepoFolder { path: String, repos: Vec<String> },
     #[error(
         "{}",
-        pick("git 실행 파일을 찾을 수 없습니다", "Cannot find the git executable")
+        pick("Git 실행 파일을 찾을 수 없습니다", "Cannot find the git executable")
     )]
     GitNotFound,
     #[error("{}", messages::git_too_old(.found, .required))]
@@ -43,7 +43,13 @@ pub enum IpcError {
     #[error("{}", pick("충돌 마커가 남아 있습니다", "Conflict markers remain"))]
     ConflictMarkers { files: Vec<String> },
     /// `.git` 을 품은 미등록 하위 저장소 (SUB-11)
-    #[error("{}", pick("미등록 하위 저장소", "Unregistered nested repositories"))]
+    #[error(
+        "{}",
+        pick(
+            "서브모듈로 등록되지 않은 하위 저장소입니다",
+            "Unregistered nested repositories"
+        )
+    )]
     NestedRepos { paths: Vec<String> },
     /// 원격 브랜치 체크아웃: 같은 이름의 로컬 브랜치가 다른 곳을 추적한다 (BR-02).
     /// `upstream` 은 그 로컬 브랜치의 현재 업스트림 full ref, 없으면 null
@@ -150,7 +156,7 @@ impl From<CoreError> for IpcError {
                 message: e.to_string(),
             },
             CoreError::BadRange => IpcError::Internal {
-                message: pick("잘못된 범위", "Invalid range").to_string(),
+                message: pick("올바르지 않은 범위입니다", "Invalid range").to_string(),
             },
             other => IpcError::Internal {
                 message: redact_text(&other.to_string()),

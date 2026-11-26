@@ -9,7 +9,7 @@
 import type { GraphViewProps } from '@mgit/graph-view';
 import { createMockClient, GraphRangeCache, type SessionId } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { getFolderStore, useAppStore } from '../store';
@@ -417,6 +417,10 @@ describe('로그 메시지 수정 명령', () => {
     focusGrid();
     await key('Home');
     const oid = store.getState().selectedCommit as string;
+    // 실제 디바운스 조회가 끝난 뒤 시나리오를 주입해 늦은 응답이 덮어쓰지 않도록 한다.
+    await waitFor(() =>
+      expect(store.getState().containing).toMatchObject({ of: oid, state: 'ready' }),
+    );
     act(() =>
       store.setState({
         containing: {

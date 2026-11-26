@@ -150,37 +150,37 @@ impl BatchOp {
             BatchOp::DeleteLocalBranches { .. } => {
                 pick("로컬 브랜치 강제 삭제", "Force delete local branches").into()
             }
-            BatchOp::Fetch { .. } => pick("일괄 fetch", "Batch fetch").into(),
-            BatchOp::Pull => pick("일괄 pull", "Batch pull").into(),
-            BatchOp::Push => pick("일괄 push", "Batch push").into(),
+            BatchOp::Fetch { .. } => pick("원격 정보 일괄 가져오기", "Batch fetch").into(),
+            BatchOp::Pull => pick("원격 변경 일괄 가져오기", "Batch pull").into(),
+            BatchOp::Push => pick("일괄 푸시", "Batch push").into(),
             BatchOp::CreateBranch {
                 name,
                 start_point: Some(start),
                 ..
             } => tr!(
-                "일괄 branch 만들기: {name} ({} 에서)",
+                "브랜치 일괄 생성: {name} (기준: {})",
                 "Batch create branch: {name} (from {})",
                 short_ref(start)
             ),
             BatchOp::CreateBranch { name, .. } => {
-                tr!("일괄 branch 만들기: {name}", "Batch create branch: {name}")
+                tr!("브랜치 일괄 생성: {name}", "Batch create branch: {name}")
             }
-            BatchOp::Checkout { name } => tr!("일괄 checkout: {name}", "Batch checkout: {name}"),
+            BatchOp::Checkout { name } => tr!("브랜치 일괄 전환: {name}", "Batch checkout: {name}"),
             BatchOp::CheckoutRemote { remote, branch } => {
                 tr!(
-                    "일괄 checkout: {remote}/{branch}",
+                    "브랜치 일괄 전환: {remote}/{branch}",
                     "Batch checkout: {remote}/{branch}"
                 )
             }
             BatchOp::Worktree { branch, .. } => {
-                tr!("일괄 워크트리: {branch}", "Batch worktree: {branch}")
+                tr!("워크트리 일괄 생성: {branch}", "Batch worktree: {branch}")
             }
             BatchOp::UpdateBranch { name } => {
                 tr!("일괄 업데이트: {name}", "Batch update: {name}")
             }
             BatchOp::RenameBranch { from, to } => {
                 tr!(
-                    "일괄 이름 바꾸기: {from} → {to}",
+                    "브랜치 이름 일괄 변경: {from} → {to}",
                     "Batch rename: {from} → {to}"
                 )
             }
@@ -214,7 +214,7 @@ impl BatchOp {
                 if from == to {
                     return Err(CoreError::Invalid(
                         pick(
-                            "새 이름이 지금 이름과 같습니다",
+                            "새 이름이 현재 이름과 같습니다",
                             "The new name is the same as the current name",
                         )
                         .into(),
@@ -232,7 +232,7 @@ impl BatchOp {
                 check_ref_name(branch)?;
                 if dest_root.as_os_str().is_empty() {
                     return Err(CoreError::Invalid(
-                        pick("워크트리 폴더를 지정하세요", "Choose a worktree folder").into(),
+                        pick("워크트리 폴더를 지정하세요.", "Choose a worktree folder").into(),
                     ));
                 }
                 Ok(())
@@ -255,27 +255,27 @@ pub(crate) mod reason {
 
     /// 진행 중인 작업(merge·rebase 등)이나 해결하지 않은 충돌이 있다
     pub(crate) fn in_progress() -> &'static str {
-        pick("진행 중인 작업이 있음", "Operation in progress")
+        pick("진행 중인 작업이 있습니다", "Operation in progress")
     }
 
     /// 커밋하지 않은 변경이 있다
     pub(crate) fn dirty() -> &'static str {
-        pick("커밋하지 않은 변경이 있음", "Uncommitted changes")
+        pick("커밋하지 않은 변경이 있습니다", "Uncommitted changes")
     }
 
     /// 업스트림이 없다
     pub(crate) fn no_upstream() -> &'static str {
-        pick("업스트림 없음", "No upstream")
+        pick("업스트림이 없습니다", "No upstream")
     }
 
     /// 이미 그 브랜치에 있다
     pub(super) fn already_on_branch() -> &'static str {
-        pick("이미 그 branch", "Already on that branch")
+        pick("이미 해당 브랜치입니다", "Already on that branch")
     }
 
     /// 그 이름의 로컬 branch 가 없다 (branch 업데이트·이름 바꾸기)
     pub(crate) fn no_branch() -> &'static str {
-        pick("branch 없음", "No such branch")
+        pick("해당 브랜치가 없습니다", "No such branch")
     }
 }
 
@@ -584,7 +584,7 @@ async fn run_batch_one(
                 return r;
             }
             if status.branch.ahead == 0 {
-                r.skip(pick("보낼 commit 없음", "No commits to push"));
+                r.skip(pick("푸시할 커밋이 없습니다", "No commits to push"));
                 return r;
             }
             (strs(&["push"]), true)
@@ -602,7 +602,7 @@ async fn run_batch_one(
                 && !rev_resolves(runner, &d.work_tree, start).await
             {
                 r.skip(&tr!(
-                    "시작점이 없음: {}",
+                    "시작점을 찾을 수 없습니다: {}",
                     "Start point not found: {}",
                     short_ref(start)
                 ));
@@ -659,7 +659,7 @@ async fn run_batch_one(
                 };
             if !upstreams.contains_key(&tracking) {
                 r.skip(&tr!(
-                    "원격 branch 가 없음: {remote}/{branch}",
+                    "원격 브랜치가 없습니다: {remote}/{branch}",
                     "Remote branch not found: {remote}/{branch}"
                 ));
                 return r;
@@ -678,7 +678,7 @@ async fn run_batch_one(
                 // `LocalBranchTracksOther` 와 같은 상황. 일괄에서는 묻지 않고 건너뛴다)
                 Some(Some(upstream)) => {
                     r.skip(&tr!(
-                        "로컬 {branch} 이(가) {} 을(를) 추적 중",
+                        "로컬 브랜치 {branch}은(는) {}을(를) 추적 중입니다",
                         "Local {branch} tracks {}",
                         short_ref(upstream)
                     ));
@@ -686,7 +686,7 @@ async fn run_batch_one(
                 }
                 Some(None) => {
                     r.skip(&tr!(
-                        "로컬 {branch} 이(가) {remote}/{branch} 을(를) 추적하지 않음",
+                        "로컬 브랜치 {branch}은(는) {remote}/{branch}을(를) 추적하지 않습니다",
                         "Local {branch} does not track {remote}/{branch}"
                     ));
                     return r;
@@ -713,7 +713,7 @@ async fn run_batch_one(
         } => {
             let dest = dest_root.join(&name);
             if dest.exists() {
-                r.skip(pick("경로가 이미 있음", "Path already exists"));
+                r.skip(pick("경로가 이미 존재합니다", "Path already exists"));
                 return r;
             }
             let dest_s = dest.to_string_lossy().into_owned();
@@ -810,7 +810,7 @@ async fn rename_args(
     }
     if found.contains_key(&new) {
         return Err(RenameSkip::Skip(tr!(
-            "새 이름이 이미 있음: {to}",
+            "이미 사용 중인 이름입니다: {to}",
             "New name already exists: {to}"
         )));
     }
@@ -1142,7 +1142,7 @@ impl Core {
     ) -> Result<BatchResult, CoreError> {
         if message.trim().is_empty() {
             return Err(CoreError::Invalid(
-                pick("커밋 메시지를 입력하세요", "Enter a commit message").into(),
+                pick("커밋 메시지를 입력하세요.", "Enter a commit message").into(),
             ));
         }
         let inner = self.inner_arc();
@@ -1200,7 +1200,7 @@ impl Core {
             };
             if !staged {
                 r.ok = true;
-                r.skipped = Some(pick("stage 된 변경 없음", "No staged changes").into());
+                r.skipped = Some(pick("스테이징된 변경이 없습니다", "No staged changes").into());
                 results.push(r);
                 continue;
             }
@@ -1232,7 +1232,7 @@ impl Core {
         let succeeded = results.len() as u32 - skipped - failed;
         notify_changed(&folder, &results);
         Ok(BatchResult {
-            label: pick("일괄 commit", "Batch commit").into(),
+            label: pick("일괄 커밋", "Batch commit").into(),
             results,
             succeeded,
             skipped,

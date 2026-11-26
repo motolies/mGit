@@ -52,7 +52,7 @@ export function applyLanguage(locale: Locale): void {
   document.documentElement.lang = locale;
 }
 
-/** 저장된 선호를 읽는다. 저장소 접근이 막혀 있거나 값이 이상하면 system */
+/** 저장된 선호를 읽는다. 저장소 접근이 막혀 있거나 값이 이상하면 영어 */
 export function loadLanguagePreference(): LanguagePreference {
   try {
     const raw = settingsStorage.getItem(LANGUAGE_STORAGE_KEY);
@@ -62,7 +62,7 @@ export function loadLanguagePreference(): LanguagePreference {
   } catch {
     // private 모드 등에서는 localStorage 가 throw 할 수 있다
   }
-  return 'system';
+  return 'en';
 }
 
 /** 선호를 저장한다. 실패해도 이번 실행의 언어는 바뀌므로 무시한다 */

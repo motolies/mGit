@@ -71,7 +71,7 @@ async fn batch_fetch_pull_push_branch_checkout_and_exclude() {
     let ra = r.results.iter().find(|x| x.name == "a").unwrap();
     let rb = r.results.iter().find(|x| x.name == "b").unwrap();
     assert!(ra.ok && ra.skipped.is_none(), "{ra:?}");
-    assert_eq!(rb.skipped.as_deref(), Some("업스트림 없음"));
+    assert_eq!(rb.skipped.as_deref(), Some("업스트림이 없습니다"));
     assert_eq!(r.succeeded, 1);
     assert_eq!(r.skipped, 1);
 
@@ -88,7 +88,7 @@ async fn batch_fetch_pull_push_branch_checkout_and_exclude() {
             .unwrap()
             .skipped
             .as_deref(),
-        Some("보낼 commit 없음")
+        Some("푸시할 커밋이 없습니다")
     );
 
     // branch 만들기 + checkout, 대상 지정
@@ -129,7 +129,7 @@ async fn batch_fetch_pull_push_branch_checkout_and_exclude() {
             .unwrap()
             .skipped
             .as_deref(),
-        Some("커밋하지 않은 변경이 있음")
+        Some("커밋하지 않은 변경이 있습니다")
     );
 
     // 폴더 설정: b 제외, concurrency 1
@@ -452,7 +452,10 @@ async fn batch_create_branch_from_start_point() {
     assert_eq!(a.git_ok(["rev-parse", "topic"]).trim(), base.to_hex());
     assert_eq!(a.git_ok(["branch", "--show-current"]).trim(), "main");
     let rb = r.results.iter().find(|x| x.name == "b").unwrap();
-    assert_eq!(rb.skipped.as_deref(), Some("시작점이 없음: base"));
+    assert_eq!(
+        rb.skipped.as_deref(),
+        Some("시작점을 찾을 수 없습니다: base")
+    );
     assert!(
         b.git(["rev-parse", "--verify", "-q", "topic"])
             .stdout
@@ -506,7 +509,10 @@ async fn batch_create_branch_from_start_point() {
             .unwrap();
         assert_eq!((r.succeeded, r.skipped, r.failed), (1, 1, 0), "{r:?}");
         let rb = r.results.iter().find(|x| x.name == "b").unwrap();
-        assert_eq!(rb.skipped.as_deref(), Some("시작점이 없음: origin/main"));
+        assert_eq!(
+            rb.skipped.as_deref(),
+            Some("시작점을 찾을 수 없습니다: origin/main")
+        );
         assert_eq!(a.git_ok(["rev-parse", name]).trim(), origin_main.trim());
         assert_eq!(upstream_ref(&mut a, name), "", "{name}: 추적을 걸지 않는다");
         if checkout {
@@ -622,7 +628,7 @@ async fn batch_checkout_remote_uses_local_tracking_branches() {
         )
         .await
         .unwrap();
-    assert_eq!(r.label, "일괄 checkout: origin/feat");
+    assert_eq!(r.label, "브랜치 일괄 전환: origin/feat");
     let of = |name: &str| r.results.iter().find(|x| x.name == name).unwrap();
     assert_eq!((r.succeeded, r.skipped, r.failed), (2, 4, 0), "{r:#?}");
 
@@ -638,24 +644,24 @@ async fn batch_checkout_remote_uses_local_tracking_branches() {
     // 업스트림 없는 같은 이름의 로컬: 전환하지 않고, 추적도 걸지 않고, 사유를 남긴다
     assert_eq!(
         of("plain").skipped.as_deref(),
-        Some("로컬 feat 이(가) origin/feat 을(를) 추적하지 않음")
+        Some("로컬 브랜치 feat은(는) origin/feat을(를) 추적하지 않습니다")
     );
     assert_eq!(plain.git_ok(["branch", "--show-current"]).trim(), "main");
     assert_eq!(upstream_ref(&mut plain, "feat"), "");
 
     assert_eq!(
         of("other").skipped.as_deref(),
-        Some("로컬 feat 이(가) fork/feat 을(를) 추적 중")
+        Some("로컬 브랜치 feat은(는) fork/feat을(를) 추적 중입니다")
     );
     assert_eq!(other.git_ok(["branch", "--show-current"]).trim(), "main");
     assert_eq!(
         of("none").skipped.as_deref(),
-        Some("원격 branch 가 없음: origin/feat")
+        Some("원격 브랜치가 없습니다: origin/feat")
     );
     assert_eq!(none.git_ok(["branch", "--show-current"]).trim(), "main");
     assert_eq!(
         of("dirty").skipped.as_deref(),
-        Some("커밋하지 않은 변경이 있음")
+        Some("커밋하지 않은 변경이 있습니다")
     );
 
     // 다시 실행하면 이미 그 branch 인 저장소는 건너뛴다
@@ -671,7 +677,10 @@ async fn batch_checkout_remote_uses_local_tracking_branches() {
         .await
         .unwrap();
     assert_eq!(again.results.len(), 1);
-    assert_eq!(again.results[0].skipped.as_deref(), Some("이미 그 branch"));
+    assert_eq!(
+        again.results[0].skipped.as_deref(),
+        Some("이미 해당 브랜치입니다")
+    );
 
     // 잘못된 원격·branch 이름은 거부한다
     for (remote, branch) in [
@@ -771,7 +780,7 @@ async fn batch_rename_branch_renames_and_skips_missing_or_taken() {
         from: "feature/x".into(),
         to: "feature-x".into(),
     };
-    assert_eq!(op.label(), "일괄 이름 바꾸기: feature/x → feature-x");
+    assert_eq!(op.label(), "브랜치 이름 일괄 변경: feature/x → feature-x");
     let r = core.folder_batch(fid, op, &[]).await.unwrap();
     assert_eq!((r.succeeded, r.skipped, r.failed), (2, 2, 0), "{r:?}");
     let get = |name: &str| r.results.iter().find(|x| x.name == name).unwrap();
@@ -781,9 +790,12 @@ async fn batch_rename_branch_renames_and_skips_missing_or_taken() {
     }
     assert_eq!(
         get("taken").skipped.as_deref(),
-        Some("새 이름이 이미 있음: feature-x")
+        Some("이미 사용 중인 이름입니다: feature-x")
     );
-    assert_eq!(get("none").skipped.as_deref(), Some("branch 없음"));
+    assert_eq!(
+        get("none").skipped.as_deref(),
+        Some("해당 브랜치가 없습니다")
+    );
 
     // 현재 branch: HEAD 가 새 이름을 따라간다
     assert_eq!(current_branch(&mut cur), "feature-x");

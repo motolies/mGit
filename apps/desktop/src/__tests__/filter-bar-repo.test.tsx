@@ -137,7 +137,7 @@ describe('경로 범위 드롭다운 (옛 경로 입력, W26)', () => {
 describe('branch 드롭다운의 저장소 탭 몫 (W26)', () => {
   it('목록에 없는 이름(태그 등)은 "목록에 없는 ref" 묶음으로 맨 앞에 보이고 풀 수 있다', () => {
     const { last } = setup(withRevs(Q, { kind: 'solo', name: 'v1.0' }));
-    expect(dropButton(S.filterBar.branch).textContent).toBe('branch: v1.0');
+    expect(dropButton(S.filterBar.branch).textContent).toBe('브랜치: v1.0');
     act(() => fireEvent.click(dropButton(S.filterBar.branch)));
     const list = within(popover() as HTMLElement);
     expect(list.getByText(S.filterBar.otherRefs)).toBeTruthy();
@@ -265,7 +265,7 @@ describe('잠금 (쓰기 진행 중, W26)', () => {
     }
     act(() =>
       fireEvent.click(
-        screen.getByRole('button', { name: S.filterBar.clearCondition('branch: main') }),
+        screen.getByRole('button', { name: S.filterBar.clearCondition('브랜치: main') }),
       ),
     );
     act(() => fireEvent.click(screen.getByRole('button', { name: S.filterBar.clearAll })));

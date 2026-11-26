@@ -1,4 +1,4 @@
-import { S } from '@mgit/ui';
+import { RepositoryPaletteProvider, repositoryRosterKey, repositorySlotCount, S } from '@mgit/ui';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import styles from './App.module.css';
@@ -63,6 +63,7 @@ import {
   useActivePrKind,
   useActiveTab,
   useAppStore,
+  useFolder,
   useHasSession,
   useIsRepoTab,
   useSession,
@@ -400,6 +401,29 @@ export function AppBody({ actions }: { actions: readonly Action[] }) {
   );
 }
 
+/** 전체 저장소 집합으로 색을 정하므로 로그 필터·정렬·스크롤은 색을 바꾸지 않는다. */
+function ActiveRepositoryPalette({ children }: { children: ReactNode }) {
+  const folder = useFolder((state) => ({
+    repos: state.repos,
+    summaries: state.summaries,
+    info: state.timeline.info,
+  }));
+  const roster = useMemo(
+    () => repositoryRosterKey((folder?.repos ?? []).map((repo) => repo.path)),
+    [folder?.repos],
+  );
+  const count = repositorySlotCount(
+    (folder?.repos ?? []).map((repo) => repo.path),
+    folder?.summaries ?? [],
+    folder?.info?.repos ?? [],
+  );
+  return (
+    <RepositoryPaletteProvider count={count} roster={roster}>
+      {children}
+    </RepositoryPaletteProvider>
+  );
+}
+
 /**
  * 앱 셸: 툴바 / 작업 진행 띠(폴더 탭 = 저장소마다 한 줄, 저장소 탭 = 그 탭의 작업·격리 병합 — W21) / 본문 / 상태 바 +
  * 전역 대화상자·팔레트. 세션 대화상자는 둘로 가른다 (W13):
@@ -417,43 +441,45 @@ export function App() {
   const isRepoTab = useIsRepoTab();
   const isFolderTab = useActiveTab()?.kind === 'folder';
   return (
-    <div className={styles.app}>
-      <Toolbar />
-      {isFolderTab ? <FolderOpBand /> : null}
-      {isRepoTab ? <RepoOpBand /> : null}
-      <ActionErrorBar />
-      <AppBody actions={actions} />
-      <StatusBar />
-      {hasSession ? <BlameDialog /> : null}
-      {hasSession ? <FileHistoryDialog /> : null}
-      {isRepoTab ? <HintDialogs /> : null}
-      {isFolderTab ? <FolderHints /> : null}
-      {isRepoTab ? <ReflogDialog /> : null}
-      {isRepoTab ? <FileBackupsDialog /> : null}
-      {isRepoTab ? <RebasePlanDialog /> : null}
-      {hasSession ? <ComparisonLauncher /> : null}
-      {isRepoTab ? <MergePreviewDialog /> : null}
-      {isRepoTab ? <RebasePreviewDialog /> : null}
-      {isRepoTab ? <RenameConflictDialog /> : null}
-      {isRepoTab ? <ConflictRulesDialog /> : null}
-      {isRepoTab ? <ReviewDialog /> : null}
-      {isRepoTab ? <RepoSettingsDialog /> : null}
-      <AccountsDialog />
-      <ProfilesDialog />
-      <SshKeysDialog />
-      <RemoteReposDialog />
-      <WorkspaceSearch />
-      <Toasts />
-      {quickSwitch && isRepoTab ? (
-        <BranchQuickSwitch onClose={() => setQuickSwitch(false)} />
-      ) : null}
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={actions} />
-      <CredentialDialog />
-      <CloseSessionDialog />
-      <FolderCloseDialog />
-      <ConflictLeaveDialog />
-      <SettingsDialog actions={actions} />
-      {dialogElement}
-    </div>
+    <ActiveRepositoryPalette>
+      <div className={styles.app}>
+        <Toolbar />
+        {isFolderTab ? <FolderOpBand /> : null}
+        {isRepoTab ? <RepoOpBand /> : null}
+        <ActionErrorBar />
+        <AppBody actions={actions} />
+        <StatusBar />
+        {hasSession ? <BlameDialog /> : null}
+        {hasSession ? <FileHistoryDialog /> : null}
+        {isRepoTab ? <HintDialogs /> : null}
+        {isFolderTab ? <FolderHints /> : null}
+        {isRepoTab ? <ReflogDialog /> : null}
+        {isRepoTab ? <FileBackupsDialog /> : null}
+        {isRepoTab ? <RebasePlanDialog /> : null}
+        {hasSession ? <ComparisonLauncher /> : null}
+        {isRepoTab ? <MergePreviewDialog /> : null}
+        {isRepoTab ? <RebasePreviewDialog /> : null}
+        {isRepoTab ? <RenameConflictDialog /> : null}
+        {isRepoTab ? <ConflictRulesDialog /> : null}
+        {isRepoTab ? <ReviewDialog /> : null}
+        {isRepoTab ? <RepoSettingsDialog /> : null}
+        <AccountsDialog />
+        <ProfilesDialog />
+        <SshKeysDialog />
+        <RemoteReposDialog />
+        <WorkspaceSearch />
+        <Toasts />
+        {quickSwitch && isRepoTab ? (
+          <BranchQuickSwitch onClose={() => setQuickSwitch(false)} />
+        ) : null}
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={actions} />
+        <CredentialDialog />
+        <CloseSessionDialog />
+        <FolderCloseDialog />
+        <ConflictLeaveDialog />
+        <SettingsDialog actions={actions} />
+        {dialogElement}
+      </div>
+    </ActiveRepositoryPalette>
   );
 }

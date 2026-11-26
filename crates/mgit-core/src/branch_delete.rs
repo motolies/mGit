@@ -126,7 +126,7 @@ async fn push_url(inner: &CoreInner, path: &Path, remote: &str) -> Result<String
     let lines: Vec<_> = urls.lines().collect();
     if lines.len() != 1 {
         return Err(pick(
-            "push URL이 여러 개인 원격은 브랜치를 삭제할 수 없습니다",
+            "푸시 URL이 여러 개인 원격 저장소에서는 브랜치를 삭제할 수 없습니다",
             "Multiple push URLs are not supported for branch deletion",
         )
         .into());
@@ -292,7 +292,7 @@ pub(crate) async fn execute(
         let url = push_url(inner, &target.path, &target.remote).await?;
         if url != target.remote_url {
             return Err(pick(
-                "원격 push URL이 변경되었습니다. 다시 조회하세요",
+                "원격 저장소의 푸시 URL이 변경되었습니다. 다시 조회하세요.",
                 "Remote push URL changed; inspect again",
             )
             .into());

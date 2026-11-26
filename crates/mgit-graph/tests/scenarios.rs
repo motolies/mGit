@@ -9,13 +9,13 @@ use mgit_graph::{StubDir, branch_color};
 
 /// 스냅샷용 요약: (행 레인·색), 구간, 엣지, 레인 수. 스텁은 있을 때만 줄을 덧붙인다
 fn summary(layout: &mgit_graph::GraphLayout) -> String {
-    let rows: Vec<(u16, u8)> = layout.rows().iter().map(|r| (r.lane, r.color)).collect();
-    let segs: Vec<(u16, u32, u32, u8)> = layout
+    let rows: Vec<(u16, u16)> = layout.rows().iter().map(|r| (r.lane, r.color)).collect();
+    let segs: Vec<(u16, u32, u32, u16)> = layout
         .segments()
         .iter()
         .map(|s| (s.lane, s.start, s.end, s.color))
         .collect();
-    let edges: Vec<(u32, u16, u16, u8)> = layout
+    let edges: Vec<(u32, u16, u16, u16)> = layout
         .edges()
         .iter()
         .map(|e| (e.top_row, e.top_lane, e.bottom_lane, e.color))
@@ -25,7 +25,7 @@ fn summary(layout: &mgit_graph::GraphLayout) -> String {
         layout.lane_count()
     );
     if !layout.stubs().is_empty() {
-        let stubs: Vec<(u32, u16, &str, Option<u32>, u8)> = layout
+        let stubs: Vec<(u32, u16, &str, Option<u32>, u16)> = layout
             .stubs()
             .iter()
             .map(|s| {
@@ -498,4 +498,25 @@ fn stub_of_later_parent_keeps_node_color_after_lane_closes() {
         .unwrap();
     assert_eq!(stub.color, layout.rows()[1].color);
     assert_ne!(stub.color, 0, "닫힌 레인의 기본값 0 이 아니어야 한다");
+}
+
+/// 저장소 지정 색은 일반 브랜치 10색 팔레트로 잘라내지 않는다.
+#[test]
+fn repository_color_slots_do_not_wrap_at_ten_or_256() {
+    let mut layout = mgit_graph::GraphLayout::<u16>::with_options(mgit_graph::LayoutOptions {
+        lane_color: Some(|key| *key),
+        ..Default::default()
+    });
+    for key in [0, 10, 256, 299] {
+        layout.push(key, &[]);
+    }
+    layout.finish();
+    assert_eq!(
+        layout
+            .rows()
+            .iter()
+            .map(|row| row.color)
+            .collect::<Vec<_>>(),
+        vec![0, 10, 256, 299]
+    );
 }

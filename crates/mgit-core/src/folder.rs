@@ -8,7 +8,6 @@ use std::time::UNIX_EPOCH;
 use mgit_git::cmd::{
     Discovered, discover, head_state, in_progress_op, list_refs, scan_repos, scanned_repo_status,
 };
-use mgit_graph::PALETTE_SIZE;
 use mgit_l10n::tr;
 use mgit_model::{
     ChangeKind, FoundRepo, GitError, HeadState, RecentKind, RefLabel, RepoKind, RepoSummary,
@@ -41,14 +40,14 @@ pub struct FolderRepo {
 
 impl FolderRepo {
     /// 저장소 색 번호 (LF-09). 요약·브랜치 목록·타임라인이 모두 이 값을 싣는다
-    pub fn color(&self) -> u8 {
+    pub fn color(&self) -> u16 {
         repo_color(self.ordinal)
     }
 }
 
-/// 순번의 색 번호: 순번 % 팔레트 크기. 저장소 색을 정하는 곳은 여기 하나다
-pub(crate) fn repo_color(ordinal: u16) -> u8 {
-    (ordinal % u16::from(PALETTE_SIZE)) as u8
+/// 저장소 순번을 색 슬롯으로 유지한다. 실제 색은 전체 목록과 테마에 맞춰 화면에서 배정한다.
+pub(crate) fn repo_color(ordinal: u16) -> u16 {
+    ordinal
 }
 
 /// 저장소 목록에 순번을 매긴다. `common_dirs[i]` 는 `found[i]` 의 `common_dir` 이고, 판별에 실패한
@@ -702,16 +701,18 @@ mod tests {
     }
 
     #[test]
-    fn undiscovered_repos_get_their_own_ordinal_and_colors_wrap() {
-        let repos: Vec<FoundRepo> = (0..12)
+    fn undiscovered_repos_get_distinct_color_slots() {
+        let repos: Vec<FoundRepo> = (0..300)
             .map(|i| found(&format!("/f/r{i:02}"), RepoKind::Standalone))
             .collect();
         let roster = assign_ordinals(repos, &[]);
         assert!(roster.iter().all(|r| r.primary));
         let ordinals: Vec<u16> = roster.iter().map(|r| r.ordinal).collect();
-        assert_eq!(ordinals, (0..12).collect::<Vec<u16>>());
+        assert_eq!(ordinals, (0..300).collect::<Vec<u16>>());
         assert_eq!(roster[9].color(), 9);
-        assert_eq!(roster[10].color(), 0);
-        assert_eq!(roster[11].color(), 1);
+        assert_eq!(roster[10].color(), 10);
+        assert_eq!(roster[11].color(), 11);
+        assert_eq!(roster[256].color(), 256);
+        assert_eq!(roster[299].color(), 299);
     }
 }

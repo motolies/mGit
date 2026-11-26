@@ -186,7 +186,7 @@ async fn current_branch_fast_forwards_work_tree() {
     a.branch("solo");
     core.refresh(id).await.unwrap();
     let err = core.update_branch(id, "solo", None).await.unwrap_err();
-    assert_eq!(err.to_string(), "업스트림 없음");
+    assert_eq!(err.to_string(), "업스트림이 없습니다");
     assert!(matches!(
         core.update_branch(id, "-x", None).await,
         Err(CoreError::Invalid(_))
@@ -258,12 +258,16 @@ async fn batch_update_branch_reports_per_repo() {
     let cur = by("cur");
     assert_eq!(
         cur.skipped.as_deref(),
-        Some("커밋하지 않은 변경이 있음"),
+        Some("커밋하지 않은 변경이 있습니다"),
         "{cur:?}"
     );
     assert!(cur.moved.is_none());
     let none = by("none");
-    assert_eq!(none.skipped.as_deref(), Some("branch 없음"), "{none:?}");
+    assert_eq!(
+        none.skipped.as_deref(),
+        Some("해당 브랜치가 없습니다"),
+        "{none:?}"
+    );
     assert_eq!((r.succeeded, r.skipped, r.failed), (2, 2, 0));
 
     // 깨끗해지면 현재 branch 는 merge --ff-only 로 작업 트리까지
@@ -315,7 +319,7 @@ async fn batch_update_branch_skips_other_worktree_and_diverged() {
     assert!(
         up.skipped
             .as_deref()
-            .is_some_and(|s| s.starts_with("다른 워크트리에서 checkout 중")),
+            .is_some_and(|s| s.starts_with("다른 워크트리에서 사용 중인 브랜치입니다")),
         "{up:?}"
     );
     assert_eq!(rev(&mut repos[0], "dev"), old);
@@ -324,7 +328,7 @@ async fn batch_update_branch_skips_other_worktree_and_diverged() {
     let cur = r.results.iter().find(|x| x.name == "cur").unwrap();
     assert_eq!(
         cur.skipped.as_deref(),
-        Some("갈라져 갱신하지 않음 (⇡1 ⇣2)"),
+        Some("로컬과 원격 이력이 갈라져 업데이트하지 않았습니다 (⇡1 ⇣2)"),
         "{cur:?}"
     );
     assert_eq!(rev(&mut repos[2], "dev"), mine.to_hex());

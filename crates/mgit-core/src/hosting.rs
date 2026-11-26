@@ -118,7 +118,7 @@ fn check_key_name(name: &str) -> Result<(), CoreError> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
         return Err(CoreError::Invalid(tr!(
-            "키 이름은 영문·숫자·._- 만 쓸 수 있습니다: {name:?}",
+            "키 이름에는 영문, 숫자, 마침표(.), 밑줄(_), 하이픈(-)만 사용할 수 있습니다: {name:?}",
             "Key names can only contain letters, digits, and ._-: {name:?}"
         )));
     }
@@ -275,7 +275,7 @@ impl Core {
         let token = self.vault().get(&token_key(account_id)).ok_or_else(|| {
             CoreError::Invalid(
                 pick(
-                    "토큰이 키체인에 없습니다. 계정을 다시 추가하세요",
+                    "키체인에서 토큰을 찾을 수 없습니다. 계정을 다시 추가하세요.",
                     "The token is not in the Keychain. Add the account again",
                 )
                 .into(),
@@ -345,7 +345,7 @@ impl Core {
             HostKind::GitLab => cfg.gitlab_client_id,
         };
         id.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-            CoreError::Invalid(pick("OAuth App client_id 가 설정돼 있지 않습니다. PAT 로 추가하거나 설정에 client_id 를 넣으세요", "OAuth App client_id is not set. Add the account with a PAT or set client_id in settings").into())
+            CoreError::Invalid(pick("OAuth 앱의 client_id가 설정되지 않았습니다. 개인 액세스 토큰(PAT)으로 계정을 추가하거나 설정에 client_id를 지정하세요.", "OAuth App client_id is not set. Add the account with a PAT or set client_id in settings").into())
         })
     }
 
@@ -558,7 +558,7 @@ impl Core {
         let path = dir.join(name);
         if path.exists() || path.with_extension("pub").exists() {
             return Err(CoreError::Invalid(tr!(
-                "이미 있는 키입니다: {}",
+                "이미 존재하는 키입니다: {}",
                 "Key already exists: {}",
                 path.display()
             )));
@@ -592,7 +592,11 @@ impl Core {
             .find(|k| k.path == path)
             .ok_or_else(|| {
                 CoreError::Invalid(
-                    pick("만든 키를 읽을 수 없습니다", "Cannot read the created key").into(),
+                    pick(
+                        "생성한 키를 읽을 수 없습니다",
+                        "Cannot read the created key",
+                    )
+                    .into(),
                 )
             })
     }

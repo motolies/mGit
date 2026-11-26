@@ -1,4 +1,4 @@
-import { Icon, S } from '@mgit/ui';
+import { Icon, repositoryColor, S } from '@mgit/ui';
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -282,7 +282,7 @@ export function FolderCommitTree({
             {repo.color === null ? null : (
               <span
                 className={styles.swatch}
-                style={{ '--repo-color': `var(--graph-lane-${repo.color})` } as CSSProperties}
+                style={{ '--repo-color': repositoryColor(repo.color) } as CSSProperties}
               />
             )}
             <span className={styles.repoName} title={repo.path}>

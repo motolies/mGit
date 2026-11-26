@@ -45,19 +45,32 @@ impl RuntimeProfile {
             return Ok(Self::production());
         }
         let checkout = dunce::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
-            .map_err(|e| format!("checkout 경로를 확인할 수 없습니다: {e}"))?;
+            .map_err(|e| {
+                mgit_l10n::tr!(
+                    "작업 사본 경로를 확인할 수 없습니다: {e}",
+                    "Could not resolve the working copy path: {e}"
+                )
+            })?;
         if let Some(expected) = std::env::var_os("MGIT_CHECKOUT_ROOT") {
             let expected = dunce::canonicalize(expected).map_err(|e| e.to_string())?;
             if expected != checkout {
-                return Err("런처 checkout과 빌드 checkout이 다릅니다".into());
+                return Err(mgit_l10n::pick(
+                    "런처와 빌드가 서로 다른 작업 사본을 사용하고 있습니다",
+                    "The launcher and build use different working copies",
+                )
+                .into());
             }
         }
         let run_id = std::env::var("MGIT_TEST_RUN_ID")
             .unwrap_or_else(|_| uuid::Uuid::new_v4().simple().to_string());
         let profile = Self::isolated(&checkout, kind, &run_id)?;
         if let Some(root) = &profile.root {
-            std::fs::create_dir_all(root)
-                .map_err(|e| format!("환경 디렉터리를 만들 수 없습니다: {e}"))?;
+            std::fs::create_dir_all(root).map_err(|e| {
+                mgit_l10n::tr!(
+                    "환경 디렉터리를 만들 수 없습니다: {e}",
+                    "Could not create the runtime directory: {e}"
+                )
+            })?;
         }
         Ok(profile)
     }
@@ -84,9 +97,10 @@ impl RuntimeProfile {
         run_id: &str,
     ) -> Result<Self, String> {
         let checkout = dunce::canonicalize(checkout).map_err(|e| e.to_string())?;
-        let path = checkout
-            .to_str()
-            .ok_or("checkout 경로가 UTF-8이 아닙니다")?;
+        let path = checkout.to_str().ok_or(mgit_l10n::pick(
+            "작업 사본 경로가 UTF-8 형식이 아닙니다",
+            "The working copy path is not valid UTF-8",
+        ))?;
         let id = format!("{:x}", Sha256::digest(path.as_bytes()))[..16].to_string();
         let name = checkout
             .file_name()
@@ -105,7 +119,11 @@ impl RuntimeProfile {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-')
                 {
-                    return Err("테스트 실행 ID는 영문·숫자·하이픈 1~32자여야 합니다".into());
+                    return Err(mgit_l10n::pick(
+                        "테스트 실행 ID는 영문·숫자·하이픈 1~32자여야 합니다",
+                        "The test run ID must contain 1–32 letters, digits, or hyphens",
+                    )
+                    .into());
                 }
                 root = root.join("test").join(run_id);
                 (
@@ -114,7 +132,11 @@ impl RuntimeProfile {
                 )
             }
             RuntimeKind::Production => {
-                return Err("배포 환경은 checkout 저장소를 사용할 수 없습니다".into());
+                return Err(mgit_l10n::pick(
+                    "배포 환경에서는 작업 사본의 저장소를 사용할 수 없습니다",
+                    "Production mode cannot use a working-copy data directory",
+                )
+                .into());
             }
         };
         let mut data_store_identifier = [0; 16];
@@ -168,7 +190,11 @@ fn select_kind(
     requested: &str,
 ) -> Result<RuntimeKind, String> {
     if !matches!(requested, "" | "development" | "test") {
-        return Err("잘못된 MGIT_RUNTIME_MODE".into());
+        return Err(mgit_l10n::pick(
+            "MGIT_RUNTIME_MODE 값이 올바르지 않습니다",
+            "Invalid MGIT_RUNTIME_MODE value",
+        )
+        .into());
     }
     if requested == "test" || built_mode == "test" {
         Ok(RuntimeKind::Test)

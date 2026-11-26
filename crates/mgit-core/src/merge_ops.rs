@@ -42,7 +42,7 @@ pub enum OpOutcome {
 fn check_ref(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.starts_with('-') || name.contains('\0') {
         return Err(CoreError::Invalid(tr!(
-            "잘못된 ref: {name:?}",
+            "올바르지 않은 참조입니다: {name:?}",
             "Invalid ref: {name:?}"
         )));
     }
@@ -201,7 +201,11 @@ impl Core {
             InProgressOp::Am => &["am", "--continue"],
             InProgressOp::Bisect => {
                 return Err(CoreError::Invalid(
-                    pick("bisect 는 계속할 수 없습니다", "bisect cannot be continued").into(),
+                    pick(
+                        "이분 탐색(bisect)은 이 동작으로 계속할 수 없습니다",
+                        "bisect cannot be continued",
+                    )
+                    .into(),
                 ));
             }
         };

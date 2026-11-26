@@ -73,7 +73,7 @@ fn check_auto_fetch_minutes(minutes: u32) -> Result<(), IpcError> {
     if minutes > AUTO_FETCH_MAX_MINUTES {
         return Err(IpcError::Internal {
             message: tr!(
-                "자동 fetch 간격은 0~{AUTO_FETCH_MAX_MINUTES}분이어야 합니다: {minutes}",
+                "원격 정보 자동 가져오기 간격은 0~{AUTO_FETCH_MAX_MINUTES}분이어야 합니다: {minutes}",
                 "Auto fetch interval must be 0–{AUTO_FETCH_MAX_MINUTES} minutes: {minutes}"
             ),
         });
@@ -241,7 +241,10 @@ async fn launch_first(
     path_env: Option<&str>,
     wait: Duration,
 ) -> Result<(), String> {
-    let mut last_err = String::from(pick("실행할 명령이 없습니다", "No command to run"));
+    let mut last_err = String::from(pick(
+        "실행할 명령을 지정하지 않았습니다",
+        "No command to run",
+    ));
     for argv in candidates {
         let Some((cmd, args)) = argv.split_first() else {
             continue;

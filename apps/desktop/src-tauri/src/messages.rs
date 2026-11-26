@@ -14,7 +14,7 @@ pub(crate) fn not_a_repository(path: &str) -> String {
 /// 고른 폴더가 하위 저장소를 품은 멀티 저장소 폴더다
 pub(crate) fn multi_repo_folder(path: &str) -> String {
     tr!(
-        "멀티 저장소 폴더입니다: {path}",
+        "여러 저장소가 포함된 폴더입니다: {path}",
         "Multi-repository folder: {path}"
     )
 }
@@ -22,7 +22,7 @@ pub(crate) fn multi_repo_folder(path: &str) -> String {
 /// git 이 지원하는 최소 버전보다 낮다
 pub(crate) fn git_too_old(found: &str, required: &str) -> String {
     tr!(
-        "git {found} 는 최소 버전 {required} 미만입니다",
+        "설치된 Git 버전({found})이 최소 요구 버전({required})보다 낮습니다",
         "git {found} is older than the minimum version {required}"
     )
 }
@@ -38,7 +38,7 @@ pub(crate) fn session_not_found(session: &u32) -> String {
 /// 쓰기 명령이 실패했다
 pub(crate) fn git_failed(args: &[String], stderr: &str) -> String {
     tr!(
-        "git {} 실패: {stderr}",
+        "Git 명령이 실패했습니다: git {} — {stderr}",
         "git {} failed: {stderr}",
         args.join(" ")
     )
@@ -47,7 +47,7 @@ pub(crate) fn git_failed(args: &[String], stderr: &str) -> String {
 /// 같은 이름의 로컬 브랜치가 고른 원격 브랜치를 추적하지 않는다
 pub(crate) fn local_branch_tracks_other(local: &str, remote: &str, name: &str) -> String {
     tr!(
-        "로컬 브랜치 {local} 은 {remote}/{name} 을 추적하지 않습니다",
+        "로컬 브랜치 {local}은(는) {remote}/{name}을(를) 추적하지 않습니다",
         "Local branch {local} does not track {remote}/{name}"
     )
 }
@@ -55,7 +55,7 @@ pub(crate) fn local_branch_tracks_other(local: &str, remote: &str, name: &str) -
 /// 이름이 다른 업스트림으로 push 하려 한다 (확인 요청)
 pub(crate) fn push_upstream_mismatch(local: &str, remote: &str, upstream: &str) -> String {
     tr!(
-        "로컬 브랜치 {local} 을 {remote}/{upstream} 로 push 합니다",
+        "로컬 브랜치 {local}을(를) {remote}/{upstream}(으)로 푸시합니다",
         "Pushing local branch {local} to {remote}/{upstream}"
     )
 }
@@ -63,7 +63,7 @@ pub(crate) fn push_upstream_mismatch(local: &str, remote: &str, upstream: &str) 
 /// 가벼운 세션에는 커밋 그래프가 없다
 pub(crate) fn graph_unavailable(session: &u32) -> String {
     tr!(
-        "가벼운 세션이라 커밋 그래프가 없습니다: {session}",
+        "현재 화면에서는 커밋 그래프를 사용할 수 없습니다: {session}",
         "No commit graph in a light session: {session}"
     )
 }
@@ -71,7 +71,7 @@ pub(crate) fn graph_unavailable(session: &u32) -> String {
 /// 폴더의 가벼운 세션 수가 상한이다
 pub(crate) fn light_session_limit(limit: &u32) -> String {
     tr!(
-        "폴더의 가벼운 세션이 상한({limit}개)입니다",
+        "폴더 화면에서 동시에 열 수 있는 저장소 수({limit}개)에 도달했습니다",
         "The folder has reached its light session limit ({limit})"
     )
 }

@@ -275,7 +275,7 @@ impl Core {
         if want != got {
             return Err(CoreError::Invalid(
                 pick(
-                    "플랜의 커밋이 현재 이력과 다릅니다. 다시 불러오세요",
+                    "리베이스 계획의 커밋이 현재 이력과 다릅니다. 다시 불러오세요.",
                     "The plan's commits differ from the current history. Reload it",
                 )
                 .into(),
@@ -283,7 +283,11 @@ impl Core {
         }
         if plan.steps.iter().all(|s| s.action == RebaseAction::Drop) {
             return Err(CoreError::Invalid(
-                pick("커밋을 전부 지울 수는 없습니다", "Cannot drop all commits").into(),
+                pick(
+                    "모든 커밋을 삭제할 수는 없습니다",
+                    "Cannot drop all commits",
+                )
+                .into(),
             ));
         }
         // drop 은 커밋을 남기지 않으므로 앞쪽의 drop 을 빼고 첫 단계를 본다
@@ -296,7 +300,7 @@ impl Core {
         ) {
             return Err(CoreError::Invalid(
                 pick(
-                    "남는 커밋의 첫 커밋은 앞 커밋에 합칠 수 없습니다",
+                    "남겨 둘 첫 번째 커밋은 이전 커밋에 합칠 수 없습니다",
                     "The first remaining commit cannot be squashed into a previous commit",
                 )
                 .into(),
@@ -452,7 +456,7 @@ impl Core {
         if parts.next().is_some() {
             return Err(CoreError::Invalid(
                 pick(
-                    "머지 커밋은 합칠 수 없습니다",
+                    "병합 커밋은 합칠 수 없습니다",
                     "Merge commits cannot be squashed",
                 )
                 .into(),
@@ -461,7 +465,7 @@ impl Core {
         // 부모부터 HEAD 까지의 플랜: 부모 pick, 이 커밋 fixup, 나머지 pick
         let parent_oid = Oid::from_hex(parent.as_bytes()).map_err(|e| {
             CoreError::Invalid(tr!(
-                "부모 해시 파싱 실패: {e}",
+                "부모 커밋 해시를 해석하지 못했습니다: {e}",
                 "Failed to parse parent hash: {e}"
             ))
         })?;
@@ -510,10 +514,10 @@ impl Core {
         )
         .with_env(EnvProfile::ReadInteractive);
         if !inner.runner().run(req).await?.exit.success() {
-            return Err(CoreError::Invalid(pick("현재 브랜치에 없는 커밋은 고칠 수 없습니다. 그 브랜치로 전환한 뒤 다시 시도하세요", "Cannot edit a commit that is not on the current branch. Switch to that branch and try again").into()));
+            return Err(CoreError::Invalid(pick("현재 브랜치에 없는 커밋은 수정할 수 없습니다. 해당 브랜치로 전환한 뒤 다시 시도하세요.", "Cannot edit a commit that is not on the current branch. Switch to that branch and try again").into()));
         }
         if self.has_merges(session, base).await? {
-            return Err(CoreError::Invalid(pick("머지 커밋이 낀 구간은 이력을 펼치지 않고는 고칠 수 없습니다. 머지보다 위의 커밋만 고치거나 터미널에서 git rebase --rebase-merges 를 쓰세요", "A range containing merge commits cannot be edited without flattening history. Edit only commits above the merge, or use git rebase --rebase-merges in a terminal").into()));
+            return Err(CoreError::Invalid(pick("병합 커밋이 포함된 구간은 병합 구조를 유지한 채 수정할 수 없습니다. 병합 이후의 커밋만 수정하거나 터미널에서 git rebase --rebase-merges를 사용하세요.", "A range containing merge commits cannot be edited without flattening history. Edit only commits above the merge, or use git rebase --rebase-merges in a terminal").into()));
         }
         Ok(())
     }

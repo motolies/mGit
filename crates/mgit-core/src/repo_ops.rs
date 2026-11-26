@@ -239,7 +239,10 @@ impl Core {
         }
         if let Some(id) = template {
             let body = gitignore_body(id).ok_or_else(|| {
-                CoreError::Invalid(tr!("모르는 템플릿: {id}", "Unknown template: {id}"))
+                CoreError::Invalid(tr!(
+                    "알 수 없는 템플릿입니다: {id}",
+                    "Unknown template: {id}"
+                ))
             })?;
             std::fs::write(path.join(".gitignore"), body)?;
         }

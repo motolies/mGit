@@ -710,7 +710,7 @@ pub struct GraphRow {
     pub commit_time: i64,
     pub subject: String,
     pub lane: u16,
-    pub color: u8,
+    pub color: u16,
     pub refs: Vec<RefLabel>,
     pub is_head: bool,
     /// HEAD(현재 브랜치)에서 닿는 커밋인지
@@ -758,7 +758,7 @@ pub struct WindowStub {
     pub dir: StubDir,
     /// 상대 행 (부모가 아직 안 왔거나 스트림 밖이면 None)
     pub other_row: Option<u32>,
-    pub color: u8,
+    pub color: u16,
 }
 
 impl From<mgit_core::WindowStub> for WindowStub {
@@ -784,7 +784,7 @@ pub struct WindowSegment {
     pub lane: u16,
     pub from_row: u32,
     pub to_row: u32,
-    pub color: u8,
+    pub color: u16,
     pub continues_up: bool,
     pub continues_down: bool,
 }
@@ -810,7 +810,7 @@ pub struct WindowEdge {
     pub top_row: u32,
     pub top_lane: u16,
     pub bottom_lane: u16,
-    pub color: u8,
+    pub color: u16,
 }
 
 impl From<mgit_core::WindowEdge> for WindowEdge {

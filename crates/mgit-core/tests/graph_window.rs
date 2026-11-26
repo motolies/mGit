@@ -151,7 +151,10 @@ async fn pinned_head_stays_on_lane0_and_feature_is_colored() {
     assert_eq!(row("f1").lane, 1);
     assert_eq!(row("commit 2").lane, 0);
     assert_eq!(row("commit 1").lane, 0);
-    assert_eq!(row("f2").color, mgit_core::branch_color("feature"));
+    assert_eq!(
+        row("f2").color,
+        u16::from(mgit_core::branch_color("feature"))
+    );
     assert_eq!(row("commit 2").color, 0);
     assert!(w.stubs.is_empty());
     assert!(

@@ -167,9 +167,9 @@ describe('설정 대화상자 (⌘,)', () => {
     expect(selects[0]).toBe(language);
     expect(language.value).toBe('en');
     expect([...language.options].map((o) => [o.value, o.textContent])).toEqual([
-      ['system', '시스템 언어 따름'],
-      ['ko', '한국어'],
-      ['en', 'English'],
+      ['en', S.settings.languageEn],
+      ['ko', S.settings.languageKo],
+      ['system', S.settings.languageSystem],
     ]);
     expect(within(dialog).getByLabelText('언어 (Language)')).toBe(language);
     expect(within(dialog).getByLabelText(S.external.editor)).toBe(selects[1]);
@@ -213,9 +213,9 @@ describe('설정 대화상자 (⌘,)', () => {
     expect(within(dialog).getByRole('heading').textContent).toBe('Settings');
     expect(within(dialog).getByLabelText('Language')).toBe(language);
     expect([...language.options].map((o) => o.textContent)).toEqual([
-      'System default',
-      '한국어',
       'English',
+      '한국어',
+      'System default',
     ]);
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeTruthy();
   });

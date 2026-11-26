@@ -95,7 +95,7 @@ pub struct RepoSummary {
     pub name: String,
     pub kind: RepoKind,
     /// 저장소 색 번호 (`--graph-lane-N`). 브랜치 목록·타임라인과 같은 값이다 (LF-09)
-    pub color: u8,
+    pub color: u16,
     pub branch: Option<String>,
     pub detached: bool,
     pub changed: u32,

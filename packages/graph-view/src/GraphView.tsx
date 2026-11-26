@@ -1,5 +1,5 @@
 import type { GraphRangeCache, GraphRow } from '@mgit/ipc';
-import { isImeKey, S } from '@mgit/ui';
+import { isImeKey, S, useRepositoryPalette } from '@mgit/ui';
 import { type Rect, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -176,6 +176,7 @@ export function GraphView({
   const startAnchorChecked = useRef(false);
   const dpr = useDevicePixelRatio();
   const colors = usePalette();
+  const repositoryColors = useRepositoryPalette();
   const now = useNow(NOW_TICK_MS);
   const markActivity = useFrameStats(import.meta.env.DEV, 'graph-view');
   const mainOffset = wipRow ? 1 : 0;
@@ -389,7 +390,7 @@ export function GraphView({
     paint(
       ctx,
       list,
-      colors.lanes,
+      columns.repo && repositoryColors?.length ? [...repositoryColors] : colors.lanes,
       dpr,
       { width: graphCol, height: viewportHeight },
       colors.background,
@@ -401,6 +402,8 @@ export function GraphView({
     laneWidth,
     laneCap,
     colors,
+    repositoryColors,
+    columns.repo,
     dpr,
     graphCol,
     offset,

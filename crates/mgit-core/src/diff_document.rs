@@ -550,7 +550,7 @@ impl Core {
 pub(crate) fn stale_diff_error() -> CoreError {
     CoreError::Invalid(
         mgit_l10n::pick(
-            "표시 이후 파일이 변경되었습니다. 다시 불러온 뒤 선택하세요",
+            "화면에 표시한 이후 파일이 변경되었습니다. 다시 불러온 뒤 선택하세요.",
             "The file changed after it was displayed. Reload and select the changes again",
         )
         .into(),

@@ -45,6 +45,14 @@ export {
   promptSegments,
   requireChecked,
 } from './PromptDialog';
+export {
+  RepositoryPaletteProvider,
+  repositoryColor,
+  repositoryPalette,
+  repositoryRosterKey,
+  repositorySlotCount,
+  useRepositoryPalette,
+} from './repository-colors';
 export { S, type Strings, setStringsLocale } from './strings';
 export { queryTextContext, TEXT_CONTEXT_EVENT, type TextContextAdapter } from './text-context';
 export { useElementWidth } from './use-element-width';

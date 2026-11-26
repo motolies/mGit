@@ -135,8 +135,8 @@ describe('SessionStore', () => {
       },
     });
     expect(store.getState().status.summary.staged).toBe(2);
-    expect(opLabel(store.getState().op)).toBe('REBASING 2/3');
-    expect(opLabel({ kind: 'merge', head: 'b'.repeat(40) })).toBe('MERGING');
+    expect(opLabel(store.getState().op)).toBe('리베이스 중 2/3');
+    expect(opLabel({ kind: 'merge', head: 'b'.repeat(40) })).toBe('병합 중');
     expect(opLabel(null)).toBeNull();
 
     store.getState().applyEvent({

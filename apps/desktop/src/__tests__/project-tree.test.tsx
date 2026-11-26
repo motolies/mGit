@@ -180,7 +180,7 @@ describe('ProjectTree — 행 (PT-01·02·09)', () => {
     const api = rowNamed('api');
     expect(within(api).getByText('development')).toBeTruthy();
     expect(within(api).getByText('54↓')).toBeTruthy();
-    expect(within(api).getByText('REBASING')).toBeTruthy();
+    expect(within(api).getByText('리베이스 중')).toBeTruthy();
     expect(within(api).getByText(S.project.changed(2))).toBeTruthy();
     const broken = rowNamed('broken');
     expect(within(broken).getByText(S.folder.kind.worktree)).toBeTruthy();

@@ -1,5 +1,5 @@
 import type { GraphRow } from '@mgit/ipc';
-import { formatCommitDate, formatDateTime, S, shortHash } from '@mgit/ui';
+import { formatCommitDate, formatDateTime, repositoryColor, S, shortHash } from '@mgit/ui';
 import type { CSSProperties, HTMLAttributes } from 'react';
 import styles from './GraphRow.module.css';
 import { RefLabels } from './RefLabels';
@@ -304,9 +304,7 @@ export function GraphRowView({
           title={repo?.name}
           aria-label={repo?.name}
           style={
-            repo
-              ? ({ '--repo-color': `var(--graph-lane-${repo.color})` } as CSSProperties)
-              : undefined
+            repo ? ({ '--repo-color': repositoryColor(repo.color) } as CSSProperties) : undefined
           }
         >
           {repo && showRepoName ? <span className={styles.repoName}>{repo.name}</span> : null}

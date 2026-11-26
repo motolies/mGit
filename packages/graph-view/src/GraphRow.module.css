@@ -147,9 +147,9 @@
   font-size: 12px;
 }
 
-/* 띠 색: 저장소 색 번호의 레인 토큰을 배경에 옅게 섞은 불투명한 면 (전용 토큰 없음, LF-09).
+/* 띠 색: 저장소 전용 팔레트 색을 배경에 옅게 섞은 불투명한 면.
    hover·선택 배경에 물들지 않아 이름 글자(--fg)의 대비가 일정하다 — 섞는 비율을 바꾸면
-   __tests__/repo-strip-contrast.test.ts 가 레인 10색 × 두 테마의 대비(4.5:1)를 다시 계산한다 */
+   기존 레인 폴백과 repository-colors.test의 생성 팔레트 대비를 함께 확인한다 */
 .repoTinted {
   background: color-mix(in srgb, var(--repo-color) 30%, var(--bg));
 }

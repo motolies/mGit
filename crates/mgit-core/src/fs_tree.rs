@@ -66,7 +66,7 @@ const ECHO_MAX_CHARS: usize = 200;
 type Reason = (&'static str, &'static str);
 /// `.git` 거부 사유 (어휘 검증의 문구와 같다)
 const DOT_GIT_REASON: Reason = (
-    "`.git` 안은 다루지 않습니다",
+    "`.git` 내부에는 접근할 수 없습니다",
     "Paths inside `.git` are not allowed",
 );
 /// 루트 밖 거부 사유

@@ -246,7 +246,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
       }),
     )['view.toolPullRequests'];
     expect(gitlab?.enabled).toBe(true);
-    expect(gitlab?.title).toBe(S.actions.toolPullRequests('Merge Requests'));
+    expect(gitlab?.title).toBe(S.actions.toolPullRequests('병합 요청'));
     // 사용자 재지정 키가 적용된다 (WS-20)
     expect(
       byId(
@@ -792,15 +792,15 @@ describe('팔레트·단축키 대화상자의 제목 정리 (W27) — 동작 id
       log: titles['view.log'],
     }).toEqual({
       graphFilter: '포커스: 로그 필터',
-      focusSidebar: 'Project 도구 창',
+      focusSidebar: '프로젝트 도구 창',
       focusGraph: '포커스: Git 로그',
       focusDetail: '포커스: Git 로그 상세',
       log: 'Git 콘솔 열기/닫기',
     });
     // 그대로 둔 제목: 뜻이 바뀌지 않았다 (⌘F 찾기·⌘0·⌘2·Pull Requests 도구 창)
     expect(titles['view.search']).toBe(S.actions.search);
-    expect(titles['view.toolCommit']).toBe('Commit 도구 창');
-    expect(titles['view.focusEditor']).toBe('포커스: 에디터');
+    expect(titles['view.toolCommit']).toBe('커밋 도구 창');
+    expect(titles['view.focusEditor']).toBe('포커스: 편집기');
   });
 
   it('동작 id·순서와 모든 기본 키가 그대로다', () => {

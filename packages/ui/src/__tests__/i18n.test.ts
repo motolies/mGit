@@ -164,7 +164,7 @@ describe('언어 전환 (setStringsLocale)', () => {
     setStringsLocale('ko');
     expect(S).toBe(ko);
     expect(getLocale()).toBe('ko');
-    expect(S.status.loaded(12_345)).toBe('commit 12,345개');
+    expect(S.status.loaded(12_345)).toBe('커밋 12,345개');
   });
 
   it('영어 상대 날짜·날짜 포맷: S.date 를 넘긴 formatCommitDate·formatFileDate', () => {

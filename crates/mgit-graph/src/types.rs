@@ -22,7 +22,7 @@ pub struct LayoutOptions<K = Oid> {
     /// `Some(N)`: 부모가 N행보다 아래면 레인을 잡지 않고 스텁(`Stub`)으로 접는다
     pub collapse_long_edges: Option<u32>,
     /// 새 레인의 기본 색. `ref_colors` 에 없을 때 쓰고, 없으면 팔레트 순환
-    pub lane_color: Option<fn(&K) -> u8>,
+    pub lane_color: Option<fn(&K) -> u16>,
 }
 
 impl<K> Default for LayoutOptions<K> {
@@ -63,7 +63,7 @@ pub fn branch_color(name: &str) -> u8 {
 #[serde(rename_all = "camelCase")]
 pub struct RowLane {
     pub lane: u16,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 닫힌 레인 구간. `start..=end` 행에서 레인 `lane` 을 세로선이 지나간다
@@ -74,7 +74,7 @@ pub struct Segment {
     pub start: u32,
     /// inclusive
     pub end: u32,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 인접 행 대각선. 항상 `top_row` → `top_row + 1`.
@@ -85,7 +85,7 @@ pub struct Edge {
     pub top_row: u32,
     pub top_lane: u16,
     pub bottom_lane: u16,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 접힌 긴 엣지의 방향
@@ -108,7 +108,7 @@ pub struct Stub<K = Oid> {
     pub other_row: Option<u32>,
     /// 상대 커밋 (Down 은 부모, Up 은 자식)
     pub other: K,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 윈도용 스텁 (상대 키 제외)
@@ -119,7 +119,7 @@ pub struct WindowStub {
     pub lane: u16,
     pub dir: StubDir,
     pub other_row: Option<u32>,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 스트리밍 중 아직 닫히지 않은 레인 (테스트·브루트포스 비교용)
@@ -127,7 +127,7 @@ pub struct WindowStub {
 pub struct OpenLane {
     pub lane: u16,
     pub seg_start: u32,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// 윈도에 클립된 구간. `continues_up/down` 은 윈도 밖으로 이어지는지
@@ -138,7 +138,7 @@ pub struct WindowSegment {
     pub from_row: u32,
     /// inclusive
     pub to_row: u32,
-    pub color: u8,
+    pub color: u16,
     pub continues_up: bool,
     pub continues_down: bool,
 }
@@ -150,7 +150,7 @@ pub struct WindowEdge {
     pub top_row: u32,
     pub top_lane: u16,
     pub bottom_lane: u16,
-    pub color: u8,
+    pub color: u16,
 }
 
 /// `[start, start+rows.len())` 범위의 레이아웃

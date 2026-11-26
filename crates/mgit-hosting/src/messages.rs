@@ -10,18 +10,24 @@ pub(crate) fn http(error: &reqwest::Error) -> String {
 
 /// 권한이 없다 (`detail` 은 서버가 준 사유)
 pub(crate) fn forbidden(detail: &str) -> String {
-    tr!("권한 없음: {detail}", "Permission denied: {detail}")
+    tr!(
+        "접근 권한이 없습니다: {detail}",
+        "Permission denied: {detail}"
+    )
 }
 
 /// 대상을 찾지 못했다
 pub(crate) fn not_found(detail: &str) -> String {
-    tr!("찾을 수 없음: {detail}", "Not found: {detail}")
+    tr!(
+        "요청한 항목을 찾을 수 없습니다: {detail}",
+        "Not found: {detail}"
+    )
 }
 
 /// 요청 한도를 넘었다
 pub(crate) fn rate_limited(retry_after: &u64) -> String {
     tr!(
-        "요청 한도 초과. {retry_after}초 뒤 다시 시도하세요",
+        "요청 한도를 초과했습니다. {retry_after}초 후에 다시 시도하세요.",
         "Rate limit exceeded. Try again in {retry_after} seconds"
     )
 }
@@ -37,12 +43,15 @@ pub(crate) fn status(status: &u16, body: &str) -> String {
 /// 응답 본문을 해석하지 못했다
 pub(crate) fn parse(detail: &str) -> String {
     tr!(
-        "응답 해석 실패: {detail}",
+        "서버 응답을 해석하지 못했습니다: {detail}",
         "Failed to parse response: {detail}"
     )
 }
 
 /// 프로젝트 이름이 `owner/repo` 꼴이 아니다
 pub(crate) fn bad_project(project: &str) -> String {
-    tr!("잘못된 프로젝트: {project}", "Invalid project: {project}")
+    tr!(
+        "올바르지 않은 프로젝트 경로입니다: {project}",
+        "Invalid project: {project}"
+    )
 }

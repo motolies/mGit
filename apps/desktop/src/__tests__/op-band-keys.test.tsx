@@ -176,7 +176,7 @@ describe('작업 진행 띠의 키보드 (W27 — 폴더 띠 여러 줄)', () =>
     }
     // 줄 이름·단추 설명은 그대로 (W19 ③)
     expect(groups()[0]?.getAttribute('aria-labelledby')?.split(' ')).toHaveLength(2);
-    expect(button(0, 'Abort').getAttribute('aria-describedby')).toBeTruthy();
+    expect(button(0, S.op.abort).getAttribute('aria-describedby')).toBeTruthy();
   });
 
   it('줄 안 ←→ 는 꺼진 단추를 건너뛰고 끝에서 돈다. Home·End 는 그 줄의 처음·끝', () => {

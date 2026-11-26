@@ -186,7 +186,7 @@ describe('branch 드롭다운 = 옛 "표시할 ref" (W26)', () => {
     await act(async () => {
       await st().setGraphQuery({ ...st().graphQuery, revs: { kind: 'solo', name: 'origin/main' } });
     });
-    expect(dropButton(S.filterBar.branch).textContent).toBe('branch: origin/main');
+    expect(dropButton(S.filterBar.branch).textContent).toBe('브랜치: origin/main');
     act(() => fireEvent.click(dropButton(S.filterBar.branch)));
     const options = within(popover() as HTMLElement).getAllByRole('option');
     expect(options[0]?.textContent).toBe(S.branches.head);
@@ -201,7 +201,9 @@ describe('branch 드롭다운 = 옛 "표시할 ref" (W26)', () => {
     });
     await tick();
     expect(st().graphQuery.revs).toEqual({ kind: 'head' });
-    expect(dropButton(S.filterBar.branch).textContent).toBe(`branch: ${S.branches.head}`);
+    expect(dropButton(S.filterBar.branch).textContent).toBe(
+      `${S.filterBar.branch}: ${S.branches.head}`,
+    );
   });
 
   it('"ref 이름 입력…" 은 옛 대화상자 그대로다 (제목·필드·처음 값 = 현재 branch). 여럿이면 branches, 취소하면 그대로', async () => {

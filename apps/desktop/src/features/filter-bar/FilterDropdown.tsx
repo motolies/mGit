@@ -5,6 +5,7 @@ import {
   isImeKey,
   Popover,
   type PopoverCloseReason,
+  repositoryColor,
   S,
 } from '@mgit/ui';
 import {
@@ -491,7 +492,7 @@ function Checklist({
               {o.color !== undefined && o.color !== null ? (
                 <span
                   className={styles.swatch}
-                  style={{ '--repo-color': `var(--graph-lane-${o.color})` } as CSSProperties}
+                  style={{ '--repo-color': repositoryColor(o.color) } as CSSProperties}
                   aria-hidden="true"
                 />
               ) : null}

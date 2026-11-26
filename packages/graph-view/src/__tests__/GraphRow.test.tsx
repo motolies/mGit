@@ -118,7 +118,9 @@ describe('로그 행의 칸 (LG-01)', () => {
     const strip = named.el.firstElementChild as HTMLElement;
     expect(strip.textContent).toBe('api-gateway');
     // 색은 데이터가 준 번호의 레인 토큰이다 (LF-09)
-    expect(strip.style.getPropertyValue('--repo-color')).toBe('var(--graph-lane-3)');
+    expect(strip.style.getPropertyValue('--repo-color')).toBe(
+      'var(--repo-color-3, var(--graph-lane-3))',
+    );
     cleanup();
 
     const plain = renderRow({ row: graphRow({ repo: 0 }), columns, repoOf, showRepoName: false });
@@ -126,7 +128,9 @@ describe('로그 행의 칸 (LG-01)', () => {
     expect(quiet.textContent).toBe('');
     // 글자가 없는 행에서도 툴팁으로는 저장소를 알 수 있다
     expect(quiet.getAttribute('title')).toBe('api-gateway');
-    expect(quiet.style.getPropertyValue('--repo-color')).toBe('var(--graph-lane-3)');
+    expect(quiet.style.getPropertyValue('--repo-color')).toBe(
+      'var(--repo-color-3, var(--graph-lane-3))',
+    );
   });
 
   it('띠 열을 켜지 않으면 띠 칸이 없다 (단일 저장소)', () => {

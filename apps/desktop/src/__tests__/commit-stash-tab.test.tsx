@@ -455,13 +455,13 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
         .getAllByRole('button')
         .slice(0, 3)
         .map((b) => b.textContent),
-    ).toEqual(['apply', 'pop (적용 후 삭제)', 'drop…']);
+    ).toEqual(['적용', '적용 후 삭제', '스태시 삭제…']);
     expect(stashDetail()?.querySelector('pre')?.textContent).toBe(
       'On hotfix/payment-timeout: 브랜치 전환 전 자동 보관',
     );
     expect([...(stashDetail()?.querySelectorAll('dt') ?? [])].map((d) => d.textContent)).toEqual([
       S.detail.author,
-      'branch',
+      '브랜치',
       '경로',
     ]);
     const dds = [...(stashDetail()?.querySelectorAll('dd') ?? [])];
@@ -496,7 +496,7 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
     const { st } = await mountRepo('repo', { commitTab: 'stash' });
     fireEvent.contextMenu(rows()[1] as HTMLElement);
     await tick();
-    expect(menuLabels()).toEqual(['내용 보기', 'apply', 'pop (적용 후 삭제)', 'drop…']);
+    expect(menuLabels()).toEqual(['내용 보기', '적용', '적용 후 삭제', '스태시 삭제…']);
     const items = [...(document.querySelector('[role="menu"]')?.children ?? [])].map((c) =>
       c.getAttribute('role'),
     );
@@ -532,7 +532,7 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
     expect(cursor()).toBe(rows()[0]?.id);
     act(() => fireEvent.keyDown(list, { key: 'F10', shiftKey: true }));
     await tick();
-    expect(menuLabels()).toEqual(['내용 보기', 'apply', 'pop (적용 후 삭제)', 'drop…']);
+    expect(menuLabels()).toEqual(['내용 보기', '적용', '적용 후 삭제', '스태시 삭제…']);
   });
 
   it('+ 저장: 옛 대화상자(메시지·untracked 기본 켜짐·staged 만) → stashPush(null, true, false, []). 취소하면 부르지 않는다', async () => {
@@ -540,18 +540,18 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
     const push = vi.fn(async () => {});
     act(() => store.setState({ stashPush: push }));
     const plus = commit().getByRole('button', { name: S.stash.save });
-    expect(plus.title).toBe('stash 저장…');
+    expect(plus.title).toBe('스태시 저장…');
     fireEvent.click(plus);
     await tick();
-    expect(dialog()?.querySelector('h2')?.textContent).toBe('stash 저장');
+    expect(dialog()?.querySelector('h2')?.textContent).toBe('스태시 저장');
     const inputs = [...(dialog()?.querySelectorAll('input') ?? [])];
     expect(inputs.map((i) => [i.type, i.checked])).toEqual([
       ['text', false],
       ['checkbox', true],
       ['checkbox', false],
     ]);
-    expect(dialog()?.textContent).toContain('untracked 파일 포함');
-    expect(dialog()?.textContent).toContain('stage 된 변경만 (--staged)');
+    expect(dialog()?.textContent).toContain('미추적 파일 포함');
+    expect(dialog()?.textContent).toContain('스테이징된 변경만 (--staged)');
     fireEvent.click(
       within(dialog() as HTMLElement).getByRole('button', { name: S.confirm.cancel }),
     );
@@ -574,8 +574,8 @@ describe('Stash 탭 (옛 사이드바 스태시 섹션 + 옛 상세 칸의 Stash
       within(stashDetail() as HTMLElement).getByRole('button', { name: S.stash.drop });
     fireEvent.click(dropButton());
     await tick();
-    expect(dialog()?.querySelector('h2')?.textContent).toBe('stash@{1} 을(를) 지울까요?');
-    expect(dialog()?.textContent).toContain('지운 stash 는 되돌릴 수 없습니다.');
+    expect(dialog()?.querySelector('h2')?.textContent).toBe('stash@{1}을(를) 지울까요?');
+    expect(dialog()?.textContent).toContain('지운 스태시는 되돌릴 수 없습니다.');
     expect(within(dialog() as HTMLElement).getByRole('button', { name: '삭제' })).toBeTruthy();
     // 위험 확인창은 취소 단추에서 시작한다
     expect(document.activeElement?.textContent).toBe(S.confirm.cancel);

@@ -89,7 +89,7 @@ const OLD_ROWS: [string, string, [string, string | null, string | null][], strin
     '#127',
     '장바구니 합계 계산을 서버로 옮기기',
     [
-      ['draft', null, null],
+      [S.pr.draftBadge, null, null],
       ['리뷰 필요', null, null],
       ['…', 'pending', null],
     ],
@@ -124,7 +124,7 @@ const OLD_ROWS: [string, string, [string, string | null, string | null][], strin
   ],
 ];
 /** 옛 우클릭 메뉴 (라벨 순서, 구분선은 셋째 항목 앞) */
-const OLD_MENU = ['branch 로 체크아웃', '새 워크트리로 체크아웃…', '브라우저에서 열기'];
+const OLD_MENU = [S.pr.checkout, S.pr.checkoutWorktree, S.pr.openWeb];
 
 const originalApp = (() => {
   const s = useAppStore.getState();
@@ -372,7 +372,7 @@ describe('구조 (순수 함수 — 옛 PR 섹션 대조)', () => {
         (b) => [b.kind, b.text, b.title ?? null, b.tone],
       ),
     ).toEqual([
-      ['draft', 'draft', null, null],
+      ['draft', S.pr.draftBadge, null, null],
       ['review', '승인됨', null, 'success'],
       ['checks', '✓', 'success', 'success'],
       ['conflict', '충돌', null, 'danger'],
@@ -557,9 +557,9 @@ describe('왼쪽 띠와 도구 창 자리 (WS-17, WS-05)', () => {
 
   it('GitLab 이면 단추·도구 창·목록의 이름이 Merge Requests 다', async () => {
     await mountRepo({ hosting: 'gitlab' });
-    expect(stripeLabels()).toContain('Merge Requests');
-    expect(header().textContent).toBe('Merge Requests6');
-    expect(list().getAttribute('aria-label')).toBe('Merge Requests');
+    expect(stripeLabels()).toContain('병합 요청');
+    expect(header().textContent).toBe(`${S.pr.title('gitlab')}6`);
+    expect(list().getAttribute('aria-label')).toBe('병합 요청');
   });
 
   it('계정이 없어도 원격 프로젝트가 있으면 단추가 있다 (도구 창 안에서 계정 연결을 안내한다)', async () => {
@@ -637,7 +637,7 @@ describe('왼쪽 띠와 도구 창 자리 (WS-17, WS-05)', () => {
     await mountRepo({ leftTool: 'project' });
     act(() => useAppStore.getState().setPaletteOpen(true));
     await tick();
-    const item = screen.getByRole('option', { name: S.actions.toolPullRequests('Pull Requests') });
+    const item = screen.getByRole('option', { name: S.actions.toolPullRequests('풀 리퀘스트') });
     // 기본 키가 없으므로 단축키 표시가 없다
     expect(item.querySelector('kbd')).toBeNull();
     act(() => fireEvent.click(item));
@@ -651,7 +651,7 @@ describe('왼쪽 띠와 도구 창 자리 (WS-17, WS-05)', () => {
 describe('Pull Requests 도구 창 (옛 섹션 대조)', () => {
   it('머리: 제목 + 개수, 단추 [새로고침, 만들기…] (머리 높이·모양은 Commit 도구 창과 같은 틀). 행: 번호·제목·배지·작성자·툴팁', async () => {
     await mountRepo();
-    expect(header().textContent).toBe('Pull Requests6');
+    expect(header().textContent).toBe(`${S.pr.title('github')}6`);
     expect(
       within(header())
         .getAllByRole('button')
@@ -795,7 +795,7 @@ describe('Pull Requests 도구 창 (옛 섹션 대조)', () => {
 
   it('상태: 계정 없음(안내 + "계정 연결…" → 계정 대화상자, 머리 단추 없음, 읽지 않음)', async () => {
     const { calls } = await mountRepo({ hosting: 'noAccount' });
-    expect(header().textContent).toBe('Pull Requests0');
+    expect(header().textContent).toBe(`${S.pr.title('github')}0`);
     expect(within(header()).queryAllByRole('button')).toEqual([]);
     expect(area('pull-requests')?.textContent).toContain(S.pr.noAccount);
     expect(calls.pullRequests).not.toHaveBeenCalled();
@@ -808,7 +808,7 @@ describe('Pull Requests 도구 창 (옛 섹션 대조)', () => {
     expect(prTool().getByRole('alert').textContent).toBe(
       'GitHub API 요청이 실패했습니다 (401 Bad credentials)',
     );
-    expect(header().textContent).toBe('Pull Requests0');
+    expect(header().textContent).toBe(`${S.pr.title('github')}0`);
     act(() => store.setState({ prsError: null, prsLoading: true }));
     expect(area('pull-requests')?.textContent).toContain(S.pr.loading);
     act(() => store.setState({ prsLoading: false }));

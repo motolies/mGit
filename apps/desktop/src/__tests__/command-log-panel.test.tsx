@@ -157,7 +157,7 @@ describe('콘솔 줄 뷰 (CommandLogView, 저장소 탭·폴더 탭 공용)', ()
     expect(chip.title).toBe(S.log.narrowTip('web-console'));
     expect(
       (chip.querySelector('span[style]') as HTMLElement).style.getPropertyValue('--repo-color'),
-    ).toBe('var(--graph-lane-7)');
+    ).toBe('var(--repo-color-7, var(--graph-lane-7))');
     // 워크트리에서 돈 명령은 실제 작업 디렉터리를 툴팁에 더한다
     expect(
       within(fetched as HTMLElement).getByRole('button', { name: 'web-console' }).title,

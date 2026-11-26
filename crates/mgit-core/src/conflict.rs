@@ -222,12 +222,12 @@ impl Core {
                     .unwrap_or_default();
                 SideLabels {
                     ours: tr!(
-                        "{onto_name} (rebase 대상, 현재 결과)",
+                        "{onto_name} (리베이스 대상, 현재 결과)",
                         "{onto_name} (rebase target, current result)"
                     ),
                     base: "base".into(),
                     theirs: tr!(
-                        "{mine} (적용 중인 내 commit{applying})",
+                        "{mine} (적용 중인 내 커밋{applying})",
                         "{mine} (my commit being applied{applying})"
                     ),
                 }
@@ -326,7 +326,12 @@ impl Core {
             )
             .await?;
             payload.doc = Some(parse_markers(&merged, EDITOR_MARKER_SIZE as usize).map_err(
-                |e| CoreError::Invalid(tr!("마커 파싱 실패: {e}", "Failed to parse markers: {e}")),
+                |e| {
+                    CoreError::Invalid(tr!(
+                        "충돌 마커를 해석하지 못했습니다: {e}",
+                        "Failed to parse markers: {e}"
+                    ))
+                },
             )?);
             payload.auto = payload.doc.as_ref().map(classify_doc).unwrap_or_default();
             // git 이 작업 트리에 써 둔 자동 병합 결과와 같으면 아직 손대지 않은 것이다
@@ -398,7 +403,7 @@ impl Core {
             .any(|f| f.path == path && f.binary);
         if is_link || side_pick_only {
             return Err(CoreError::Invalid(tr!(
-                "편집기로 저장할 수 없는 파일입니다. 한쪽을 고르세요: {path}",
+                "편집기에서 저장할 수 없는 파일입니다. 사용할 쪽을 선택하세요: {path}",
                 "This file cannot be saved from the editor. Choose a side: {path}"
             )));
         }
@@ -466,7 +471,7 @@ impl Core {
         };
         let Some((mode, oid)) = chosen else {
             return Err(CoreError::Invalid(tr!(
-                "고른 쪽에 서브모듈이 없습니다: {path}",
+                "선택한 쪽에 서브모듈이 없습니다: {path}",
                 "The chosen side has no submodule: {path}"
             )));
         };

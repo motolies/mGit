@@ -102,7 +102,7 @@ export interface MockFolderCommits {
 export interface MockTimelineRepo {
   name: string;
   path: string;
-  /** 저장소 색 번호 (코어의 순번 % 10 흉내) */
+  /** 저장소 색 번호 (코어의 저장소 순번) */
   color: number;
   /** 현재 브랜치. 분리 HEAD 면 null */
   headBranch: string | null;
@@ -759,9 +759,6 @@ function scaledAuthors(count: number): [string, string][] {
   ]);
 }
 
-/** 팔레트 크기 (코어 `PALETTE_SIZE`) */
-const PALETTE_SIZE = 10;
-
 /** 타임라인 저장소의 `depth` 번째 커밋 oid (질의가 바뀌어도 같은 커밋은 같은 oid) */
 function timelineCommitOid(repo: number, depth: number, seed: number): string {
   return oidOf((repo + 1) * 1_000_003 + depth, seed);
@@ -769,7 +766,7 @@ function timelineCommitOid(repo: number, depth: number, seed: number): string {
 
 /**
  * 저장소 이름 → 순번 (코어의 폴더 세션 흉내): 타임라인에 드는 저장소가 차례로 번호를 받고
- * 워크트리는 원 저장소의 번호를 쓴다. 색은 순번 % 10 이고 요약·브랜치·타임라인이 같은 값을 쓴다
+ * 워크트리는 원 저장소의 번호를 쓴다. 색 슬롯은 순번이고 요약·브랜치·타임라인이 같은 값을 쓴다
  */
 function folderOrdinals(specs: readonly FolderRepoSpec[]): Map<string, number> {
   const ordinals = new Map<string, number>();
@@ -864,7 +861,7 @@ function folderData(
   const ordinals = folderOrdinals(repos);
   const commitFiles = countOf(scale.commitFiles);
   const authors = countOf(scale.authors);
-  const colorOf = (spec: FolderRepoSpec) => (ordinals.get(spec.name) ?? 0) % PALETTE_SIZE;
+  const colorOf = (spec: FolderRepoSpec) => ordinals.get(spec.name) ?? 0;
   /** 저장소 하나의 집계. 요약과 변경 보기가 같은 수를 쓴다 */
   const summaryOf = (spec: FolderRepoSpec) =>
     summarize(

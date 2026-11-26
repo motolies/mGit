@@ -332,7 +332,7 @@ describe('머리 메뉴 (⋮) — 펼치지 않아도 닿게', () => {
     expect(batch).not.toHaveBeenCalled();
     // 접힌 vendor/ 안의 서브모듈: 고르면 펼쳐져 그 행이 골라진다
     expect(st().fileTree.getState().expanded.vendor).toBeUndefined();
-    await pick('vendor/payment-sdk · commit 다름');
+    await pick(`vendor/payment-sdk · ${S.submodule.status.mismatch}`);
     await tick();
     expect(st().fileTree.getState().expanded.vendor).toBe(true);
     expect(st().fileTree.getState().selected).toBe('vendor/payment-sdk');
@@ -461,7 +461,7 @@ describe('행 장식과 행 메뉴', () => {
     await revealInTree(st as never, 'vendor/payment-sdk');
     const row = () => prow(st as never, 'vendor/payment-sdk');
     expect(row().textContent).toContain(S.folder.kind.submodule);
-    expect(row().textContent).toContain('commit 다름');
+    expect(row().textContent).toContain('커밋 다름');
     // ⇧F10 = 고른 행의 메뉴 (reveal 이 그 행을 골랐다)
     act(() => tree().focus());
     act(() => {

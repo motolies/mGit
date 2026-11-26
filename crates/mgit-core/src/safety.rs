@@ -138,7 +138,7 @@ impl CoreInner {
     ) -> Result<RefRollback, CoreError> {
         let current = self.snapshot(session).await.ok_or_else(|| {
             CoreError::Invalid(
-                pick("ref 상태를 읽지 못했습니다", "Could not read ref state").into(),
+                pick("참조 상태를 읽지 못했습니다", "Could not read ref state").into(),
             )
         })?;
         let plan = RefSnapshot::rollback_plan(from, to, &current);
@@ -414,7 +414,7 @@ impl Core {
     pub async fn backup_delete(&self, session: SessionId, backup: &str) -> Result<(), CoreError> {
         if !backup.starts_with(BACKUP_NS) {
             return Err(CoreError::Invalid(
-                pick("백업 ref 가 아닙니다", "Not a backup ref").into(),
+                pick("백업 참조가 아닙니다", "Not a backup ref").into(),
             ));
         }
         self.run_write(
@@ -605,7 +605,7 @@ impl Core {
         if age.as_secs() < 60 {
             return Err(CoreError::Invalid(
                 pick(
-                    "index.lock 이 방금 만들어졌습니다. 다른 git 명령이 끝나길 기다리세요",
+                    "index.lock이 최근 생성되었습니다. 다른 Git 명령이 끝날 때까지 기다리세요.",
                     "index.lock was just created. Wait for the other git command to finish",
                 )
                 .into(),

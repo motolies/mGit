@@ -105,7 +105,7 @@ describe('보기 옵션 메뉴 = 옛 "옵션 ▾" + 옛 필터 바의 원격 숨
       '커밋 날짜순',
       '옵션',
       '첫 부모만',
-      '머지 제외',
+      '병합 커밋 제외',
     ]);
     expect([o.collapseLongEdges, o.pinHead, o.refColors, o.dimOffHead, S.actions.columns]).toEqual([
       '긴 엣지 접기',
@@ -191,7 +191,7 @@ describe('보기 옵션 메뉴 = 옛 "옵션 ▾" + 옛 필터 바의 원격 숨
         firstParent: true,
         noMerges: true,
       }),
-    ).toEqual(['날짜순', '원격 숨김', '첫 부모만', '머지 제외']);
+    ).toEqual(['날짜순', '원격 숨김', '첫 부모만', '병합 커밋 제외']);
     // 조건(ref·경로·텍스트)과 레이아웃 설정은 보기 옵션이 아니다
     expect(changedViewOptions(withPaths({ ...Q, revs: { kind: 'head' } }, ['src']))).toEqual([]);
   });

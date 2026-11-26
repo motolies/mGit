@@ -139,12 +139,15 @@ it.each(['keyboard', 'button'])(
   '%s 시작 후 F7 반복은 비동기 파일 전환을 이어간다',
   async (start) => {
     const client = createNullClient();
-    client.compareRefs = async () =>
-      ['a.txt', 'b.txt', 'c.txt'].map((path) => ({
+    let refreshGate: Promise<void> | null = null;
+    client.compareRefs = async () => {
+      if (refreshGate) await refreshGate;
+      return ['a.txt', 'b.txt', 'c.txt'].map((path) => ({
         path,
         oldPath: null,
         change: { kind: 'modified' as const },
       }));
+    };
     client.compareFileDiffDocument = async (_session, _a, _b, _three, path) => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       return documentOf({
@@ -203,6 +206,21 @@ it.each(['keyboard', 'button'])(
     try {
       const target = doc();
       const mounted = render(<ComparisonDoc doc={target} />);
+      /** 갱신의 로딩 구간을 확정해 준비 전 화면을 준비 완료로 오인하지 않는다. */
+      const refresh = async () => {
+        let release = () => {};
+        refreshGate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        state.repo.status = {};
+        mounted.rerender(<ComparisonDoc doc={target} />);
+        await waitFor(() => expect(screen.queryByRole('grid', { name: 'b.txt' })).toBeNull());
+        await act(async () => {
+          release();
+        });
+        await screen.findByRole('grid', { name: 'b.txt' });
+        refreshGate = null;
+      };
       const first = await screen.findByRole('grid', { name: 'a.txt' });
       act(() => first.focus());
       if (start === 'keyboard') fireEvent.keyDown(document.activeElement ?? first, { key: 'F7' });
@@ -220,8 +238,7 @@ it.each(['keyboard', 'button'])(
         expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
       );
       // Git 감시 갱신으로 같은 파일을 다시 읽어도 F7의 포커스 대상이 사라지지 않는다.
-      state.repo.status = {};
-      mounted.rerender(<ComparisonDoc doc={target} />);
+      await refresh();
       await waitFor(() =>
         expect(document.activeElement).toBe(screen.getByRole('grid', { name: 'b.txt' })),
       );
@@ -236,9 +253,7 @@ it.each(['keyboard', 'button'])(
       const outside = document.createElement('input');
       document.body.append(outside);
       act(() => outside.focus());
-      state.repo.status = {};
-      mounted.rerender(<ComparisonDoc doc={target} />);
-      await screen.findByRole('grid', { name: 'b.txt' });
+      await refresh();
       expect(document.activeElement).toBe(outside);
       outside.remove();
     } finally {

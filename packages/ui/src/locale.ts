@@ -4,9 +4,9 @@
 /** 지원하는 UI 언어 */
 export type Locale = 'ko' | 'en';
 
-let current: Locale = 'ko';
+let current: Locale = 'en';
 
-/** 지금 UI 언어 (기본 `'ko'`) */
+/** 지금 UI 언어 (기본 `'en'`) */
 export function getLocale(): Locale {
   return current;
 }

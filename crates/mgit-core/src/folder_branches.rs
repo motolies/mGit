@@ -25,7 +25,7 @@ pub struct FolderBranchRepo {
     pub path: PathBuf,
     pub name: String,
     /// 저장소 색 번호 (요약·타임라인과 같은 값)
-    pub color: u8,
+    pub color: u16,
     /// HEAD: 현재 브랜치, detached(커밋), 또는 커밋 없음. 읽지 못했으면 `None`
     pub head: Option<HeadState>,
     /// ref 를 읽지 못한 이유
@@ -37,7 +37,7 @@ pub struct FolderBranchRepo {
 #[serde(rename_all = "camelCase")]
 pub struct FolderBranchIn {
     pub path: PathBuf,
-    pub color: u8,
+    pub color: u16,
     /// 이 저장소에서 현재 브랜치인지
     pub current: bool,
     /// 업스트림의 짧은 이름 (`origin/main`). 로컬 브랜치에만 있다

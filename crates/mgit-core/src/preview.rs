@@ -133,7 +133,7 @@ fn check_strategy(opts: &[String]) -> Result<(), CoreError> {
             );
         if !ok {
             return Err(CoreError::Invalid(tr!(
-                "지원하지 않는 병합 옵션: {o}",
+                "지원하지 않는 병합 옵션입니다: {o}",
                 "Unsupported merge option: {o}"
             )));
         }
@@ -537,7 +537,7 @@ impl Core {
         let Some(base) = self.head_branch_name(session) else {
             return Err(CoreError::Invalid(
                 pick(
-                    "detached HEAD 에서는 격리 병합을 시작할 수 없습니다",
+                    "분리된 HEAD 상태에서는 격리 병합을 시작할 수 없습니다",
                     "Cannot start an isolated merge on a detached HEAD",
                 )
                 .into(),
@@ -658,10 +658,10 @@ impl Core {
         let s = inner.get(session)?;
         // 아래에서 워크트리를 --force 로 지우므로 끝나지 않은 merge·미커밋 변경이 있으면 멈춘다
         if inner.read_op(&s).await?.is_some() {
-            return Err(CoreError::Invalid(pick("격리 merge 가 끝나지 않았습니다. 충돌을 해결하고 commit 한 뒤 반영하세요", "The isolated merge is not finished. Resolve the conflicts and commit, then apply").into()));
+            return Err(CoreError::Invalid(pick("격리 병합이 완료되지 않았습니다. 충돌을 해결하고 커밋한 뒤 반영하세요.", "The isolated merge is not finished. Resolve the conflicts and commit, then apply").into()));
         }
         if inner.read_status(&s, true).await?.summary().has_changes() {
-            return Err(CoreError::Invalid(pick("격리 워크트리에 커밋하지 않은 변경이 있습니다. commit 하거나 지운 뒤 반영하세요", "The isolated worktree has uncommitted changes. Commit or discard them, then apply").into()));
+            return Err(CoreError::Invalid(pick("격리 워크트리에 커밋하지 않은 변경이 있습니다. 변경을 커밋하거나 폐기한 뒤 반영하세요.", "The isolated worktree has uncommitted changes. Commit or discard them, then apply").into()));
         }
         // 메인 워크트리가 시작한 브랜치에 있어야 한다. 아니면 엉뚱한 브랜치가 fast-forward 된다
         let started = config_get(inner.runner(), &main, &isolated_base_key(&branch)).await;
@@ -669,7 +669,7 @@ impl Core {
         let current = current.branch().map(short_branch);
         if started.is_none() || started.as_deref() != current {
             return Err(CoreError::Invalid(tr!(
-                "격리 병합은 {} 에서 시작했는데 메인 워크트리는 {} 입니다. 메인 워크트리를 시작한 브랜치로 옮긴 뒤 반영하세요",
+                "격리 병합을 시작한 브랜치({})와 메인 워크트리의 현재 브랜치({})가 다릅니다. 메인 워크트리를 원래 브랜치로 전환한 뒤 반영하세요.",
                 "The isolated merge started from {} but the main worktree is on {}. Switch the main worktree to the starting branch, then apply",
                 started
                     .as_deref()
@@ -692,7 +692,7 @@ impl Core {
         let out = inner.runner().run(req).await?;
         if !out.exit.success() {
             return Err(CoreError::Invalid(tr!(
-                "메인 branch 에 반영하지 못했습니다 (ff-only): {}",
+                "메인 브랜치에 반영하지 못했습니다 (ff-only): {}",
                 "Could not apply to the main branch (ff-only): {}",
                 out.exit.stderr.trim()
             )));

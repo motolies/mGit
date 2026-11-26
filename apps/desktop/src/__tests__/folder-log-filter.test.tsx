@@ -163,7 +163,7 @@ describe('브랜치 트리 ↔ branch 드롭다운 (같은 상태: 질의의 ref
     const { store } = await setup();
     act(() => fireEvent.click(treeRow('ref:refs/heads/main')));
     await tick();
-    expect(dropButton(S.filterBar.branch).textContent).toBe('branch: main');
+    expect(dropButton(S.filterBar.branch).textContent).toBe('브랜치: main');
 
     act(() => fireEvent.click(dropButton(S.filterBar.branch)));
     expect(option('main').getAttribute('aria-selected')).toBe('true');
@@ -178,7 +178,7 @@ describe('브랜치 트리 ↔ branch 드롭다운 (같은 상태: 질의의 ref
     act(() =>
       fireEvent.click(
         within(logPanel()).getByRole('button', {
-          name: S.filterBar.clearCondition('branch: main +1'),
+          name: S.filterBar.clearCondition('브랜치: main +1'),
         }),
       ),
     );

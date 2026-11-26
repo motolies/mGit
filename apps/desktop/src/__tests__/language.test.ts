@@ -54,22 +54,22 @@ describe('언어 선호 저장', () => {
     expect(loadLanguagePreference()).toBe('system');
   });
 
-  it('값이 없거나 모르는 값이면 system', () => {
-    expect(loadLanguagePreference()).toBe('system');
+  it('값이 없거나 모르는 값이면 영어', () => {
+    expect(loadLanguagePreference()).toBe('en');
     for (const raw of ['fr', 'KO', '"en"', '']) {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, raw);
-      expect(loadLanguagePreference(), raw).toBe('system');
+      expect(loadLanguagePreference(), raw).toBe('en');
     }
   });
 
-  it('저장소 접근이 막혀 있으면 읽기는 system, 쓰기는 조용히 넘어간다', () => {
+  it('저장소 접근이 막혀 있으면 읽기는 영어, 쓰기는 조용히 넘어간다', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('denied');
     });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('denied');
     });
-    expect(loadLanguagePreference()).toBe('system');
+    expect(loadLanguagePreference()).toBe('en');
     expect(() => saveLanguagePreference('en')).not.toThrow();
   });
 });
@@ -132,7 +132,7 @@ describe('앱 스토어의 화면 언어', () => {
 
   it("setLanguage('en'): 저장하고 영어 사전·<html lang>·Rust 알림·uiLocale 을 바꾼다", async () => {
     const { store, setLanguage } = setup();
-    expect(store.getState()).toMatchObject({ language: 'system', uiLocale: 'ko' });
+    expect(store.getState()).toMatchObject({ language: 'en', uiLocale: 'ko' });
 
     await store.getState().setLanguage('en');
     expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe('en');
@@ -189,21 +189,27 @@ describe('앱 스토어의 화면 언어', () => {
     expect(systemLocale).toHaveBeenCalledTimes(1);
   });
 
-  it('initLanguage: 저장된 선호가 없으면 OS 로캘을 따르고 Rust 에 알린다', async () => {
-    const { store, setLanguage } = setup({ systemLocale: async () => 'en-US' });
+  it('initLanguage: 한국어 OS에서도 저장된 선택이 없으면 영어이며 OS 조회를 기다리지 않는다', async () => {
+    const { store, setLanguage, systemLocale } = setup();
     await store.getState().initLanguage();
-    expect(store.getState()).toMatchObject({
-      language: 'system',
-      uiLocale: 'en',
-      systemLocale: 'en-US',
-    });
+    expect(store.getState()).toMatchObject({ language: 'en', uiLocale: 'en', systemLocale: null });
+    expect(systemLocale).not.toHaveBeenCalled();
     expect(S.settings.title).toBe('Settings');
+    expect(document.documentElement.lang).toBe('en');
     expect(setLanguage).toHaveBeenCalledWith('en');
-    // 시작할 때는 선호를 저장하지 않는다 (system 그대로 두어 OS 언어를 바꾸면 따라간다)
     expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBeNull();
   });
 
+  it('명시적으로 저장한 시스템 언어 선택은 유지한다', async () => {
+    saveLanguagePreference('system');
+    const { store, setLanguage } = setup();
+    await store.getState().initLanguage();
+    expect(store.getState()).toMatchObject({ language: 'system', uiLocale: 'ko' });
+    expect(setLanguage).toHaveBeenCalledWith('ko');
+  });
+
   it('initLanguage: OS 로캘을 읽지 못하면(null·실패) 영어', async () => {
+    saveLanguagePreference('system');
     const none = setup({ systemLocale: async () => null });
     await none.store.getState().initLanguage();
     expect(none.store.getState().uiLocale).toBe('en');
@@ -216,6 +222,7 @@ describe('앱 스토어의 화면 언어', () => {
   });
 
   it('initLanguage: OS 로캘 읽기가 시간 제한을 넘기면 기다리지 않고 영어로 정한다', async () => {
+    saveLanguagePreference('system');
     const { store, setLanguage } = setup({ systemLocale: () => new Promise(() => {}) });
     await store.getState().initLanguage(10);
     expect(store.getState()).toMatchObject({ uiLocale: 'en', systemLocale: null });

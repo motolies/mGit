@@ -45,6 +45,11 @@ async fn merge_modes_without_conflict() {
         3
     );
 
+    assert_eq!(
+        repo.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge branch 'topic' into main"
+    );
+
     // squash: 커밋 없이 stage 만
     repo.checkout("topic");
     repo.commit("topic 3");
@@ -90,6 +95,17 @@ async fn merge_conflict_then_resolve_and_continue_or_abort() {
         core.op_continue(opened.session, false).await,
         Err(CoreError::ConflictMarkers { .. })
     ));
+    assert!(
+        std::fs::read_to_string(repo.path().join(".git/MERGE_MSG"))
+            .unwrap()
+            .starts_with("Merge branch 'other' into main")
+    );
+    // 충돌 해결 중 사용자가 바꾼 메시지는 continue에서 덮어쓰지 않는다.
+    std::fs::write(
+        repo.path().join(".git/MERGE_MSG"),
+        "Merge reviewed change into main\n",
+    )
+    .unwrap();
     // 해결 후 continue
     repo.write_file("conflict.txt", "line1\nRESOLVED\nline3\n");
     core.stage(opened.session, &["conflict.txt".into()])
@@ -106,6 +122,11 @@ async fn merge_conflict_then_resolve_and_continue_or_abort() {
             .split_whitespace()
             .count(),
         3
+    );
+
+    assert_eq!(
+        repo.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge reviewed change into main"
     );
 
     // abort 경로
@@ -273,5 +294,48 @@ async fn checkout_branch_used_by_other_worktree_gives_hint() {
             assert!(path.ends_with("wt"), "{path}");
         }
         other => panic!("{other:?}: {err}"),
+    }
+}
+
+/// 원격 추적 이름은 전체 ref와 짧은 ref 모두 해시 대신 메시지에 남긴다.
+#[tokio::test]
+async fn remote_merge_messages_keep_branch_names_and_strategy() {
+    for strategy in [false, true] {
+        let core = core().await;
+        let mut repo = build(Scenario::Linear(1));
+        repo.checkout_new("feature/PD-2638-outbound-issue-status");
+        repo.commit("feature");
+        repo.git_ok([
+            "update-ref",
+            "refs/remotes/origin/feature/PD-2638-outbound-issue-status",
+            "HEAD",
+        ]);
+        repo.checkout("main");
+        repo.checkout_new("staging");
+        let (sink, mut rx) = collector();
+        let opened = core.open_repo(repo.path(), sink).await.unwrap();
+        wait_finished(&mut rx, opened.session).await;
+        if strategy {
+            core.merge_with(
+                opened.session,
+                "origin/feature/PD-2638-outbound-issue-status",
+                MergeMode::NoFf,
+                &[],
+            )
+            .await
+            .unwrap();
+        } else {
+            core.merge(
+                opened.session,
+                "refs/remotes/origin/feature/PD-2638-outbound-issue-status",
+                MergeMode::NoFf,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            repo.git_ok(["log", "-1", "--format=%s"]).trim(),
+            "Merge remote-tracking branch 'origin/feature/PD-2638-outbound-issue-status' into staging"
+        );
     }
 }

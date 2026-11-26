@@ -1,7 +1,10 @@
 //! 병합·이력 수정 (MRG-01~05)과 commit-graph 생성 (AD-03). 모두 쓰기 큐를 지난다
 
+use std::path::Path;
+
+use mgit_git::cmd::head_state;
 use mgit_l10n::{pick, tr};
-use mgit_model::{EnvProfile, GitHint, GitRequest, InProgressOp, Oid};
+use mgit_model::{EnvProfile, GitError, GitHint, GitRequest, GitRunner, InProgressOp, Oid};
 use serde::{Deserialize, Serialize};
 
 use crate::core::Core;
@@ -49,6 +52,58 @@ fn check_ref(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 원본 ref 종류와 실제 대상 브랜치로 기본 병합 메시지를 만든다. 실행 OID는 바꾸지 않는다.
+pub(crate) async fn default_merge_message(
+    runner: &dyn GitRunner,
+    work_tree: &Path,
+    reference: &str,
+    target: Option<&str>,
+) -> Result<String, CoreError> {
+    let req = GitRequest::new(
+        work_tree,
+        [
+            "rev-parse",
+            "--symbolic-full-name",
+            "--verify",
+            "--end-of-options",
+            reference,
+        ],
+    );
+    let args = req.display_args();
+    let output = runner.run(req).await?;
+    if !output.exit.success() {
+        return Err(GitError::Exit {
+            status: output.exit.status,
+            stderr: output.exit.stderr,
+            args,
+        }
+        .into());
+    }
+    let full = output.stdout_lossy();
+    let full = full.trim();
+    let source = if let Some(name) = full.strip_prefix("refs/remotes/") {
+        format!("remote-tracking branch '{name}'")
+    } else if let Some(name) = full.strip_prefix("refs/heads/") {
+        format!("branch '{name}'")
+    } else if let Some(name) = full.strip_prefix("refs/tags/") {
+        format!("tag '{name}'")
+    } else {
+        format!("commit '{reference}'")
+    };
+    let destination = match target {
+        Some(name) => name.to_string(),
+        None => head_state(runner, work_tree)
+            .await?
+            .branch()
+            .unwrap_or("HEAD")
+            .to_string(),
+    };
+    let destination = destination
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&destination);
+    Ok(format!("Merge {source} into {destination}"))
+}
+
 impl Core {
     /// 충돌 힌트가 붙은 실패를 `Conflicts` 결과로 바꾼다. 다른 실패는 그대로 오류
     pub(crate) fn outcome(
@@ -79,7 +134,12 @@ impl Core {
         }
         args.push("--end-of-options".into());
         args.push(reference.into());
-        let r = self.run_write(session, WriteSpec::new(args)).await;
+        let spec = if matches!(mode, MergeMode::Default | MergeMode::NoFf) {
+            WriteSpec::new(args).merge_message(reference)
+        } else {
+            WriteSpec::new(args)
+        };
+        let r = self.run_write(session, spec).await;
         self.outcome(r)
     }
 

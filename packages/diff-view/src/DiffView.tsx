@@ -1,6 +1,6 @@
 import type { DiffDocument, FileDiff, LineSelection } from '@mgit/ipc';
 import { settingsStorage } from '@mgit/storage';
-import { Button, isImeKey, S } from '@mgit/ui';
+import { Button, isImeKey, isPrimaryModifier, S } from '@mgit/ui';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   type CSSProperties,
@@ -220,6 +220,21 @@ export function DiffView({
     () => `${diffContentKey(path, diff)}:${document?.revision ?? ''}`,
     [path, diff, document?.revision],
   );
+  const textSelectionKey = `${contentKey}:${mode}:${fullFile}`;
+  const [allText, setAllText] = useState<{
+    key: string;
+    side: 'left' | 'right' | 'unified';
+  } | null>(null);
+  const textSide = useRef<'left' | 'right'>('right');
+  const selectedTextSide = allText?.key === textSelectionKey ? allText.side : null;
+  // 다른 문서나 보기 구성으로 바뀌면 이전 전체 선택을 복원하지 않는다.
+  useEffect(() => {
+    if (!allText || allText.key === textSelectionKey) return;
+    setAllText(null);
+    const selection = window.getSelection();
+    if (selection?.anchorNode && scrollRef.current?.contains(selection.anchorNode))
+      selection.removeAllRanges();
+  }, [textSelectionKey, allText]);
   const [lineState, setSelection] = useState<LineSelectionState>({
     key: '',
     lines: NO_LINES,
@@ -537,18 +552,85 @@ export function DiffView({
     });
   }, [hunkRows, cursorRow, moveCursor, onNavigationReady]);
 
+  /** 본문 전체 선택은 가상 행 밖의 코드도 모델에서 복사하고 다른 패널은 포함하지 않는다. */
+  const selectAllText = () => {
+    const side = mode === 'unified' ? 'unified' : textSide.current;
+    setAllText({ key: textSelectionKey, side });
+    const element = scrollRef.current;
+    element?.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    // 네이티브 복사 명령도 발생하도록 보이는 코드 안에만 선택 범위를 둔다.
+    const first = [
+      ...(element?.querySelectorAll(
+        `[data-side="${side === 'unified' ? 'right' : side}"] > span`,
+      ) ?? []),
+    ].find((code) => (code.textContent?.length ?? 0) > 0);
+    if (first) {
+      const range = window.document.createRange();
+      range.selectNodeContents(first);
+      selection?.addRange(range);
+    }
+  };
+
+  /** 컨트롤 자체의 텍스트 명령은 비교 본문의 전체 선택과 분리한다. */
+  const isControl = (target: EventTarget | null) =>
+    target instanceof Element &&
+    !!target.closest('input, textarea, select, button, [contenteditable="true"]');
+
+  /** 전체 선택을 해제하고 기존 브라우저 드래그·커서 탐색으로 돌아간다. */
+  const clearAllText = () => {
+    if (!selectedTextSide) return;
+    setAllText(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
   /** 본문은 Tab 진입점 하나다. 방향키는 커서, Space 는 줄, Shift 는 같은 구간의 범위를 고른다 */
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.target !== e.currentTarget || isImeKey(e) || e.metaKey || e.ctrlKey || e.altKey) {
+    if (isImeKey(e) || isControl(e.target)) return;
+    if (
+      isPrimaryModifier(e) &&
+      !(e.metaKey && e.ctrlKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.key.toLowerCase() === 'a'
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      selectAllText();
+      return;
+    }
+    if (selectedTextSide && e.key === 'Escape') {
+      clearAllText();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (
+      [
+        'ArrowLeft',
+        'ArrowRight',
+        'ArrowUp',
+        'ArrowDown',
+        'Home',
+        'End',
+        'PageUp',
+        'PageDown',
+        'F7',
+      ].includes(e.key)
+    )
+      clearAllText();
+    if (e.target !== e.currentTarget || e.metaKey || e.ctrlKey || e.altKey) {
       return;
     }
     const row = rows[cursorRow];
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
+      textSide.current = e.key === 'ArrowLeft' ? 'left' : 'right';
       setCursor({
         key: contentKey,
         row: cursorRow,
-        side: e.key === 'ArrowLeft' ? 'left' : 'right',
+        side: textSide.current,
       });
       return;
     }
@@ -599,6 +681,28 @@ export function DiffView({
 
   /** 드래그한 쪽의 코드만 복사하여 반대 패널·줄번호·hunk 도구가 섞이지 않게 한다. */
   const onCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    if (isControl(event.target)) return;
+    if (selectedTextSide) {
+      const original = selectedTextSide === 'left' ? document?.old.content : document?.new.content;
+      const text =
+        mode === 'split' && fullFile && original != null
+          ? original
+          : rows
+              .flatMap((row) => {
+                const ref =
+                  row.kind === 'line'
+                    ? row.ref
+                    : row.kind === 'split'
+                      ? row[selectedTextSide === 'left' ? 'left' : 'right']
+                      : null;
+                return ref ? [ref.line.text] : [];
+              })
+              .join('\n');
+      event.clipboardData.setData('text/plain', text);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
     /** 선택 끝점의 DOM 위치를 가상 행과 원문 내 UTF-16 위치로 바꾼다. */
@@ -762,6 +866,20 @@ export function DiffView({
             tabIndex={0}
             onKeyDown={onKeyDown}
             onCopy={onCopy}
+            data-text-selected={selectedTextSide ?? undefined}
+            onPointerDown={(event) => {
+              if (event.button > 0) return;
+              clearAllText();
+              const target =
+                event.target instanceof Element
+                  ? event.target.closest<HTMLElement>('[data-side]')
+                  : null;
+              if (target?.dataset.side === 'left' || target?.dataset.side === 'right')
+                textSide.current = target.dataset.side;
+            }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearAllText();
+            }}
             onScroll={() => {
               const first = virtualizer
                 .getVirtualItems()

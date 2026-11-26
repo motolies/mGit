@@ -1,5 +1,5 @@
 import type { FileDiff, Hunk } from '@mgit/ipc';
-import { S } from '@mgit/ui';
+import { isMac, S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -851,4 +851,117 @@ it('같은 본문의 자동 갱신은 스크롤을 재배치하지 않고 새 �
   } finally {
     cleanup();
   }
+});
+
+/** 전체 선택 키는 운영체제의 기본 수정키를 사용한다. */
+function selectAllCode(target: Element) {
+  return fireEvent.keyDown(target, { key: 'a', metaKey: isMac(), ctrlKey: !isMac() });
+}
+/** 네이티브 클립보드에 전달할 본문을 읽는다. */
+function copiedCode(target: Element) {
+  const setData = vi.fn();
+  fireEvent.copy(target, { clipboardData: { setData } });
+  return setData;
+}
+
+describe('Diff 본문 전체 선택', () => {
+  it.each(['left', 'right'] as const)(
+    '%s 코드를 클릭한 뒤 전체 선택해도 바깥 그래프·반대쪽·번호는 복사하지 않는다',
+    async (side) => {
+      render(
+        <>
+          <DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />
+          <div>OUTSIDE GRAPH</div>
+        </>,
+      );
+      await flush();
+      const code = document.querySelector(`[data-side="${side}"]`);
+      if (!code) throw new Error('No code');
+      fireEvent.pointerDown(code);
+      const grid = screen.getByTestId('diff-scroller');
+      grid.focus();
+      expect(selectAllCode(grid)).toBe(false);
+      expect(grid.getAttribute('data-text-selected')).toBe(side);
+      expect(
+        window.getSelection()?.anchorNode &&
+          grid.contains(window.getSelection()?.anchorNode ?? null),
+      ).toBeTruthy();
+      expect(copiedCode(grid)).toHaveBeenCalledWith(
+        'text/plain',
+        side === 'left' ? 'old-a' : 'new-a',
+      );
+      expect(selectedCount()).toBe(0);
+    },
+  );
+  it('키보드로 고른 쪽과 통합 보기의 표시 코드 전체를 복사한다', async () => {
+    const view = render(<DiffView diff={diff('a')} path="a.txt" mode="split" />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    grid.focus();
+    fireEvent.keyDown(grid, { key: 'ArrowLeft' });
+    selectAllCode(grid);
+    expect(copiedCode(grid)).toHaveBeenCalledWith('text/plain', 'old-a');
+    view.rerender(<DiffView diff={diff('a')} path="a.txt" mode="unified" />);
+    expect(grid.hasAttribute('data-text-selected')).toBe(false);
+    selectAllCode(grid);
+    expect(copiedCode(grid)).toHaveBeenCalledWith('text/plain', 'old-a\nnew-a');
+  });
+  it('전체 파일은 화면 밖 원문과 마지막 개행까지 복사하고 변경 주변 보기는 표시 범위만 복사한다', async () => {
+    const value = diff('a');
+    const oldText = `${Array.from({ length: 300 }, (_, i) => `old-${i}`).join('\n')}\n`;
+    const newText = `${Array.from({ length: 300 }, (_, i) => `new-${i}`).join('\n')}\n`;
+    const documentValue = {
+      diff: value,
+      revision: 'all',
+      limitReason: null,
+      old: { path: 'a.txt', label: 'Old', content: oldText, lineCount: 300 },
+      new: { path: 'a.txt', label: 'New', content: newText, lineCount: 300 },
+    };
+    const view = render(
+      <DiffView diff={value} document={documentValue} path="a.txt" mode="split" fullFile />,
+    );
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    expect(document.querySelectorAll('[data-side="right"]').length).toBeLessThan(300);
+    selectAllCode(grid);
+    expect(copiedCode(grid)).toHaveBeenCalledWith('text/plain', newText);
+    view.rerender(
+      <DiffView diff={value} document={documentValue} path="a.txt" mode="split" fullFile={false} />,
+    );
+    selectAllCode(grid);
+    const setData = copiedCode(grid);
+    expect(setData.mock.calls[0]?.[1]).not.toContain('new-299');
+  });
+  it('Esc·방향키·포인터·파일 전환은 전체 선택을 해제한다', async () => {
+    const view = render(<DiffView diff={diff('a')} path="a.txt" mode="split" />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    for (const key of ['Escape', 'ArrowDown', 'F7']) {
+      selectAllCode(grid);
+      expect(grid.hasAttribute('data-text-selected')).toBe(true);
+      fireEvent.keyDown(grid, { key });
+      expect(grid.hasAttribute('data-text-selected')).toBe(false);
+    }
+    selectAllCode(grid);
+    fireEvent.pointerDown(grid, { button: 2 });
+    expect(grid.hasAttribute('data-text-selected')).toBe(true);
+    fireEvent.pointerDown(grid);
+    expect(grid.hasAttribute('data-text-selected')).toBe(false);
+    selectAllCode(grid);
+    view.rerender(<DiffView diff={diff('b')} path="b.txt" mode="split" />);
+    expect(grid.hasAttribute('data-text-selected')).toBe(false);
+    view.rerender(<DiffView diff={diff('a')} path="a.txt" mode="split" />);
+    expect(grid.hasAttribute('data-text-selected')).toBe(false);
+  });
+  it('본문 안 컨트롤·IME·다른 수정키는 전체 선택 명령으로 처리하지 않는다', async () => {
+    render(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    const button = grid.querySelector('button');
+    if (!button) throw new Error('No control');
+    expect(selectAllCode(button)).toBe(true);
+    fireEvent.keyDown(grid, { key: 'a', metaKey: isMac(), ctrlKey: !isMac(), isComposing: true });
+    fireEvent.keyDown(grid, { key: 'a', metaKey: isMac(), ctrlKey: !isMac(), altKey: true });
+    expect(grid.hasAttribute('data-text-selected')).toBe(false);
+  });
 });

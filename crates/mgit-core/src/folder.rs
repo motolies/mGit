@@ -132,6 +132,8 @@ pub struct FolderSession {
     watches: Mutex<Vec<Box<dyn WatchHandle>>>,
     /// 폴더 루트(비재귀) 감시 (MR-10)
     root_watch: Mutex<Option<Box<dyn WatchHandle>>>,
+    /// 수동·감시·워크트리 작업의 재스캔을 순서대로 반영한다.
+    rescan_lock: tokio::sync::Mutex<()>,
     /// 통합 타임라인 (MR-12). 처음 열 때까지는 비어 있다
     pub(crate) timeline: TimelineState,
     /// 이 폴더의 가벼운 세션 열기를 줄 세운다 (상한 검사와 잡기가 엇갈리지 않게, `light.rs`)
@@ -387,6 +389,7 @@ impl Core {
             sink,
             watches: Mutex::new(Vec::new()),
             root_watch: Mutex::new(None),
+            rescan_lock: tokio::sync::Mutex::new(()),
             timeline: TimelineState::default(),
             light_open: tokio::sync::Mutex::new(()),
             auto_fetch: Mutex::new(None),
@@ -488,7 +491,7 @@ impl Core {
                     return;
                 }
                 let core = Core::from_inner(inner);
-                if let Err(e) = core.folder_rescan(folder.id).await {
+                if let Err(e) = core.rescan_folder(folder.id, true).await {
                     tracing::debug!(error = %e, "폴더 재스캔 실패");
                 }
             });
@@ -538,9 +541,22 @@ impl Core {
     /// 하위 저장소를 다시 스캔해 순번을 다시 매기고 감시를 다시 건다.
     /// 저장소 집합이 그대로면 순번(색)도 그대로다
     pub async fn folder_rescan(&self, session: SessionId) -> Result<Vec<FoundRepo>, CoreError> {
+        self.rescan_folder(session, false).await
+    }
+
+    /// 자동 재스캔은 감시와 삭제 알림이 겹쳐도 목록이 바뀐 경우에만 이벤트를 보낸다.
+    async fn rescan_folder(
+        &self,
+        session: SessionId,
+        only_changed: bool,
+    ) -> Result<Vec<FoundRepo>, CoreError> {
         let inner = self.inner_arc();
         let folder = inner.folders_get(session)?;
+        let _scanning = folder.rescan_lock.lock().await;
         let repos = scan_repos(&folder.path, SCAN_DEPTH);
+        if only_changed && repos == folder.repos() {
+            return Ok(repos);
+        }
         let (roster, discovered) = build_roster(&inner, repos.clone()).await;
         *folder.repos.write().unwrap_or_else(PoisonError::into_inner) = roster;
         self.watch_folder(&folder, &repos, discovered);
@@ -553,6 +569,31 @@ impl Core {
             self.schedule_timeline_load(&folder);
         }
         Ok(repos)
+    }
+
+    /// 삭제된 워크트리를 포함하던 열린 폴더만 재스캔하며 삭제 자체의 성공은 보존한다.
+    pub(crate) async fn rescan_removed_worktree(&self, removed: &Path) {
+        let folders: Vec<SessionId> = self
+            .inner()
+            .folders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|folder| {
+                folder
+                    .repos()
+                    .iter()
+                    .any(|repo| repo.path.starts_with(removed))
+            })
+            .map(|folder| folder.id)
+            .collect();
+        for session in folders {
+            if let Err(error) = self.rescan_folder(session, true).await
+                && !matches!(error, CoreError::SessionNotFound(_))
+            {
+                tracing::warn!(?session, %error, "워크트리 삭제 후 폴더 재스캔 실패");
+            }
+        }
     }
 
     /// 폴더 세션을 닫는다. 안전망으로 이 폴더가 잡은 가벼운 세션의 잡음을 모두 풀어, 아직 가벼운 프로필이고
@@ -681,6 +722,7 @@ mod tests {
             sink,
             watches: Mutex::new(Vec::new()),
             root_watch: Mutex::new(None),
+            rescan_lock: tokio::sync::Mutex::new(()),
             timeline: TimelineState::default(),
             light_open: tokio::sync::Mutex::new(()),
             auto_fetch: Mutex::new(None),
@@ -714,5 +756,39 @@ mod tests {
         assert_eq!(roster[11].color(), 11);
         assert_eq!(roster[256].color(), 256);
         assert_eq!(roster[299].color(), 299);
+    }
+    /// 감시와 삭제 후 재스캔이 겹쳐도 같은 목록 변경은 한 번만 통지한다.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn automatic_rescans_coalesce_roster_change_and_manual_rescan_still_notifies() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("repo");
+        std::fs::create_dir_all(&path).unwrap();
+        let mut repo = mgit_testkit::TestRepo::at(&path);
+        repo.git_ok(["init", "-q", "-b", "main"]);
+        repo.commit("base");
+        let runner = mgit_git::TokioGitRunner::new(mgit_git::RunnerConfig::default())
+            .await
+            .unwrap();
+        let core = Core::new(Arc::new(runner), crate::CoreConfig::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let sink: Arc<dyn EventSink> = Arc::new(move |event: CoreEvent| {
+            if matches!(event, CoreEvent::FolderRescanned { .. }) {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let folder = core.open_folder(root.path(), sink).await.unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+        let (a, b) = tokio::join!(
+            core.rescan_folder(folder.session, true),
+            core.rescan_folder(folder.session, true)
+        );
+        assert!(a.unwrap().is_empty());
+        assert!(b.unwrap().is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        core.folder_rescan(folder.session).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

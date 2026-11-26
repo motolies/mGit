@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::Core;
 use crate::error::CoreError;
 use crate::events::SessionId;
-use crate::merge_ops::{MergeMode, OpOutcome};
+use crate::merge_ops::{MergeMode, OpOutcome, default_merge_message};
 use crate::messages;
 use crate::worktree::WorktreeSource;
 use crate::write::WriteSpec;
@@ -587,6 +587,12 @@ impl Core {
             MergeMode::FfOnly => args.push("--ff-only".into()),
             MergeMode::Squash => args.push("--squash".into()),
         }
+        if matches!(mode, MergeMode::Default | MergeMode::NoFf) {
+            args.extend([
+                "-m".into(),
+                default_merge_message(inner.runner(), &wt, reference, Some(&base)).await?,
+            ]);
+        }
         args.push("--end-of-options".into());
         args.push(reference.into());
         let req = GitRequest::new(&wt, args).with_env(EnvProfile::Write);
@@ -759,7 +765,12 @@ impl Core {
         }
         args.push("--end-of-options".into());
         args.push(reference.into());
-        let r = self.run_write(session, WriteSpec::new(args)).await;
+        let spec = if matches!(mode, MergeMode::Default | MergeMode::NoFf) {
+            WriteSpec::new(args).merge_message(reference)
+        } else {
+            WriteSpec::new(args)
+        };
+        let r = self.run_write(session, spec).await;
         self.outcome(r)
     }
 }

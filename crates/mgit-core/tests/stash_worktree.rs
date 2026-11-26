@@ -271,3 +271,99 @@ async fn stash_push_paths_are_literal_and_untracked_is_cleaned() {
         .unwrap();
     assert!(!repo.path().join("u.txt").exists());
 }
+
+/// 깊은 경로의 워크트리 삭제는 감시 이벤트 없이도 관련 개요만 한 번 갱신한다.
+#[tokio::test]
+async fn worktree_remove_rescans_open_parent_folders_only_after_success() {
+    let core = core().await;
+    let root = tempfile::tempdir().unwrap();
+    let main_path = root.path().join("main");
+    std::fs::create_dir_all(&main_path).unwrap();
+    let mut repo = mgit_testkit::TestRepo::at(&main_path);
+    repo.git_ok(["init", "-q", "-b", "main"]);
+    repo.commit("base");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    let worktree_path = root.path().join("_worktrees/task/main");
+    let worktree_path = core
+        .worktree_add(
+            opened.session,
+            &worktree_path,
+            WorktreeSource::NewBranch {
+                name: "topic".into(),
+                start: None,
+            },
+        )
+        .await
+        .unwrap();
+    let worktree_path = worktree_path.canonicalize().unwrap();
+    let (folder_sink, mut folder_rx) = collector();
+    let folder = core.open_folder(root.path(), folder_sink).await.unwrap();
+    let (nested_sink, mut nested_rx) = collector();
+    let nested = core
+        .open_folder(worktree_path.parent().unwrap(), nested_sink)
+        .await
+        .unwrap();
+    let other_root = tempfile::tempdir().unwrap();
+    let (other_sink, mut other_rx) = collector();
+    let other = core
+        .open_folder(other_root.path(), other_sink)
+        .await
+        .unwrap();
+    assert!(folder.repos.iter().any(|repo| repo.path == worktree_path));
+    assert!(nested.repos.iter().any(|repo| repo.path == worktree_path));
+    while folder_rx.try_recv().is_ok() {}
+    while nested_rx.try_recv().is_ok() {}
+    while other_rx.try_recv().is_ok() {}
+    std::fs::write(worktree_path.join("dirty.txt"), "keep").unwrap();
+    assert!(
+        core.worktree_remove(opened.session, &worktree_path, false, false)
+            .await
+            .is_err()
+    );
+    let mut failed_rescans = 0;
+    while let Ok(event) = folder_rx.try_recv() {
+        if matches!(event, mgit_core::CoreEvent::FolderRescanned { .. }) {
+            failed_rescans += 1;
+        }
+    }
+    assert_eq!(failed_rescans, 0);
+    assert!(
+        core.folder_summaries(folder.session, &[])
+            .await
+            .unwrap()
+            .iter()
+            .any(|repo| repo.path == worktree_path)
+    );
+    core.worktree_remove(opened.session, &worktree_path, true, false)
+        .await
+        .unwrap();
+    for (id, receiver) in [
+        (folder.session, &mut folder_rx),
+        (nested.session, &mut nested_rx),
+    ] {
+        let mut rescans = 0;
+        while let Ok(event) = receiver.try_recv() {
+            if let mgit_core::CoreEvent::FolderRescanned { session, repos } = event {
+                assert_eq!(session, id);
+                assert!(!repos.iter().any(|repo| repo.path == worktree_path));
+                rescans += 1;
+            }
+        }
+        assert_eq!(rescans, 1);
+        assert!(
+            !core
+                .folder_summaries(id, &[])
+                .await
+                .unwrap()
+                .iter()
+                .any(|repo| repo.path == worktree_path)
+        );
+    }
+    while let Ok(event) = other_rx.try_recv() {
+        assert!(
+            !matches!(event, mgit_core::CoreEvent::FolderRescanned {session, ..} if session == other.session)
+        );
+    }
+}

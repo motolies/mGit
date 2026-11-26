@@ -40,7 +40,7 @@ fn targets(rows: Vec<IntegrationPreview>) -> Vec<IntegrationTarget> {
 async fn merge_conflict_keeps_other_repository_success_and_never_checkouts() {
     let dir = tempfile::tempdir().unwrap();
     let mut a = repo(&dir.path().join("a"), false);
-    let b = repo(&dir.path().join("b"), true);
+    let mut b = repo(&dir.path().join("b"), true);
     let core = core().await;
     let (sink, _) = collector();
     let f = core.open_folder(dir.path(), sink).await.unwrap();
@@ -73,6 +73,22 @@ async fn merge_conflict_keeps_other_repository_success_and_never_checkouts() {
         Some(IntegrationOutcome::Conflicts)
     );
     assert!(b.path().join(".git/MERGE_HEAD").exists());
+    assert_eq!(
+        a.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge branch 'topic' into main"
+    );
+    assert!(
+        std::fs::read_to_string(b.path().join(".git/MERGE_MSG"))
+            .unwrap()
+            .starts_with("Merge branch 'topic' into main")
+    );
+    b.write_file("shared", "resolved\n");
+    b.git_ok(["add", "shared"]);
+    b.git_ok(["commit", "--no-edit"]);
+    assert_eq!(
+        b.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge branch 'topic' into main"
+    );
     assert_eq!(a.git_ok(["branch", "--show-current"]).trim(), "main");
     assert_eq!(
         a.git_ok(["rev-list", "--parents", "-n1", "HEAD"])
@@ -491,6 +507,10 @@ async fn merge_modes_and_remote_source_are_respected() {
         .await
         .unwrap();
     assert_eq!(result.succeeded, 1);
+    assert_eq!(
+        a.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge remote-tracking branch 'origin/topic' into main"
+    );
     assert_eq!(
         a.git_ok(["rev-list", "--parents", "-n1", "HEAD"])
             .split_whitespace()

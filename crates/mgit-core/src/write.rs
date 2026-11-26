@@ -50,6 +50,8 @@ pub struct WriteSpec {
     pub quiet: bool,
     /// 메시지 수정 대상이 알려진 원격 추적 브랜치에서 도달 가능하면 쓰기를 거부한다.
     pub(crate) unpublished_commit: Option<Oid>,
+    /// 병합 메시지에 사용할 원본 ref. 실제 쓰기 잠금 안에서 대상 브랜치를 읽는다.
+    pub(crate) merge_message_reference: Option<String>,
     /// 부분 쓰기의 경로·비교 방향·옵션·원문 지문. 큐 잠금을 얻은 뒤 검사한다.
     pub(crate) diff_revision: Option<(String, bool, mgit_model::DiffOptions, String)>,
 }
@@ -71,8 +73,15 @@ impl WriteSpec {
             keep_op_open: false,
             quiet: false,
             unpublished_commit: None,
+            merge_message_reference: None,
             diff_revision: None,
         }
+    }
+
+    /// 명시적 메시지가 없는 병합에만 브랜치 이름이 담긴 기본 메시지를 요청한다.
+    pub(crate) fn merge_message(mut self, reference: &str) -> Self {
+        self.merge_message_reference = Some(reference.to_string());
+        self
     }
 
     /// 메시지 수정의 백업·실제 쓰기에 같은 원격 게시 검사를 붙인다. 다른 이력 작업은 정책을 바꾸지 않는다.
@@ -212,10 +221,37 @@ impl CoreInner {
     pub async fn run_write(
         self: &Arc<Self>,
         session: &Arc<RepoSession>,
-        spec: WriteSpec,
+        mut spec: WriteSpec,
     ) -> Result<WriteResult, CoreError> {
         let lock = self.write_lock_for(&session.info.common_dir);
         let _queued = lock.lock().await;
+        if let Some(reference) = spec.merge_message_reference.take()
+            && !spec.args.iter().any(|arg| {
+                let arg = arg.to_string_lossy();
+                arg.starts_with("-m")
+                    || arg == "--message"
+                    || arg.starts_with("--message=")
+                    || arg.starts_with("-F")
+                    || arg == "--file"
+                    || arg.starts_with("--file=")
+            })
+        {
+            let message = crate::merge_ops::default_merge_message(
+                self.runner(),
+                &session.info.work_tree,
+                &reference,
+                None,
+            )
+            .await?;
+            // 옵션 종료 기호 앞에 삽입해 메시지가 병합 ref로 해석되지 않게 한다.
+            let at = spec
+                .args
+                .iter()
+                .position(|arg| arg == "--end-of-options")
+                .unwrap_or(1);
+            spec.args
+                .splice(at..at, [OsString::from("-m"), OsString::from(message)]);
+        }
         if let Some((path, staged, options, expected)) = &spec.diff_revision {
             let actual = crate::diff_document::work_revision(
                 self.runner(),
@@ -567,5 +603,60 @@ mod tests {
         drop(held);
         assert!(matches!(pending.await, Err(CoreError::Invalid(_))));
         assert!(repo.git_ok(["diff", "--cached", "--name-only"]).is_empty());
+    }
+
+    /// 큐 대기 중 대상 브랜치가 바뀌면 실제 병합 대상명으로 기본 메시지를 만든다.
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn merge_message_reads_head_inside_write_queue_and_preserves_explicit_message() {
+        let runner = mgit_git::TokioGitRunner::new(mgit_git::RunnerConfig::default())
+            .await
+            .unwrap();
+        let core = crate::Core::new(Arc::new(runner), crate::CoreConfig::default());
+        let mut repo = mgit_testkit::build(mgit_testkit::Scenario::Linear(1));
+        repo.checkout_new("topic");
+        repo.commit("topic change");
+        repo.checkout("main");
+        let opened = core
+            .open_repo(repo.path(), Arc::new(|_: crate::CoreEvent| {}))
+            .await
+            .unwrap();
+        let session = core.inner().get(opened.session).unwrap();
+        let lock = core.inner().write_lock_for(&session.info.common_dir);
+        let held = lock.lock().await;
+        let spec = WriteSpec::new(["merge", "--no-edit", "--no-ff", "--end-of-options", "topic"])
+            .merge_message("topic");
+        let inner = core.inner_arc();
+        let pending = inner.run_write(&session, spec);
+        tokio::pin!(pending);
+        tokio::select! {
+            _ = &mut pending => panic!("쓰기 큐 잠금을 기다려야 한다"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        repo.checkout_new("staging");
+        drop(held);
+        pending.await.unwrap();
+        assert_eq!(
+            repo.git_ok(["log", "-1", "--format=%s"]).trim(),
+            "Merge branch 'topic' into staging"
+        );
+        repo.checkout("main");
+        core.run_write(
+            opened.session,
+            WriteSpec::new([
+                "merge",
+                "--no-ff",
+                "-mReviewed merge",
+                "--end-of-options",
+                "topic",
+            ])
+            .merge_message("topic"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.git_ok(["log", "-1", "--format=%s"]).trim(),
+            "Reviewed merge"
+        );
     }
 }

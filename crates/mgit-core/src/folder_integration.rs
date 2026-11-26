@@ -273,6 +273,22 @@ pub(crate) async fn execute(
         Some(BatchMergeMode::Squash) => args.push("--squash".into()),
         _ => {}
     }
+    if matches!(mode, Some(BatchMergeMode::Default | BatchMergeMode::NoFf)) {
+        match crate::merge_ops::default_merge_message(
+            inner.runner(),
+            path,
+            reference,
+            Some(&target.current_branch),
+        )
+        .await
+        {
+            Ok(message) => args.extend(["-m".into(), message]),
+            Err(error) => {
+                result.message = error.to_string();
+                return result;
+            }
+        }
+    }
     args.extend(["--end-of-options".into(), target.source_oid.clone()]);
     let (ok, message) = run_git_env_cancel(
         inner,

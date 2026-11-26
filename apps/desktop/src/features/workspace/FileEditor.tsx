@@ -52,9 +52,11 @@ const theme = EditorView.theme({
     color: 'var(--fg-muted)',
     borderRight: '1px solid var(--panel-seam)',
   },
-  '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-    backgroundColor: 'color-mix(in srgb, var(--accent) 25%, transparent)',
+  // 선택 레이어는 본문 뒤에 있으므로 현재 줄 배경이 선택 범위를 덮지 않게 한다.
+  '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--fg) 5%, transparent)' },
+  '.cm-selectionBackground': { backgroundColor: 'var(--bg-selected-inactive)' },
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'var(--bg-selected)',
   },
   '.cm-panels': {
     color: 'var(--fg)',

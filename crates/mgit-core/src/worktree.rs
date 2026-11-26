@@ -220,7 +220,10 @@ impl Core {
         }
         args.push("--end-of-options".into());
         args.push(path_str);
+        let removed = wt.path.canonicalize().unwrap_or_else(|_| wt.path.clone());
         self.run_write(session, WriteSpec::new(args)).await?;
+        // 워크트리 삭제는 끝났으므로 후속 브랜치 삭제가 실패하더라도 개요 목록은 정리한다.
+        self.rescan_removed_worktree(&removed).await;
         if delete_branch && let Some(b) = wt.branch.as_deref() {
             let name = b.strip_prefix("refs/heads/").unwrap_or(b).to_string();
             self.run_write(

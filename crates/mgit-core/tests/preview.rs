@@ -141,6 +141,13 @@ async fn isolated_merge_apply_and_discard() {
     assert_eq!(iso.outcome, OpOutcome::Conflicts);
     assert!(iso.worktree.join("f.txt").exists());
     assert!(iso.branch.starts_with("mgit/isolated-"));
+    let mut isolated = mgit_testkit::TestRepo::at(&iso.worktree);
+    let message_path = isolated.git_ok(["rev-parse", "--git-path", "MERGE_MSG"]);
+    assert!(
+        std::fs::read_to_string(message_path.trim())
+            .unwrap()
+            .starts_with("Merge branch 'side' into main")
+    );
     assert_eq!(
         core.repo_state(opened.session)
             .unwrap()
@@ -176,6 +183,11 @@ async fn isolated_merge_apply_and_discard() {
         .await
         .unwrap();
     assert_eq!(iso.outcome, OpOutcome::Clean);
+    let mut isolated = mgit_testkit::TestRepo::at(&iso.worktree);
+    assert_eq!(
+        isolated.git_ok(["log", "-1", "--format=%s"]).trim(),
+        "Merge branch 'add' into main"
+    );
     let (sink3, mut rx3) = collector();
     let wt = core.open_repo(&iso.worktree, sink3).await.unwrap();
     wait_finished(&mut rx3, wt.session).await;

@@ -282,6 +282,23 @@
   min-width: 100%;
 }
 
+/* 전체 텍스트 선택은 가상 행을 다시 그려도 선택한 쪽의 코드에만 표시한다. */
+.scroller[data-text-selected="unified"] .codeText,
+.scroller[data-text-selected="left"] [data-side="left"] .codeText,
+.scroller[data-text-selected="right"] [data-side="right"] .codeText {
+  background: var(--bg-selected);
+  color: var(--fg);
+}
+:is(
+    .scroller[data-text-selected="left"] [data-side="left"],
+    .scroller[data-text-selected="right"] [data-side="right"],
+    .scroller[data-text-selected="unified"] [data-side]
+  )
+  .codeText
+  * {
+  background: transparent;
+}
+
 .scroller[data-wrap="false"] .code[data-side="left"] .codeText {
   transform: translateX(calc(-1 * var(--diff-left-scroll, 0px)));
 }

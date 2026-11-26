@@ -92,6 +92,8 @@ export interface ProjectTreeProps {
   onScrollTopChange?: (top: number) => void;
   /** 이 값이 바뀌면 고른 행이 보이게 스크롤한다 (트리에서 찾기) */
   revealSeq?: number;
+  /** 작업 완료 후 선택 행을 보이며 트리 키보드 탐색을 이어간다. */
+  focusSeq?: number;
 }
 
 /** 항목 종류의 아이콘 */
@@ -221,6 +223,7 @@ export function ProjectTree({
   initialScrollTop,
   onScrollTopChange,
   revealSeq,
+  focusSeq = 0,
 }: ProjectTreeProps) {
   const baseId = useId();
   const toolsRoving = useRovingToolbar<HTMLElement>('horizontal');
@@ -334,6 +337,15 @@ export function ProjectTree({
       virtualizer.scrollToIndex(selectedIndex, { align: 'center' });
     }
   }, [revealSeq, selectedIndex, virtualizer]);
+
+  // 삭제 확인창과 갱신이 끝난 뒤 가상 행의 DOM 생성과 무관하게 트리에 포커스를 복구한다.
+  const seenFocus = useRef(focusSeq);
+  useLayoutEffect(() => {
+    if (focusSeq === seenFocus.current) return;
+    seenFocus.current = focusSeq;
+    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
+    treeRef.current?.focus({ preventScroll: true });
+  }, [focusSeq, selectedIndex, virtualizer]);
 
   /** 그 행을 고르고 보이게 스크롤한다 (키보드). 범위를 벗어나면 끝 행에서 멈춘다 */
   const moveTo = (index: number) => {

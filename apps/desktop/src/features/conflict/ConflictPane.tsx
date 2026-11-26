@@ -1,7 +1,8 @@
 import type { ConflictPayload, SessionId } from '@mgit/ipc';
 import { conflictBlocks, MergeEditor } from '@mgit/merge-editor';
 import { Button, ConfirmDialog, formatDateTime, S, shortHash } from '@mgit/ui';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
 import { type SessionState, useAppStore, useSession, useSessionOf } from '../../store';
 import { conflictDraftKey } from '../../store/workspace-store';
 import styles from './ConflictPane.module.css';
@@ -152,6 +153,8 @@ function ConflictPaneBody({
 }) {
   const openTerminal = useAppStore((st) => st.openTerminal);
   const [showOrigins, setShowOrigins] = useState(false);
+  const zoomRef = useRef<HTMLDivElement>(null);
+  const zoom = useEditorZoom(zoomRef);
   const [linePick, setLinePick] = useState<LinePick | null>(null);
   // 이어서/처음부터 (CF-07): 파일별 답. 파일이 바뀌면 다시 묻는다
   const [choice, setChoice] = useState<{ path: string; worktree: boolean } | null>(null);
@@ -174,8 +177,9 @@ function ConflictPaneBody({
   /** 답을 기억한다 */
   const answer = (worktree: boolean) => setChoice(path === null ? null : { path, worktree });
   return (
-    <div className={styles.pane}>
+    <div ref={zoomRef} className={styles.pane}>
       <header className={styles.header}>
+        <EditorZoomControls />
         {docMode ? null : <Button onClick={s.close}>← {S.conflict.back}</Button>}
         <span className={styles.path} title={path ?? ''}>
           {path}
@@ -228,6 +232,7 @@ function ConflictPaneBody({
         {doc ? (
           asking ? null : (
             <MergeEditor
+              fontSize={zoom.fontSize}
               key={`${path}:${useWorktree ? 'wt' : 'doc'}:${editorEpoch}`}
               path={path ?? ''}
               doc={doc}

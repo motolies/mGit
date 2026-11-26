@@ -467,6 +467,10 @@ export const enWorkspace: Pick<
     },
   },
   fileEditor: {
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    zoomReset: 'Reset to 100%',
+    zoom: 'Content zoom',
     format: 'Format file',
     formatting: 'Formatting…',
     formatFailed: 'Failed to format file',

@@ -19,6 +19,7 @@ import type { BlameLine, SessionId } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { registerCommand } from '../../command-registry';
+import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
 import { useRovingToolbar } from '../../components/roving';
 import { useAppStore } from '../../store';
 import { useEditorPreferences } from '../../store/editor-preferences';
@@ -36,9 +37,14 @@ import { isMarkdown, type MarkdownMode, markdownViewState } from './markdown/pre
 
 /** 기존 토큰 변수를 쓰므로 테마 변경과 화면 확대를 그대로 따른다. */
 const theme = EditorView.theme({
-  '&': { height: '100%', color: 'var(--fg)', backgroundColor: 'var(--bg)', fontSize: '12px' },
+  '&': {
+    height: '100%',
+    color: 'var(--fg)',
+    backgroundColor: 'var(--bg)',
+    fontSize: 'var(--editor-font-size, 12px)',
+  },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '20px', overflow: 'auto' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.666666667', overflow: 'auto' },
   '.cm-content': { caretColor: 'var(--fg)', padding: '4px 0' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--fg)' },
   '.cm-gutters': {
@@ -143,6 +149,11 @@ export function FileEditor({
   const host = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const zoom = useEditorZoom(paneRef);
+  useLayoutEffect(() => {
+    void zoom.fontSize;
+    viewRef.current?.requestMeasure();
+  }, [zoom.fontSize]);
   const [confirm, setConfirm] = useState<'reload' | 'overwrite' | null>(null);
   const preferences = useEditorPreferences();
   const [overrides, setOverrides] = useState<Partial<typeof preferences>>({});
@@ -503,6 +514,7 @@ export function FileEditor({
   return (
     <section
       ref={paneRef}
+      style={{ '--editor-font-size': `${zoom.fontSize}px` } as React.CSSProperties}
       className={styles.pane}
       aria-label={S.fileEditor.title}
       onKeyDownCapture={(event) => {
@@ -535,6 +547,7 @@ export function FileEditor({
           {S.fileEditor[doc.status]}
         </span>
         <div {...editTools} className={styles.tools} role="toolbar" aria-label={S.fileEditor.title}>
+          <EditorZoomControls />
           <Button
             onClick={() => {
               void (doc.explicitSave?.() ?? fileEditors.save(doc));
@@ -662,6 +675,7 @@ export function FileEditor({
         {previewVisible ? (
           <div className={styles.preview}>
             <MarkdownPreview
+              zoomPercent={zoom.zoomPercent}
               text={previewText}
               source={source}
               viewState={viewState}

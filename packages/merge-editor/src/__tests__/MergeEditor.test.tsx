@@ -173,3 +173,22 @@ describe('MergeEditor 초안', () => {
     expect(resultView(container).state.doc.toString()).toBe('a\nMINE\nz');
   });
 });
+
+it('배율 변경은 모든 열을 재측정하고 편집 내용과 실행 취소 기록을 보존한다', () => {
+  const onSave = vi.fn(async () => true);
+  const { container, rerender } = render(
+    <MergeEditor path="a.txt" doc={DOC} labels={LABELS} onSave={onSave} />,
+  );
+  const before = resultView(container);
+  act(() => pickOurs(before));
+  const state = before.state;
+  const measure = vi.spyOn(before, 'requestMeasure');
+  rerender(<MergeEditor path="a.txt" doc={DOC} labels={LABELS} onSave={onSave} fontSize={24} />);
+  expect(resultView(container)).toBe(before);
+  expect(before.state).toBe(state);
+  expect(before.state.doc.toString()).toBe('a\nO\nz');
+  expect(measure).toHaveBeenCalled();
+  expect(
+    (container.firstElementChild as HTMLElement).style.getPropertyValue('--merge-font-size'),
+  ).toBe('24px');
+});

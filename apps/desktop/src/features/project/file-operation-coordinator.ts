@@ -5,6 +5,40 @@ import { type EditorFile, type EditorSource, fileEditors } from '../../store/fil
 import { baseName, innermostRepo, isWithin, joinRoot, relativeTo } from '../../store/fs-path';
 import { fileWorkspaceSessions, getSessionStore } from '../../store/session-registry';
 import { type EditorDoc, fileViewDoc } from '../../store/workspace-store';
+import { flattenProjectTree, type ProjectTreeRow } from './project-tree-model';
+
+/** 삭제된 기준 행 대신 남은 선택, 다음 항목, 이전 항목, 루트 순서로 고른다. */
+export function selectionAfterTrash(
+  rows: readonly ProjectTreeRow[],
+  selected: string | null,
+  selection: Readonly<Record<string, true>>,
+  removed: readonly string[],
+  anchor: string | null = selected,
+): { selected: string | null; anchor: string | null; selection: Record<string, true> } {
+  const survives = (path: string) => !removed.some((parent) => isWithin(path, parent));
+  const remaining = Object.fromEntries(
+    Object.keys(selection)
+      .filter(survives)
+      .map((id) => [id, true as const]),
+  );
+  if (selected === null || survives(selected))
+    return {
+      selected,
+      anchor: anchor !== null && survives(anchor) ? anchor : selected,
+      selection: remaining,
+    };
+  const index = rows.findIndex((row) => row.id === selected);
+  const candidates = [
+    ...rows.slice(index + 1),
+    ...rows.slice(0, Math.max(0, index)).reverse(),
+  ].filter((row) => row.kind === 'entry' && survives(row.id));
+  const next = candidates.find((row) => remaining[row.id])?.id ?? candidates[0]?.id ?? '';
+  return {
+    selected: next,
+    anchor: next,
+    selection: { ...remaining, [next]: true },
+  };
+}
 
 /** 계획에 포함된 원본과 목적지의 열린 문서를 실제 경로로 수집한다. */
 function affectedDocuments(plan: FsOperationPlan): EditorFile[] {
@@ -53,6 +87,7 @@ async function applyResults(
   result: FsOperationResult,
   docs: EditorFile[],
   destinationSession?: number,
+  rowsBeforeTrash?: ReadonlyMap<number, readonly ProjectTreeRow[]>,
 ) {
   const sessions = fileWorkspaceSessions();
   const roots = new Map(sessions.map((session) => [session.id, session.root]));
@@ -132,12 +167,26 @@ async function applyResults(
           return next === null ? [] : [[next, true as const]];
         }),
       );
+    const trashSelection =
+      plan.kind === 'trash'
+        ? selectionAfterTrash(
+            rowsBeforeTrash?.get(session.id) ?? flattenProjectTree(tree.dirs ?? {}, tree.expanded),
+            tree.selected,
+            tree.selection,
+            successes.flatMap((item) => {
+              const path = item.source ? relativeTo(session.root, item.source) : null;
+              return path === null ? [] : [path];
+            }),
+            tree.anchor,
+          )
+        : null;
     session.tree.setState({
       selected: remapTreePath(tree.selected),
       anchor: remapTreePath(tree.anchor),
       selection: remapSet(tree.selection),
       expanded: remapSet(tree.expanded),
       revealSeq: tree.revealSeq + 1,
+      ...(trashSelection ?? {}),
     });
     const state = session.workspace.getState();
     const transfers: { absolute: string; pinned: boolean }[] = [];
@@ -231,8 +280,18 @@ export async function executeFileOperation(
     // 충돌 선택 동안 사용자가 다시 편집했다면 낡은 계획을 실행하지 않는다.
     if (docs.some((doc) => doc.dirty || doc.inflight || doc.composing))
       throw new Error(S.projectEdit.changedDuringConfirm);
+    // 삭제 전 보이는 순서를 보관하되 완료 시점의 현재 선택을 기준으로 복구한다.
+    const rowsBeforeTrash =
+      plan.kind === 'trash'
+        ? new Map(
+            fileWorkspaceSessions().map((session) => {
+              const tree = session.tree.getState();
+              return [session.id, flattenProjectTree(tree.dirs ?? {}, tree.expanded)] as const;
+            }),
+          )
+        : undefined;
     result = await client.fsExecuteOperation(plan.id, decisions);
-    await applyResults(client, plan, result, docs, destinationSession);
+    await applyResults(client, plan, result, docs, destinationSession, rowsBeforeTrash);
     return result;
   } finally {
     fileEditors.lockMutation(docs, false);

@@ -870,6 +870,9 @@ function contextActions(): Action[] {
     ['file.discard', S.actions.discard, 'repo'],
     ['editor.pin', S.actions.pin, 'view'],
     ['editor.format', S.fileEditor.format, 'view'],
+    ['editor.zoomIn', S.fileEditor.zoomIn, 'view'],
+    ['editor.zoomOut', S.fileEditor.zoomOut, 'view'],
+    ['editor.zoomReset', S.fileEditor.zoomReset, 'view'],
     ['branch.rename', S.actions.renameBranch, 'branch'],
     ['branch.checkout', S.actions.checkoutBranch, 'branch'],
     ['diff.previousFile', S.diff.previousFile, 'view'],
@@ -885,7 +888,10 @@ function contextActions(): Action[] {
       executeCommand(id);
     },
     input:
-      id === 'commit.execute' || id === 'editor.format' || id.startsWith('log.search')
+      id === 'commit.execute' ||
+      id === 'editor.format' ||
+      id.startsWith('editor.zoom') ||
+      id.startsWith('log.search')
         ? 'allow'
         : 'deny',
   }));

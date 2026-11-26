@@ -533,6 +533,10 @@ export const ko = {
     },
   },
   fileEditor: {
+    zoomIn: '확대',
+    zoomOut: '축소',
+    zoomReset: '100%로 초기화',
+    zoom: '본문 배율',
     format: '파일 포맷',
     formatting: '포맷 중…',
     formatFailed: '파일 포맷에 실패했습니다.',

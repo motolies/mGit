@@ -2,7 +2,7 @@ import { StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { AutoSuggestion, BlockClass, ConflictDoc, SideLabels } from '@mgit/ipc';
 import { Button, S } from '@mgit/ui';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyCustom,
   applyPick,
@@ -34,6 +34,8 @@ export interface MergeSaveOptions {
 }
 
 export interface MergeEditorProps {
+  /** 코드 글자 크기는 문서 상태와 독립적으로 변경한다. */
+  fontSize?: number;
   path: string;
   doc: ConflictDoc;
   labels: SideLabels;
@@ -77,6 +79,7 @@ function Pane({
 
 /** 3-way 병합 편집기 (CF-06~10·13): ours·base·theirs 읽기 전용 + 결과 편집. 블록 정렬 스크롤 동기 */
 export function MergeEditor({
+  fontSize = 12,
   path,
   doc,
   labels,
@@ -357,6 +360,12 @@ export function MergeEditor({
     };
   }, [editorDoc, labels, path, initialText, sides, save]);
 
+  // 배율 변경은 기존 뷰와 실행 취소 기록을 유지하고 레이아웃만 다시 측정한다.
+  useEffect(() => {
+    void fontSize;
+    for (const view of Object.values(views.current)) view.requestMeasure();
+  }, [fontSize]);
+
   /** 자동 결합 제안을 미해결 블록에 적용 (CF-15) */
   const applyAuto = () => {
     const v = views.current.result;
@@ -398,7 +407,11 @@ export function MergeEditor({
   };
 
   return (
-    <div className={styles.root} data-hide-base={hideBase ? 'true' : 'false'}>
+    <div
+      className={styles.root}
+      style={{ '--merge-font-size': `${fontSize}px` } as CSSProperties}
+      data-hide-base={hideBase ? 'true' : 'false'}
+    >
       <div className={styles.toolbar}>
         <span className={styles.remaining} data-done={remaining === 0 ? 'true' : 'false'}>
           {S.conflict.remaining(remaining)}

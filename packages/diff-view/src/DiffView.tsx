@@ -83,6 +83,8 @@ export interface DiffArrival {
 }
 
 export interface DiffViewProps {
+  /** 코드 글자 크기. 생략하면 기존 12px을 유지한다. */
+  fontSize?: number;
   arrival?: DiffArrival;
   /** 앱의 유효 키맵에 구간 이동을 연결한다. 반환한 함수는 뷰 변경·해제 때 정리한다 */
   onNavigationReady?: (
@@ -170,6 +172,7 @@ function renderPieces(pieces: Piece[]) {
  * - `actions` 가 있으면 hunk 헤더 버튼과 줄 체크박스로 부분 스테이징·되돌리기
  */
 export function DiffView({
+  fontSize = 12,
   diff,
   document,
   fullFile = true,
@@ -279,7 +282,7 @@ export function DiffView({
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 20,
+    estimateSize: () => (20 * fontSize) / 12,
     overscan: 20,
     ...(initialHeight ? { initialRect: { width: 800, height: initialHeight } } : {}),
   });
@@ -332,6 +335,7 @@ export function DiffView({
 
   /** 줄바꿈·분할 폭 변경 후 좌우를 함께 다시 측정한다. */
   useEffect(() => {
+    void fontSize;
     void wrap;
     void splitRatio;
     void tabWidth;
@@ -342,7 +346,7 @@ export function DiffView({
     const observer = new ResizeObserver(() => virtualizer.measure());
     observer.observe(element);
     return () => observer.disconnect();
-  }, [wrap, splitRatio, tabWidth, mode, virtualizer]);
+  }, [fontSize, wrap, splitRatio, tabWidth, mode, virtualizer]);
 
   /** 공통 세로 뷰포트 안의 코드만 이동해 거터와 중앙 경계를 고정한다. */
   const scrollHorizontal = useCallback(
@@ -635,7 +639,12 @@ export function DiffView({
       ref={viewRef}
       className={styles.view}
       style={
-        { '--diff-split': `${splitRatio}%`, '--diff-ratio': splitRatio / 100 } as CSSProperties
+        {
+          '--diff-split': `${splitRatio}%`,
+          '--diff-ratio': splitRatio / 100,
+          '--diff-font-size': `${fontSize}px`,
+          '--diff-line-height': `${(20 * fontSize) / 12}px`,
+        } as CSSProperties
       }
     >
       <div className={styles.toolbar}>

@@ -806,3 +806,15 @@ it('좌우·통합 전환 뒤 스크롤바와 코드 오프셋을 같은 시작�
   await flush();
   expect(screen.getByRole('region', { name: S.diff.oldHorizontalScroll }).scrollLeft).toBe(0);
 });
+
+it('배율 변경은 코드 크기와 행 높이를 함께 갱신하며 본문을 유지한다', () => {
+  const value = diff('zoom');
+  const { container, rerender } = render(<DiffView diff={value} path="zoom.txt" mode="split" />);
+  const root = container.firstElementChild as HTMLElement;
+  const scroller = container.querySelector('[data-wrap]');
+  expect(root.style.getPropertyValue('--diff-font-size')).toBe('12px');
+  rerender(<DiffView diff={value} path="zoom.txt" mode="split" fontSize={24} />);
+  expect(container.querySelector('[data-wrap]')).toBe(scroller);
+  expect(root.style.getPropertyValue('--diff-font-size')).toBe('24px');
+  expect(root.style.getPropertyValue('--diff-line-height')).toBe('40px');
+});

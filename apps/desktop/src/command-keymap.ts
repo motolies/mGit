@@ -41,6 +41,8 @@ export function defaultShortcut(id: string, fallback?: string, mac = isMac()): s
     'diff.previousHunk': 'shift+f7',
     'branch.create': undefined,
     'editor.format': 'mod+alt+l',
+    'editor.zoomIn': 'mod+=',
+    'editor.zoomOut': 'mod+-',
   };
   return id in keys ? keys[id] : fallback;
 }
@@ -71,6 +73,9 @@ export const COMMAND_SCOPES: Record<string, CommandScope> = {
   'branch.checkout': 'branch',
   'editor.pin': 'editor',
   'editor.format': 'editor',
+  'editor.zoomIn': 'editor',
+  'editor.zoomOut': 'editor',
+  'editor.zoomReset': 'editor',
 };
 
 /** 함께 활성화될 수 있는 영역만 충돌로 취급한다. 에디터는 diff를 포함한다. */

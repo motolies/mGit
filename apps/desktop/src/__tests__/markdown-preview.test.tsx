@@ -168,3 +168,23 @@ describe('Markdown preview', () => {
     expect(document.querySelector('img[src$="OLD"]')).toBeNull();
   });
 });
+
+it('배율 변경은 본문과 Mermaid DOM을 보존하고 같은 읽기 위치를 유지한다', async () => {
+  const { props, rerender, client } = fixture(
+    '# Heading\n\n![image](../a.png)\n\n```mermaid\nflowchart LR\nA --> B\n```',
+  );
+  const image = await screen.findByAltText('image');
+  const mermaid = screen.getByTestId('mermaid');
+  const preview = screen.getByRole('region', { name: S.markdown.preview });
+  fireEvent.wheel(preview);
+  preview.scrollTop = 120;
+  fireEvent.scroll(preview);
+  rerender(<MarkdownPreview {...props} zoomPercent={150} />);
+  expect(screen.getByTestId('mermaid')).toBe(mermaid);
+  expect(screen.getByAltText('image')).toBe(image);
+  expect(client.fsReadImage).toHaveBeenCalledTimes(1);
+  expect((preview.firstElementChild as HTMLElement).style.zoom).toBe('1.5');
+  expect(preview.scrollTop).toBe(180);
+  rerender(<MarkdownPreview {...props} zoomPercent={100} />);
+  expect(preview.scrollTop).toBe(120);
+});

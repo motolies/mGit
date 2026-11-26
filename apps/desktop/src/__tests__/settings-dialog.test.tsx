@@ -129,6 +129,7 @@ describe('설정 대화상자 (⌘,)', () => {
       submit();
       await tick();
       expect(getEditorPreferences()).toEqual({
+        zoomPercent: 100,
         printWidth: 180,
         formatOnSave: true,
         currentBlame: false,

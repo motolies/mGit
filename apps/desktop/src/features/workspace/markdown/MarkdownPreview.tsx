@@ -169,11 +169,13 @@ export function MarkdownPreview({
   source,
   viewState,
   refreshKey,
+  zoomPercent = 100,
 }: {
   text: string;
   source: PreviewSource;
   viewState: MarkdownViewState;
   refreshKey: string;
+  zoomPercent?: number;
 }) {
   const host = useRef<HTMLElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -262,20 +264,50 @@ export function MarkdownPreview({
     }),
     [stableSource, cache, theme, refreshKey, focusEpoch],
   );
-  const headings = new Map<string, number>();
-  const components = { ...baseComponents };
-  for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const) {
-    components[tag] = ({ children }) => {
-      const slug = plainText(children)
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s_-]/gu, '')
-        .replace(/\s/g, '-');
-      const count = headings.get(slug) ?? 0;
-      headings.set(slug, count + 1);
-      const Tag = tag;
-      return <Tag id={`${slug}${count ? `-${count}` : ''}`}>{children}</Tag>;
-    };
-  }
+  // 배율만 바뀔 때 Markdown 파싱과 Mermaid 컴포넌트 구성을 반복하지 않는다.
+  const rendered = useMemo(() => {
+    const headings = new Map<string, number>();
+    const components = { ...baseComponents };
+    for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const) {
+      components[tag] = ({ children }) => {
+        const slug = plainText(children)
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+          .replace(/\s/g, '-');
+        const count = headings.get(slug) ?? 0;
+        headings.set(slug, count + 1);
+        const Tag = tag;
+        return <Tag id={`${slug}${count ? `-${count}` : ''}`}>{children}</Tag>;
+      };
+    }
+    return (
+      <>
+        {canHighlight(countLines(text), text.length) ? (
+          <ReactMarkdown
+            skipHtml
+            remarkPlugins={[remarkGfm]}
+            components={components}
+            urlTransform={(url, key) => (key === 'src' ? url : defaultUrlTransform(url))}
+          >
+            {text}
+          </ReactMarkdown>
+        ) : (
+          <p role="status">{S.markdown.tooLarge}</p>
+        )}
+      </>
+    );
+  }, [text, baseComponents]);
+  const previousZoom = useRef(zoomPercent);
+  // 본문 확대 전의 읽던 상대 위치를 보존하며 초기 복원 대상도 함께 조정한다.
+  useLayoutEffect(() => {
+    const ratio = zoomPercent / previousZoom.current;
+    previousZoom.current = zoomPercent;
+    if (!host.current || ratio === 1) return;
+    const top = host.current.scrollTop * ratio;
+    if (restoreTarget.current !== null) restoreTarget.current = top;
+    host.current.scrollTop = top;
+    viewState.scrollTop = top;
+  }, [zoomPercent, viewState]);
   return (
     <section
       // biome-ignore lint/a11y/noNoninteractiveTabindex: 미리보기 스크롤과 문서 저장 단축키를 위해 포커스를 받는다.
@@ -298,19 +330,8 @@ export function MarkdownPreview({
           event.currentTarget.scrollTop = restoreTarget.current;
       }}
     >
-      <div ref={content}>
-        {canHighlight(countLines(text), text.length) ? (
-          <ReactMarkdown
-            skipHtml
-            remarkPlugins={[remarkGfm]}
-            components={components}
-            urlTransform={(url, key) => (key === 'src' ? url : defaultUrlTransform(url))}
-          >
-            {text}
-          </ReactMarkdown>
-        ) : (
-          <p role="status">{S.markdown.tooLarge}</p>
-        )}
+      <div ref={content} style={{ zoom: zoomPercent / 100 }}>
+        {rendered}
       </div>
     </section>
   );

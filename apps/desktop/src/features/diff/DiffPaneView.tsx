@@ -9,6 +9,7 @@ import type { DiffDocument, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
 import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
+import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
 import { useRovingToolbar } from '../../components/roving';
 import { useCommandTitle } from '../../components/use-command-shortcut';
 import type { DiffViewOptions } from '../../store/session-store';
@@ -94,6 +95,7 @@ export function DiffPaneView({
 }: DiffPaneViewProps) {
   const tools = useRovingToolbar<HTMLDivElement>('horizontal');
   const paneRef = useRef<HTMLDivElement>(null);
+  const zoom = useEditorZoom(paneRef);
   const ownedFocus = useRef(false);
   /** 파일 로딩으로 본문이 사라져도 탐색 영역의 포커스 소유권을 유지한다. 사용자 이동은 즉시 존중한다. */
   useEffect(() => {
@@ -201,6 +203,7 @@ export function DiffPaneView({
         {onDifftool ? <Button onClick={onDifftool}>{S.history.difftool}</Button> : null}
       </header>
       <div {...tools} className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
+        <EditorZoomControls />
         {onEditCurrent ? <Button onClick={onEditCurrent}>{S.fileView.editCurrent}</Button> : null}
         <span className={styles.segment}>
           <Button aria-pressed={mode === 'split'} onClick={() => onModeChange('split')}>
@@ -386,6 +389,7 @@ export function DiffPaneView({
       ) : null}
       <div className={styles.body}>
         <DiffView
+          fontSize={zoom.fontSize}
           onNavigationReady={onNavigationReady}
           arrival={arrival}
           diff={diff}

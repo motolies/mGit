@@ -5,7 +5,11 @@ import {
   type FsOperationResult,
 } from '@mgit/ipc';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { executeFileOperation } from '../features/project/file-operation-coordinator';
+import {
+  executeFileOperation,
+  selectionAfterTrash,
+} from '../features/project/file-operation-coordinator';
+import { flattenProjectTree } from '../features/project/project-tree-model';
 import { fileEditors } from '../store/file-editor-store';
 import { createWorkspaceStore, fileViewDoc } from '../store/workspace-store';
 
@@ -198,5 +202,58 @@ describe('부분 게시와 대상 타입 변경', () => {
     });
     await executeFileOperation(client, { ...plan, kind: 'copy' }, [], 1);
     expect(fileEditors.get(1, 'api/b.ts')).toBeUndefined();
+  });
+});
+
+/** 삭제 위치 근처의 실제 항목으로 선택을 이어가는 규칙을 검증한다. */
+describe('삭제 후 선택', () => {
+  const rows = flattenProjectTree(
+    {
+      '': {
+        pending: false,
+        limit: null,
+        load: {
+          state: 'listed',
+          entries: ['a.ts', 'b.ts', 'c.ts'].map((name) => ({
+            name,
+            kind: 'file' as const,
+            size: 0,
+            mtimeMs: 0,
+            openable: true,
+          })),
+          total: 3,
+          truncated: false,
+          nonUtf8Names: 0,
+        },
+      },
+    },
+    { '': true },
+  );
+  it('중간 행은 다음 행으로, 마지막 행은 이전 행으로 이동한다', () => {
+    expect(selectionAfterTrash(rows, 'b.ts', { 'b.ts': true }, ['b.ts']).selected).toBe('c.ts');
+    expect(selectionAfterTrash(rows, 'c.ts', { 'c.ts': true }, ['c.ts']).selected).toBe('b.ts');
+  });
+  it('부분 실패의 생존 선택을 우선하고 모두 삭제하면 루트로 돌아간다', () => {
+    expect(selectionAfterTrash(rows, 'b.ts', { 'a.ts': true, 'b.ts': true }, ['b.ts'])).toEqual({
+      selected: 'a.ts',
+      anchor: 'a.ts',
+      selection: { 'a.ts': true },
+    });
+    expect(selectionAfterTrash(rows, 'b.ts', { 'b.ts': true }, ['a.ts', 'b.ts', 'c.ts'])).toEqual({
+      selected: '',
+      anchor: '',
+      selection: { '': true },
+    });
+  });
+  it('사용자가 다른 행으로 옮겼다면 선택과 범위 시작점을 보존한다', () => {
+    expect(
+      selectionAfterTrash(rows, 'c.ts', { 'a.ts': true, 'c.ts': true }, ['b.ts'], 'a.ts'),
+    ).toEqual({ selected: 'c.ts', anchor: 'a.ts', selection: { 'a.ts': true, 'c.ts': true } });
+  });
+  it('삭제 폴더의 하위 항목은 다음 선택 후보에서 제외한다', () => {
+    const nested = rows.map((row, index) =>
+      index === 1 || index === 2 ? { ...row, id: index === 1 ? 'dir' : 'dir/child.ts' } : row,
+    );
+    expect(selectionAfterTrash(nested, 'dir', { dir: true }, ['dir']).selected).toBe('c.ts');
   });
 });

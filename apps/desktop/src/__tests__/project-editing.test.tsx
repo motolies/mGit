@@ -1,6 +1,8 @@
 import type { FsOperationRequest } from '@mgit/ipc';
+import { S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { executeCommand } from '../command-registry';
 import {
   ManagedProjectTree,
   normalizeProjectPaths,
@@ -9,7 +11,7 @@ import {
 import type { ProjectTreeProps } from '../features/project/ProjectTree';
 import { projectEditStrings } from '../features/project/project-edit-strings';
 import { flattenProjectTree } from '../features/project/project-tree-model';
-import { tick } from './dialog-stub';
+import { installDialogStub, tick } from './dialog-stub';
 
 const prepare = vi.hoisted(() => vi.fn());
 const execute = vi.hoisted(() => vi.fn());
@@ -18,6 +20,7 @@ vi.mock('../features/project/file-operation-coordinator', () => ({
   executeFileOperation: execute,
 }));
 beforeAll(() => {
+  installDialogStub();
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
     configurable: true,
     get: () => 600,
@@ -154,5 +157,65 @@ describe('인라인 이름의 텍스트 메뉴', () => {
     await tick();
     expect(screen.queryByRole('textbox', { name: t.name })).toBeNull();
     expect(prepare).not.toHaveBeenCalled();
+  });
+});
+
+/** 삭제 확인과 비동기 처리 뒤 키보드 포커스를 유지한다. */
+describe('삭제 후 트리 포커스', () => {
+  it('삭제 완료 후 화살표 키를 곧바로 처리한다', async () => {
+    const props = mount();
+    const tree = screen.getByRole('tree');
+    tree.focus();
+    act(() => {
+      executeCommand('project.trash', tree);
+    });
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.ok }));
+    await tick();
+    expect(execute).toHaveBeenCalled();
+    expect(document.activeElement).toBe(tree);
+    fireEvent.keyDown(tree, { key: 'ArrowUp' });
+    expect(props.onSelect).toHaveBeenCalledWith('');
+  });
+  it('삭제 취소 시 선택을 바꾸지 않고 트리로 복귀한다', async () => {
+    const props = mount();
+    const tree = screen.getByRole('tree');
+    tree.focus();
+    act(() => {
+      executeCommand('project.trash', tree);
+    });
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.cancel }));
+    await tick();
+    expect(execute).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tree);
+  });
+  it('처리 중 다른 입력란으로 옮겼다면 포커스를 가져오지 않는다', async () => {
+    mount();
+    let finish: (() => void) | undefined;
+    execute.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ id: 'test', items: [] });
+        }),
+    );
+    const tree = screen.getByRole('tree');
+    tree.focus();
+    act(() => {
+      executeCommand('project.trash', tree);
+    });
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: S.confirm.ok }));
+    await tick();
+    const outside = document.createElement('input');
+    document.body.append(outside);
+    outside.focus();
+    await act(async () => {
+      finish?.();
+      await tick();
+    });
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
 });

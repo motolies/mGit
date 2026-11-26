@@ -74,6 +74,47 @@ export function ManagedProjectTree({
     resolve: (decisions: FsOperationDecision[] | null) => void;
   } | null>(null);
   const [trash, setTrash] = useState<string[] | null>(null);
+  const [focusSeq, setFocusSeq] = useState(0);
+  const trashFocus = useRef(false);
+  const alive = useRef(true);
+  // 확인 중 사용자가 다른 화면으로 이동하면 기존 포커스 복귀 요청을 취소한다.
+  useEffect(() => {
+    alive.current = true;
+    const leave = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('dialog, [role="dialog"], [role="menu"]'))
+        return;
+      if (event.type === 'blur' || (target instanceof Node && !host.current?.contains(target)))
+        trashFocus.current = false;
+      // 트리에서 새 행을 선택한 경우에도 오래된 복귀 요청은 버린다.
+      if (
+        event.type === 'pointerdown' &&
+        target instanceof Element &&
+        target.closest('[data-project-tree]')
+      )
+        trashFocus.current = false;
+    };
+    document.addEventListener('focusin', leave);
+    document.addEventListener('pointerdown', leave);
+    window.addEventListener('blur', leave);
+    return () => {
+      alive.current = false;
+      document.removeEventListener('focusin', leave);
+      document.removeEventListener('pointerdown', leave);
+      window.removeEventListener('blur', leave);
+    };
+  }, []);
+  /** 삭제 확인을 연 경로에서만 트리 포커스 복귀를 예약한다. */
+  const beginTrash = (paths: string[]) => {
+    trashFocus.current = true;
+    setTrash(paths);
+  };
+  /** 사용자가 다른 영역으로 이동하지 않은 경우에만 탐색을 이어간다. */
+  const returnTrashFocus = () => {
+    if (alive.current && trashFocus.current && host.current?.isConnected)
+      setFocusSeq((value) => value + 1);
+    trashFocus.current = false;
+  };
   const operation = useRef<string | null>(null);
   const running = useRef(false);
   const outcomes = useRef<Awaited<ReturnType<typeof client.fsExecuteOperation>> | null>(null);
@@ -404,7 +445,7 @@ export function ManagedProjectTree({
               danger: true,
               disabledReason: protectedTarget ? t.protected : undefined,
               disabled: busy || protectedTarget,
-              onSelect: () => setTrash(paths),
+              onSelect: () => beginTrash(paths),
             },
           ]
         : []),
@@ -445,7 +486,7 @@ export function ManagedProjectTree({
       'project.paste': () => void paste(),
       'project.trash': () => {
         const paths = targets();
-        if (paths.length && !protectedSelection(paths)) setTrash(paths);
+        if (paths.length && !protectedSelection(paths)) beginTrash(paths);
       },
     };
     const remove = Object.entries(handlers).map(([id, action]) =>
@@ -647,6 +688,7 @@ export function ManagedProjectTree({
       <ProjectTree
         {...props}
         rows={displayRows}
+        focusSeq={focusSeq}
         cutPaths={cutPaths}
         inline={inline}
         menu={menu}
@@ -726,11 +768,16 @@ export function ManagedProjectTree({
         message={t.confirmTrash}
         items={trash ?? []}
         danger
-        onCancel={() => setTrash(null)}
+        onCancel={() => {
+          setTrash(null);
+          returnTrashFocus();
+        }}
         onConfirm={() => {
           const paths = trash ?? [];
           setTrash(null);
-          void run({ kind: 'trash', sources: sources(paths), destination: null });
+          void run({ kind: 'trash', sources: sources(paths), destination: null }).finally(
+            returnTrashFocus,
+          );
         }}
       />
     </div>

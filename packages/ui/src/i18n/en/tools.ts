@@ -25,6 +25,7 @@ export const enTools: Pick<
   | 'notify'
   | 'repoSettings'
   | 'shortcuts'
+  | 'perfSelftest'
   | 'hosting'
   | 'pr'
   | 'modules'
@@ -48,8 +49,8 @@ export const enTools: Pick<
     searchNext: 'Next search result',
     searchPrevious: 'Previous search result',
     showDiff: 'Show file diff',
-    nextHunk: 'Next diff hunk',
-    previousHunk: 'Previous diff hunk',
+    nextHunk: 'Next change',
+    previousHunk: 'Previous change',
     commitPrepare: 'Prepare commit',
     commitExecute: 'Commit',
     stage: 'Stage',
@@ -114,6 +115,7 @@ export const enTools: Pick<
     profiles: 'Author profiles…',
     sshKeys: 'SSH keys…',
     browseRemote: 'Browse remote repositories…',
+    perfSelftest: 'Run performance self-test (development)',
   },
   credential: {
     title: {
@@ -551,6 +553,12 @@ export const enTools: Pick<
     lfsUnlock: 'Unlock',
     lfsUnlockForce: 'Force unlock',
     lfsLocksError: (e: string) => `Couldn't load locks: ${e}`,
+  },
+  perfSelftest: {
+    waiting: 'Performance self-test — waiting for the app to settle',
+    running: 'Performance self-test running — keep this window visible and untouched',
+    done: 'Performance self-test finished',
+    unavailable: 'The performance recorder is off',
   },
   shortcuts: {
     change: 'Change',

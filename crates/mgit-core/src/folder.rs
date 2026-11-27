@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::UNIX_EPOCH;
 
+use mgit_git::bulk_reads;
 use mgit_git::cmd::{
     Discovered, discover, head_state, in_progress_op, list_refs, list_remotes, scan_repos,
     scanned_repo_status,
@@ -655,7 +656,8 @@ impl Core {
             let path = repo.path.clone();
             let on_change: mgit_model::OnChange = Arc::new(move |changes| {
                 if let Some(s) = weak.upgrade() {
-                    // HEAD·ref·packed-refs 변경이면 타임라인도 다시 읽어야 한다
+                    // HEAD·ref·packed-refs 변경이면 타임라인도 다시 읽어야 한다. FETCH_HEAD 만 바뀐 것(받을 것이 없던
+                    // fetch)은 요약(마지막 fetch 시각)만 다시 읽으면 된다 (G6)
                     let refs = changes.kinds.iter().any(|k| {
                         matches!(
                             k,
@@ -750,10 +752,11 @@ impl Core {
         for repo in folder.select(repos)? {
             let inner = Arc::clone(&inner);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 summarize(&inner, repo).await
-            });
+            }));
         }
         let mut out = Vec::new();
         while let Some(r) = set.join_next().await {

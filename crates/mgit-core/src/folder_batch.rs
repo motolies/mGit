@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use mgit_git::bulk_reads;
 use mgit_git::cmd::{
     Discovered, discover, in_progress_op, list_unmerged, rev_resolves, scanned_repo_status,
     staged_conflict_markers,
@@ -1574,7 +1575,8 @@ impl Core {
         for found in folder.select(repos)?.into_iter().map(|r| r.found) {
             let inner = Arc::clone(&inner);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 let runner = inner.runner();
                 let d = discover(runner, &found.path).await.ok()?;
@@ -1589,7 +1591,7 @@ impl Core {
                     summary: status.summary(),
                     entries: status.entries,
                 })
-            });
+            }));
         }
         let mut out = Vec::new();
         while let Some(r) = set.join_next().await {

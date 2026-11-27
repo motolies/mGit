@@ -19,6 +19,7 @@ import { withText } from '../features/filter-bar/filter-model';
 import { revealNoticeOf } from '../features/folder/FolderTimeline';
 import { BlameDialog } from '../features/history/BlameDialog';
 import { FileHistoryDialog } from '../features/history/FileHistoryDialog';
+import { commandSourceOf } from '../features/workspace/editor-hints';
 import { useAppStore } from '../store';
 import { DEFAULT_DOCK, type SessionMeta } from '../store/app-store';
 import { createFolderStore, type FolderStore } from '../store/folder-store';
@@ -599,7 +600,7 @@ describe('폴더 탭: 변경 파일 트리 → 커밋 diff 탭 (CD-01·04·05, E
     });
     render(
       <>
-        <AppBody actions={[]} />
+        <AppBody commands={commandSourceOf(() => [])} />
         <FileHistoryDialog />
         <BlameDialog />
       </>,

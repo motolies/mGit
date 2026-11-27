@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mgit_git::bulk_reads;
 use mgit_git::cmd::discover;
 use mgit_l10n::pick;
 use mgit_model::BackupRecord;
@@ -236,7 +237,8 @@ impl Core {
         for found in folder.repos() {
             let inner = Arc::clone(&inner);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 let result = match discover(inner.runner(), &found.path).await {
                     Ok(d) => {
@@ -250,7 +252,7 @@ impl Core {
                     tracing::debug!(path = %found.path.display(), error = %e, "백업 정리 실패");
                     BackupPrune::default()
                 })
-            });
+            }));
         }
         let mut total = BackupPrune::default();
         while let Some(joined) = set.join_next().await {

@@ -1,5 +1,6 @@
 import { Channel } from '@tauri-apps/api/core';
-import { commands } from './bindings';
+import { commands as rawCommands } from './bindings';
+import { observeMethods, tapEvents } from './observe';
 import type {
   AdvancedSearch,
   AppEvent,
@@ -1004,6 +1005,19 @@ export class IpcClientError extends Error {
   }
 }
 
+/**
+ * 모든 Tauri 명령의 단일 진입점. 성능 기록기(개발 프로필 전용)가 관찰자를 걸면 명령 이름·소요 시간·성공 여부를 알리고,
+ * 걸지 않으면 원래 명령을 그대로 부른다 (`observe.ts`)
+ */
+const commands = observeMethods(rawCommands);
+
+/** 코어 이벤트 통로를 만든다. 성능 기록기가 통로(연 명령 이름)·이벤트 종류별 개수를 셀 수 있게 처리기를 감싼다 */
+function channelOf<E>(source: string, onEvent: (event: E) => void): Channel<E> {
+  const channel = new Channel<E>();
+  channel.onmessage = tapEvents(source, onEvent);
+  return channel;
+}
+
 /** 커맨드 호출을 감싸 거부를 `IpcClientError` 로 바꾼다 */
 async function call<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -1025,8 +1039,7 @@ export function createTauriClient(): IpcClient {
   return {
     gitVersion: () => call(() => commands.gitVersion()),
     openRepo: (path, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('openRepo', onEvent);
       return call(() => commands.openRepo(path, channel));
     },
     graphWindow: (session, start, count) => call(() => commands.graphWindow(session, start, count)),
@@ -1150,8 +1163,7 @@ export function createTauriClient(): IpcClient {
       voidCall(() => commands.worktreeRemove(session, path, force, deleteBranch)),
     worktreePrune: (session) => voidCall(() => commands.worktreePrune(session)),
     openFolder: (path, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('openFolder', onEvent);
       return call(() => commands.openFolder(path, channel));
     },
     folderSummaries: (session, repos) =>
@@ -1172,26 +1184,22 @@ export function createTauriClient(): IpcClient {
       ),
     groupDelete: (id) => voidCall(() => commands.groupDelete(id)),
     openGroup: (id, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('openGroup', onEvent);
       return call(() => commands.openGroup(id, channel));
     },
     folderOpenRepoSession: (session, repo, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('folderOpenRepoSession', onEvent);
       return call(() => commands.folderOpenRepoSession(session, repo, channel));
     },
     folderReleaseRepoSession: (session, repoSession) =>
       call(() => commands.folderReleaseRepoSession(session, repoSession)),
     scanRepos: (root) => call(() => commands.scanRepos(root)),
     cloneRepo: (request, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('cloneRepo', onEvent);
       return call(() => commands.cloneRepo(request, channel));
     },
     cloneMany: (request, onEvent) => {
-      const channel = new Channel<SessionEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<SessionEvent>('cloneMany', onEvent);
       return call(() =>
         commands.cloneMany(
           {
@@ -1216,8 +1224,7 @@ export function createTauriClient(): IpcClient {
       voidCall(() => commands.submoduleUpdate(session, recursive)),
     takeStartupPaths: () => call(() => commands.takeStartupPaths()),
     subscribeAppEvents: (onEvent) => {
-      const channel = new Channel<AppEvent>();
-      channel.onmessage = onEvent;
+      const channel = channelOf<AppEvent>('subscribeAppEvents', onEvent);
       return voidCall(() => commands.subscribeAppEvents(channel));
     },
     conflicts: (session) => call(() => commands.conflicts(session)),

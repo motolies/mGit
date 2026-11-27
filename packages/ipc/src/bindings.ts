@@ -11,6 +11,11 @@ export const commands = {
 	uiSettingsSnapshot: () => __TAURI_INVOKE<{ [key in string]: string }>("ui_settings_snapshot"),
 	/**  메모리에 반영한 설정 키 하나를 디스크에 저장한다. null은 삭제다. */
 	uiSettingsSet: (key: string, value: string | null) => __TAURI_INVOKE<null>("ui_settings_set", { key, value }),
+	/**
+	 *  성능 기록기(개발·테스트 프로필)가 모은 JSON 줄을 덧붙인다. 배포 프로필은 거부하고, 상한에 닿으면 false 다.
+	 *  UI 스레드를 막지 않도록 비동기 명령으로 둔다.
+	 */
+	perfAppend: (lines: string) => __TAURI_INVOKE<boolean>("perf_append", { lines }),
 	/**  시스템 git 의 버전과 실제 경로를 돌려준다 */
 	gitVersion: () => __TAURI_INVOKE<GitVersionInfo>("git_version"),
 	/**

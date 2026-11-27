@@ -10,7 +10,15 @@ import type {
 import { Button, requireChecked, S } from '@mgit/ui';
 import { useRef, useState } from 'react';
 import { bool, raw, str, useDialogs } from '../../components/use-dialogs';
-import { describeError, getFolderStore, repoNameOf, useAppStore, useFolder } from '../../store';
+import {
+  describeError,
+  getFolderStore,
+  repoNameOf,
+  useAppStore,
+  useFileTree,
+  useFolder,
+} from '../../store';
+import { selectedRepoPathsIn } from '../../store/folder-store';
 import { branchNameField, normalizeBranchName } from '../branch/branch-name';
 import { revsAfterDelete, revsAfterRename, sameRevs } from '../branches/folder-branch-tree';
 import { draftBlockedRepos, hasPendingDraft } from './batch-drafts';
@@ -25,7 +33,6 @@ import {
 import styles from './FolderExtra.module.css';
 import { commandDangers, formatGitCommand, parseGitCommand } from './git-command';
 import { readRecentCommands, recordRecentCommand } from './recent-commands';
-import { useSelectedRepos } from './use-selected-repos';
 
 /** checkout 대상으로 고를 수 있는 저장소 하나 (브랜치 트리의 체크 목록) */
 export interface CheckoutCandidate {
@@ -360,7 +367,6 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     runBatch: st.runBatch,
     inspectIntegration: st.inspectIntegration,
   }));
-  const selected = useSelectedRepos();
   const notice = useAppStore((s) => s.notice);
   const pickDirectory = useAppStore((s) => s.pickDirectory);
   const openFolderAt = useAppStore((s) => s.openFolderAt);
@@ -370,6 +376,10 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   const running = (f?.running ?? false) || preparing;
   const runBatch = f?.runBatch;
   const folderId = f?.id ?? null;
+  // 고른 저장소는 부를 때 스토어에서 읽는다 — 구독하면 트리에서 행을 옮길 때마다 이 흐름을 쓰는 화면(Git 로그·워크스페이스·
+  // 커밋 도구 창 …)이 통째로 다시 그려진다 (D-2). 고른 수를 보이는 화면은 `useBatchScope` 를 따로 구독한다
+  const selectedNow = (): string[] =>
+    (folderId === null ? undefined : getFolderStore(folderId)?.getState().selectedRepos()) ?? [];
 
   /**
    * 대상 표기: 빈 목록은 전체 수, 트리에서 고른 저장소 그대로면 고른 수(`선택 N개`), 그 밖에 넘긴 목록(Commit and Push 의
@@ -378,13 +388,12 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   const scopeOf = (paths: readonly string[]) =>
     paths.length === 0
       ? t.allRepos(repos.length)
-      : sameRepos(paths, selected)
+      : sameRepos(paths, selectedNow())
         ? t.selected(paths.length)
         : S.folder.repos(paths.length);
   /** 쓰기 동작의 확인창에 쓰는 대상: 수와 저장소 이름 */
   const describe = (paths: readonly string[]) =>
     t.targets(scopeOf(paths), repoNames(targetRepos(repos, paths)));
-  const scope = scopeOf(selected);
   /** 대상 중 편집기 초안이 있는 저장소 이름 (작업 트리를 바꾸는 작업의 확인창에 미리 알린다) */
   const draftedNames = (paths: readonly string[]): string[] =>
     targetRepos(repos, paths)
@@ -452,13 +461,14 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   };
 
   /** fetch (MR-05). 확인 없이 바로 실행한다 */
-  const fetch = (paths: readonly string[] = selected) => run({ kind: 'fetch', prune: true }, paths);
+  const fetch = (paths: readonly string[] = selectedNow()) =>
+    run({ kind: 'fetch', prune: true }, paths);
 
   /**
    * pull: 코어가 폴더 설정의 방식(기본 ff-only)으로 하고 변경·진행 중 작업·업스트림 없는 저장소는 건너뛴다. 대상에 편집기
    * 초안이 있으면 실행하지 않는다 (`run`)
    */
-  const pull = (paths: readonly string[] = selected) => run({ kind: 'pull' }, paths);
+  const pull = (paths: readonly string[] = selectedNow()) => run({ kind: 'pull' }, paths);
 
   /**
    * branch 업데이트 (BR-09): 로컬 branch `name` 을 저장소마다 업스트림으로 fast-forward 한다 (checkout 하지 않은 branch 도).
@@ -511,6 +521,8 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
     )
       return;
     const eligible = rows.filter(eligibleIntegration);
+    // 처음에 체크해 둘 저장소: 대화상자를 띄우는 지금 고른 저장소
+    const picked = selectedNow();
     const values = await dialogs.prompt({
       title: kind === 'merge' ? copy.mergeTitle(source.name) : copy.rebaseTitle(source.name),
       message: [
@@ -545,7 +557,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
           type: 'checkbox' as const,
           initial:
             eligibleIntegration(row) &&
-            (preset.checkAll || selected.length === 0 || selected.includes(row.path)),
+            (preset.checkAll || picked.length === 0 || picked.includes(row.path)),
           disabled: !eligibleIntegration(row),
           note: [row.path, row.reason ?? (!eligibleIntegration(row) ? copy.incomplete : null)]
             .filter(Boolean)
@@ -598,7 +610,10 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
    * 체크하지 않으면 확인 단추가 꺼진다 (빈 목록이 "전부"로 가지 않게 — 확인이 와도 다시 거른다). 요약은 부른 순간의
    * 스토어 값을 읽는다 (커밋 직후 Commit and Push 가 부를 때 오른 ahead·새 branch 를 보도록)
    */
-  const push = async (paths: readonly string[] = selected, preset: BatchPresets['push'] = {}) => {
+  const push = async (
+    paths: readonly string[] = selectedNow(),
+    preset: BatchPresets['push'] = {},
+  ) => {
     const live = folderId === null ? undefined : getFolderStore(folderId)?.getState();
     if (running || live?.batchRunning) {
       return;
@@ -664,7 +679,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
 
   /** branch 만들기 (MR-06) */
   const createBranch = async (
-    paths: readonly string[] = selected,
+    paths: readonly string[] = selectedNow(),
     preset?: BatchPresets['createBranch'],
   ) => {
     const v = await dialogs.prompt({
@@ -695,7 +710,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   };
 
   /** checkout (MR-06): 이름을 입력받는다. 대상에 편집기 초안이 있는 저장소가 있으면 확인창에 미리 알린다 */
-  const checkout = async (paths: readonly string[] = selected) => {
+  const checkout = async (paths: readonly string[] = selectedNow()) => {
     const drafted = draftedNames(paths);
     const v = await dialogs.prompt({
       title: t.checkoutTitle,
@@ -713,7 +728,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
 
   /** 워크트리 만들기 (MR-07): 폴더 선택(설정에 기본 폴더가 있으면 그것) → branch → 끝나면 그 폴더를 열지 묻는다 */
   const worktree = async (
-    paths: readonly string[] = selected,
+    paths: readonly string[] = selectedNow(),
     preset?: BatchPresets['worktree'],
   ) => {
     const root = preset?.root ?? f?.settings?.worktreeRoot ?? (await pickDirectory(t.worktreeRoot));
@@ -959,6 +974,8 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
       reason: excluded.includes(repo.name) ? t.excluded : repo.current ? copy.current : null,
     }));
     const eligible = rows.filter((repo) => repo.reason === null);
+    // 처음에 체크해 둘 저장소: 누른 지금 고른 저장소
+    const picked = selectedNow();
     preparingRef.current = true;
     setPreparing(true);
     try {
@@ -972,7 +989,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
           type: 'checkbox' as const,
           initial:
             repo.reason === null &&
-            (preset.checkAll || selected.length === 0 || selected.includes(repo.path)),
+            (preset.checkAll || picked.length === 0 || picked.includes(repo.path)),
           disabled: repo.reason !== null,
           note: [repo.path, repo.reason].filter(Boolean).join(' · '),
           group: t.repoGroup(rows.length),
@@ -1031,11 +1048,11 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
   };
 
   /** 일괄 스태시 저장 (셋째 묶음 G): 메시지·미추적 파일 포함을 받아 변경이 있는 저장소마다 한 묶음으로 저장한다 */
-  const stashSave = (paths: readonly string[] = selected, preset?: StashSavePreset) =>
+  const stashSave = (paths: readonly string[] = selectedNow(), preset?: StashSavePreset) =>
     running ? Promise.resolve(null) : saveBatchStash(stashDeps, paths, preset);
 
   /** 일괄 스태시 꺼내기: 묶음을 고르고 그 묶음의 스태시가 남은 저장소 체크 목록을 거쳐 저장소마다 꺼낸다 */
-  const stashPop = (paths: readonly string[] = selected, preset?: StashPopPreset) =>
+  const stashPop = (paths: readonly string[] = selectedNow(), preset?: StashPopPreset) =>
     running ? Promise.resolve(null) : popBatchStash(stashDeps, paths, preset);
 
   /**
@@ -1045,7 +1062,7 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
    * 작업 기록 탭을 열어 저장소별 종료 코드·출력을 보인다. 자격 증명이 든 명령은 최근 목록에 남기지 않는다
    */
   const runCommand = async (
-    paths: readonly string[] = selected,
+    paths: readonly string[] = selectedNow(),
     preset?: BatchPresets['runCommand'],
   ): Promise<BatchResult | null> => {
     const folderPath = f?.path ?? null;
@@ -1098,9 +1115,6 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
 
   return {
     dialogs,
-    /** 고른 저장소 (빈 목록 = 전부) */
-    selected,
-    scope,
     running,
     /** 확인 없이 바로 실행한다 (실패한 저장소만 다시 실행의 확인 없는 작업) */
     run,
@@ -1123,6 +1137,23 @@ export function useFolderBatchFlows(report?: (result: BatchResult | null) => voi
 }
 
 /**
+ * 일괄 작업 대상의 표기 (D-2): 고른 저장소 수와 "선택 N개"·"저장소 전체 N개" 글자. 대상 수를 보이는 화면(툴바·브랜치 칸
+ * 단추 이름, 일괄 작업 줄)만 쓴다. 수만 구독하므로 트리에서 저장소 행 하나씩 옮겨 다닐 때(늘 1개)는 다시 그리지 않는다 —
+ * 흐름(`useFolderBatchFlows`)은 고른 저장소를 부를 때 읽는다
+ */
+export function useBatchScope(): { count: number; scope: string } {
+  const space = useFolder((st) => st.space);
+  const repos = useFolder((st) => st.repos);
+  const count =
+    useFileTree((tree) =>
+      space && repos ? selectedRepoPathsIn(space, repos, tree.selection).length : 0,
+    ) ?? 0;
+  const total = repos?.length ?? 0;
+  const t = S.folder.batch;
+  return { count, scope: count === 0 ? t.allRepos(total) : t.selected(count) };
+}
+
+/**
  * 일괄 작업 툴바 + 진행 (MR-05·06·07). 대상은 고른 저장소(트리 선택), 없으면 전부다. 결과는 다른 진입점처럼 토스트로
  * 알리고, 자세한 저장소별 결과는 Git 도구 창의 작업 기록 탭에 남는다
  */
@@ -1134,6 +1165,7 @@ export function FolderBatchBar() {
     cancelBatch: st.cancelBatch,
   }));
   const flows = useFolderBatchFlows(useBatchReport());
+  const target = useBatchScope();
   if (!f) {
     return null;
   }
@@ -1142,10 +1174,8 @@ export function FolderBatchBar() {
   return (
     <div className={styles.batch}>
       <div className={styles.batchRow}>
-        <span className={styles.scope}>{flows.scope}</span>
-        {flows.selected.length > 0 ? (
-          <Button onClick={() => f.setSelected([])}>{t.none}</Button>
-        ) : null}
+        <span className={styles.scope}>{target.scope}</span>
+        {target.count > 0 ? <Button onClick={() => f.setSelected([])}>{t.none}</Button> : null}
         <span className={styles.sep} />
         <Button disabled={flows.running} onClick={() => void flows.fetch()}>
           {t.fetch}

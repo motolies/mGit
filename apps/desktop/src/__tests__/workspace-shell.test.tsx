@@ -12,6 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { AppBody } from '../App';
 import type { Action } from '../actions';
 import { EditorArea, EditorEmptyState } from '../features/workspace/EditorArea';
+import { commandSourceOf } from '../features/workspace/editor-hints';
 import { getFolderStore, useAppStore } from '../store';
 import {
   createRepoWorkspace,
@@ -257,7 +258,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
     const { client, folderTimelineOpen } = folderClient();
     registerFolderTab(client);
     setTabs([FOLDER_META], FOLDER_ID);
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
 
     // 위 묶음: Project·Commit(W14, 같은 자리에 번갈아), 아래 묶음: Git·터미널
@@ -305,7 +306,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
     const { client, folderTimelineOpen } = folderClient();
     registerFolderTab(client);
     setTabs([FOLDER_META], FOLDER_ID, { dock: { tool: null, maximized: false, gitTab: 'log' } });
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
     expect(area('git-log')).toBeNull();
     expect(area('project')).not.toBeNull();
@@ -331,7 +332,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
   it('띠 버튼이 Project·Git·터미널 도구 창을 여닫는다', async () => {
     registerFolderTab(folderClient().client);
     setTabs([FOLDER_META], FOLDER_ID);
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
     const button = (name: string) => within(stripe() as HTMLElement).getByRole('button', { name });
 
@@ -359,7 +360,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
   it('개요 탭을 닫으면 단축키 안내와 "개요 열기" 가 나오고, 누르면 개요가 돌아온다 (ED-07)', async () => {
     registerFolderTab(folderClient().client);
     setTabs([FOLDER_META], FOLDER_ID);
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
     const editor = within(area('editor') as HTMLElement);
 
@@ -391,7 +392,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
     registerFolderTab(folderClient().client);
     setTabs([FOLDER_META], FOLDER_ID);
     act(() => useAppStore.setState({ openRepositoryAt }));
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
 
     const row = within(area('project') as HTMLElement).getByText('web');
@@ -413,7 +414,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
   it('저장소 탭도 폴더 탭과 같은 틀이다 (W21): 띠·Project·에디터 + Git 도구 창 로그 탭에 브랜치 트리 | 그래프 | 상세. 옛 3단 배치는 없다', async () => {
     registerRepoTab();
     setTabs([REPO_META], REPO_ID);
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
 
     expect(pressed()).toEqual({
@@ -463,7 +464,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
 
   it('탭이 없으면 띠 없이 홈 화면만 그린다', async () => {
     setTabs([], null);
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
     expect(stripe()).toBeNull();
     expect(screen.getByTestId('home')).toBeTruthy();
@@ -483,7 +484,7 @@ describe('앱 본문의 화면 틀 (WS-01·05)', () => {
         activeTerminal: 1,
       }),
     );
-    render(<AppBody actions={ACTIONS} />);
+    render(<AppBody commands={commandSourceOf(() => ACTIONS)} />);
     await tick();
     const term = screen.getByTestId('term');
     expect(stripe()).not.toBeNull();

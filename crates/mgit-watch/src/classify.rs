@@ -41,7 +41,8 @@ fn classify_git_dir(rel: &Path) -> Option<ChangeKind> {
     let nested = comps.next().is_some();
     Some(match first.as_str() {
         "index" => ChangeKind::Index,
-        "HEAD" | "ORIG_HEAD" | "FETCH_HEAD" => ChangeKind::Head,
+        "HEAD" | "ORIG_HEAD" => ChangeKind::Head,
+        "FETCH_HEAD" => ChangeKind::FetchHead,
         "packed-refs" => ChangeKind::PackedRefs,
         "refs" | "reftable" => ChangeKind::Refs,
         "config" => ChangeKind::Config,
@@ -96,6 +97,14 @@ mod tests {
             classify_path(Path::new("/r/.git/MERGE_HEAD"), &s),
             Some(ChangeKind::Op)
         );
+        assert_eq!(
+            classify_path(Path::new("/r/.git/ORIG_HEAD"), &s),
+            Some(ChangeKind::Head)
+        );
+        assert_eq!(
+            classify_path(Path::new("/r/.git/FETCH_HEAD"), &s),
+            Some(ChangeKind::FetchHead)
+        );
         assert_eq!(classify_path(Path::new("/r/.git/index.lock"), &s), None);
         assert_eq!(classify_path(Path::new("/r/.git/objects/ab/cd"), &s), None);
         assert_eq!(classify_path(Path::new("/r/.git/logs/HEAD"), &s), None);
@@ -127,6 +136,15 @@ mod tests {
         assert_eq!(
             classify_path(Path::new("/r/.git/refs/heads/x"), &s),
             Some(ChangeKind::Refs)
+        );
+        // 워크트리의 FETCH_HEAD 는 전용 디렉터리에 쓰인다. 공용 디렉터리의 것(주 작업 트리의 fetch)도 같은 종류다
+        assert_eq!(
+            classify_path(Path::new("/r/.git/worktrees/wt/FETCH_HEAD"), &s),
+            Some(ChangeKind::FetchHead)
+        );
+        assert_eq!(
+            classify_path(Path::new("/r/.git/FETCH_HEAD"), &s),
+            Some(ChangeKind::FetchHead)
         );
         assert_eq!(
             classify_path(Path::new("/wt/a.txt"), &s),

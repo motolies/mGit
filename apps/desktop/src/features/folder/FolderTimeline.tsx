@@ -56,7 +56,7 @@ import {
 } from '../filter-bar/filter-model';
 import { LOCAL } from '../history/comparison';
 import { useBatchReport } from './batch-report';
-import { type CheckoutCandidate, useFolderBatchFlows } from './FolderBatchBar';
+import { type CheckoutCandidate, useBatchScope, useFolderBatchFlows } from './FolderBatchBar';
 import { FolderCommitPane } from './FolderCommitPane';
 import { FolderLogFilter } from './FolderLogFilter';
 import { FolderRewordDialog } from './FolderRewordDialog';
@@ -278,6 +278,8 @@ export function FolderTimeline() {
 
   // 브랜치 트리·세로 툴바에서 실행한 일괄 작업의 결과는 토스트로 알린다
   const flows = useFolderBatchFlows(useBatchReport());
+  // 단추 이름의 대상 수("선택 N개")만 구독한다 — 저장소 행을 옮길 때 로그 칸이 다시 그려지지 않게 (D-2)
+  const target = useBatchScope();
   const deletion = useRemoteBranchDelete('folder', folderId);
 
   const revealCommit = f?.revealTimelineCommit;
@@ -669,8 +671,8 @@ export function FolderTimeline() {
           panelLocked={side.tooNarrow ? t.branchesTooNarrow : undefined}
           onTogglePanel={() => side.setOpen(!side.open)}
           busy={flows.running}
-          newBranchTitle={S.folder.batch.withScope(S.branches.toolbar.newBranch, flows.scope)}
-          fetchTitle={S.folder.batch.withScope(S.branches.toolbar.fetch, flows.scope)}
+          newBranchTitle={S.folder.batch.withScope(S.branches.toolbar.newBranch, target.scope)}
+          fetchTitle={S.folder.batch.withScope(S.branches.toolbar.fetch, target.scope)}
           onNewBranch={() => void flows.createBranch()}
           onFetch={() => void flows.fetch()}
           onUpdate={() => {

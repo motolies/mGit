@@ -14,6 +14,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { AppBody } from '../App';
 import { buildActions } from '../actions';
 import { fileListCache } from '../features/search/file-list';
+import { commandSourceOf } from '../features/workspace/editor-hints';
 import { getFolderStore, getWorkspaceStore, useAppStore } from '../store';
 import { DEFAULT_DOCK, type SessionMeta } from '../store/app-store';
 import { fileEditors } from '../store/file-editor-store';
@@ -30,6 +31,19 @@ import { tick } from './dialog-stub';
 
 // Project 트리 이름 필터·"변경된 파일만" (R1): 폴더 탭과 그룹 탭의 Project 도구 창을 앱 전체로 그려 확인한다
 
+const h = vi.hoisted(() => ({ editorArea: 0 }));
+// 편집기 공간: 워크스페이스가 그릴 때마다 새 props(닫힘 함수)로 그리므로 그 수가 곧 워크스페이스가 그려진 수다 (D-4)
+vi.mock('../features/workspace/SplitEditorArea', async (orig) => {
+  const mod = await orig<typeof import('../features/workspace/SplitEditorArea')>();
+  const { createElement } = await import('react');
+  return {
+    ...mod,
+    SplitEditorArea: (props: Parameters<typeof mod.SplitEditorArea>[0]) => {
+      h.editorArea += 1;
+      return createElement(mod.SplitEditorArea, props);
+    },
+  };
+});
 vi.mock('@mgit/terminal', () => ({ TerminalView: () => <div data-testid="term" /> }));
 vi.mock('../features/home/HomeScreen', () => ({ HomeScreen: () => <div data-testid="home" /> }));
 vi.mock('@mgit/graph-view', async (orig) => ({
@@ -209,7 +223,7 @@ async function mount(scene: Scene = FOLDER) {
       leftTool: 'project',
     });
   });
-  render(<AppBody actions={[]} />);
+  render(<AppBody commands={commandSourceOf(() => [])} />);
   await tick();
   return fake;
 }
@@ -394,5 +408,22 @@ describe('그룹 탭의 Project 트리 필터 (R1)', () => {
     fireEvent.click(changedButton());
     await tick();
     expect(shown()).toEqual(['1:Work', '2:api', '3:src', '4:a.ts']);
+  });
+});
+
+describe('트리를 다시 읽은 신호 (D-4)', () => {
+  it('이름 필터가 꺼져 있으면 같은 내용으로 다시 읽어도 워크스페이스가 다시 그려지지 않는다', async () => {
+    await mount();
+    h.editorArea = 0;
+    // 창 포커스의 배경 다시 읽기와 같은 호출 (내용은 그대로)
+    await act(async () => {
+      await fileTree()?.reload();
+    });
+    await tick();
+    expect(fileTree()?.epoch).toBeGreaterThan(0);
+    expect(h.editorArea).toBe(0);
+    // 계수기가 살아 있는지: 필터를 적으면 워크스페이스가 다시 그린다
+    await type('main');
+    expect(h.editorArea).toBeGreaterThan(0);
   });
 });

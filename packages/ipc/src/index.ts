@@ -25,5 +25,6 @@ export {
 } from './mock/mock-graph-source';
 export { type MockSceneName, parseMockScene } from './mock/mock-workspace';
 export { createNullClient } from './mock/null-client';
+export { type IpcObserver, observeMethods, perfAppend, setIpcObserver } from './observe';
 export { remoteBranchName } from './refs';
 export type * from './types';

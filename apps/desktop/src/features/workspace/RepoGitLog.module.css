@@ -1,16 +1,22 @@
 /* 왼쪽 칸(git-branches)은 브랜치 트리 하나가 칸 높이를 다 쓴다 (W25 — 옛 사이드바의 남은 덩이를 Project 도구 창으로 옮겼다.
    폴더 탭의 로그 탭과 같은 배치) */
 
-/* 오른쪽 칸 (git-detail): 안의 상세가 높이를 채우고 스스로 스크롤한다.
-   min-height: 0 이 없으면 분할이 줄어들지 못한다 */
+/* 오른쪽 칸 (git-detail): 안의 상세가 높이를 채우고 스스로 스크롤한다. min-height: 0 이 없으면 분할이 줄어들지
+   못한다. 칸 자리(GitLogSplit .detailSlot, 세로 flex)의 높이를 flex 로 채운다 — 세로 flex 안의 height:100% 는 WebKit
+   이 겹마다 하위 트리를 다시 배치한다 (bench/README.md "WebKit 배치 실험실") */
 .detail {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
   background: var(--bg-panel);
   outline: none;
+  /* 배치 경계: 영역 안의 변화가 문서 루트부터의 배치를 부르지 않게 한다 — WebKit 은 경계가 없으면 패널 안 변화에도
+     RenderView 부터 다시 배치한다 (bench/README.md "WebKit 배치 실험실"). 크기는 분할 패널이 정하므로(내용으로
+     정해지는 상태가 없다) size 도 가두고, paint 는 가두지 않는다. 안의 absolute·fixed 자손은 이 영역을 기준 블록으로
+     삼는다 */
+  contain: layout size;
 }
 
 .detail:focus-visible {

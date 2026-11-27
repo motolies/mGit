@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mgit_git::bulk_reads;
 use mgit_model::{HeadState, RefKind, RefLabel};
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -154,10 +155,11 @@ impl Core {
         for (i, repo) in folder.select_groups(repos)?.into_iter().enumerate() {
             let inner = Arc::clone(&inner);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 (i, read_repo(&inner, repo).await)
-            });
+            }));
         }
         let mut read = Vec::new();
         while let Some(r) = set.join_next().await {

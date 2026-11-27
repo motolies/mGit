@@ -2,10 +2,10 @@ import type { Module } from '@mgit/ipc';
 import { Icon, S } from '@mgit/ui';
 import { type ReactNode, useMemo } from 'react';
 import type { MenuItem } from '../../components/ContextMenu';
-import { DropdownMenu } from '../../components/DropdownMenu';
+import { type DropdownItem, DropdownMenu } from '../../components/DropdownMenu';
 import { useDialogs } from '../../components/use-dialogs';
 import toolStyles from '../../layout/ToolButton.module.css';
-import { repoNameOf, useAppStore, useSession } from '../../store';
+import { getSessionStore, repoNameOf, useAppStore, useSession } from '../../store';
 import type { RowDecoration } from '../project/project-rows';
 import styles from './RepoStructure.module.css';
 import {
@@ -15,7 +15,12 @@ import {
   repoStructureDecorations,
   rootRepoKind,
 } from './repo-structure';
-import { structureCounts, structureMenuItems, structureMenuShown } from './structure-menu';
+import {
+  type StructureMenuActions,
+  structureCounts,
+  structureMenuItems,
+  structureMenuShown,
+} from './structure-menu';
 import {
   promptModuleAdd,
   promptSubmoduleAdd,
@@ -104,7 +109,8 @@ export interface RepoStructureParts {
   rootKind: ReturnType<typeof rootRepoKind>;
   superproject: string | null;
   scope: string | null;
-  busy: boolean;
+  /** 지금 쓰기 동작이 도는지 (행 메뉴를 열 때 부른다 — 구독하지 않으므로 바쁨이 바뀌어도 워크스페이스가 다시 그려지지 않는다) */
+  busyNow(): boolean;
   /** 행 메뉴가 거는 동작 (`repoTreeMenu`) */
   menu: {
     openRepoTab(path: string): void;
@@ -121,12 +127,42 @@ export interface RepoStructureParts {
 }
 
 /**
+ * Project 머리의 모듈·서브모듈 메뉴 단추 (D-3). 메뉴 항목의 비활성이 쓰기 동작(busy)을 따르므로 이 단추만 busy 를 구독한다 —
+ * 그것을 품은 저장소 워크스페이스는 바쁨이 바뀌어도 다시 그리지 않는다
+ */
+function StructureMenuButton({
+  title,
+  items,
+}: {
+  title: string;
+  items: (busy: boolean) => DropdownItem[];
+}) {
+  const busy = useSession((st) => st.busy);
+  return (
+    <DropdownMenu
+      items={items(busy)}
+      trigger={
+        <button
+          type="button"
+          className={toolStyles.button}
+          aria-label={S.project.structure.menu}
+          title={title}
+        >
+          <Icon name="more" />
+        </button>
+      }
+    />
+  );
+}
+
+/**
  * 저장소 탭 Project 도구 창의 모듈·서브모듈·하위 저장소 (W25, PT-13 — 옛 사이드바의 남은 네 덩이). 범위 세션의 상태를 읽어
  * 행 장식·행 메뉴의 재료·머리 메뉴·트리 위 띠를 만든다. `reveal` 은 트리에서 디렉터리를 드러내는 파일 트리 동작이다.
  * 세션 액션의 뜻은 그대로 부른다 (범위 = `selectModule` — 로그 그래프의 경로 범위, 숨기기·직접 추가 = 수동 보정)
  */
 export function useRepoStructure(reveal: (path: string) => void): RepoStructureParts {
   const s = useSession((st) => ({
+    id: st.id,
     root: st.path,
     modules: st.modules,
     scope: st.moduleScope,
@@ -135,7 +171,9 @@ export function useRepoStructure(reveal: (path: string) => void): RepoStructureP
     nestedRepos: st.nestedRepos,
     superproject: st.superproject,
     worktrees: st.refs.worktrees,
-    busy: st.busy,
+    // 쓰기 동작이 도는지(busy)는 구독하지 않는다: 이 훅을 쓰는 저장소 워크스페이스(Project 트리·편집기·Commit 도구 창)가 쓰기의
+    // 시작·끝마다 통째로 다시 그려졌다 (D-3). 메뉴는 여는 그때 `busyNow()` 로 읽고, 머리 메뉴 단추는 `StructureMenuButton` 이
+    // 따로 구독한다
     inOp: st.op !== null,
     selectModule: st.selectModule,
     addManualModule: st.addManualModule,
@@ -166,19 +204,22 @@ export function useRepoStructure(reveal: (path: string) => void): RepoStructureP
     [root, submodules, nestedRepos],
   );
   const rootKind = rootRepoKind(root, superproject, worktrees);
+  const sessionId = s.id;
+  /** 지금 쓰기 동작이 도는지 (그 세션 스토어에서 바로 읽는다) */
+  const busyNow = () => getSessionStore(sessionId)?.getState().busy ?? false;
 
   /** 저장소를 탭으로 연다 (옛 사이드바의 더블클릭·superproject 링크와 같은 호출) */
   const openRepoTab = (path: string) => void openRepositoryAt(path);
-  const items = structureMenuItems(s, {
+  const acts: StructureMenuActions = {
     selectModule: (path) => void s.selectModule(path),
     reveal,
     addModule: () => void promptModuleAdd(s.addManualModule, dialogs),
     reloadModules: () => void s.loadModules(),
-    addSubmodule: () => void promptSubmoduleAdd(s, dialogs),
+    addSubmodule: () => void promptSubmoduleAdd({ ...s, busy: busyNow() }, dialogs),
     syncSubmodules: () => void s.submoduleSync(),
-    batchSubmodules: () => void promptSubmoduleBatch(s, dialogs),
+    batchSubmodules: () => void promptSubmoduleBatch({ ...s, busy: busyNow() }, dialogs),
     updateSubmodules: () => void s.submoduleUpdate(true),
-  });
+  };
   const title = `${S.project.structure.menu}\n${structureCounts(s)}`;
 
   return {
@@ -188,28 +229,21 @@ export function useRepoStructure(reveal: (path: string) => void): RepoStructureP
     rootKind,
     superproject,
     scope,
-    busy: s.busy,
+    busyNow,
     menu: {
       openRepoTab,
       // 서브모듈의 "열기" = 그 서브모듈을 저장소 탭으로 (옛 사이드바와 같은 경로 — 작업 트리/서브모듈 경로)
       submoduleItems: (sm) =>
-        submoduleItems(sm, s, dialogs, () => openRepoTab(`${root}/${sm.path}`)),
+        submoduleItems(sm, { ...s, busy: busyNow() }, dialogs, () =>
+          openRepoTab(`${root}/${sm.path}`),
+        ),
       selectModule: (path) => void s.selectModule(path),
       hideModule: (path) => void s.hideModule(path),
     },
     tools: structureMenuShown(s) ? (
-      <DropdownMenu
-        items={items}
-        trigger={
-          <button
-            type="button"
-            className={toolStyles.button}
-            aria-label={S.project.structure.menu}
-            title={title}
-          >
-            <Icon name="more" />
-          </button>
-        }
+      <StructureMenuButton
+        title={title}
+        items={(busy) => structureMenuItems({ ...s, busy }, acts)}
       />
     ) : null,
     banner: (

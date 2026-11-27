@@ -3,6 +3,8 @@ import { languages } from '@codemirror/language-data';
 import type { Parser } from '@lezer/common';
 
 const supportCache = new Map<string, Promise<LanguageSupport | null>>();
+/** 불러오기를 마친 언어 지원 (언어 이름 → 지원, 없는 언어는 null). 동기로 강조할 수 있는지 볼 때 쓴다 (E-3) */
+const loadedSupport = new Map<string, LanguageSupport | null>();
 
 /** 코드 펜스의 첫 단어를 기존 언어 이름·별칭과 정확하게 대조한다. */
 function descriptionForInfo(info: string): LanguageDescription | null {
@@ -34,10 +36,26 @@ export function loadLanguage(path: string): Promise<LanguageSupport | null> {
             markdown({ base: markdownLanguage, codeLanguages: descriptionForInfo }),
           )
         : description.load()
-    ).catch(() => null);
+    )
+      .catch(() => null)
+      .then((support) => {
+        loadedSupport.set(description.name, support);
+        return support;
+      });
     supportCache.set(description.name, cached);
   }
   return cached;
+}
+
+/**
+ * 이미 불러온 파서를 바로 준다 (E-3): 불러오지 않았으면 undefined, 강조할 언어가 아니면 null. Markdown 은 펜스 안 언어를
+ * 먼저 불러와야 하므로 늘 undefined 다 (비동기 `parserFor` 를 쓴다)
+ */
+export function loadedParser(path: string): Parser | null | undefined {
+  const description = LanguageDescription.matchFilename(languages, path);
+  if (!description) return null;
+  if (description.name === 'Markdown' || !loadedSupport.has(description.name)) return undefined;
+  return loadedSupport.get(description.name)?.language.parser ?? null;
 }
 
 /** 동기 파싱 전에 Markdown 트리에서 실제 펜스 언어를 찾아 모두 로드한다. */

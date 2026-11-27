@@ -610,7 +610,17 @@ pub(crate) async fn bench_core_with(
     opts: &Opts,
     tweak: impl FnOnce(&mut mgit_core::CoreConfig),
 ) -> Result<Core, String> {
-    let runner = TokioGitRunner::new(RunnerConfig::default())
+    let mut runner_cfg = RunnerConfig::default();
+    if let Some(n) = opts.max_reads {
+        runner_cfg.max_concurrent_reads = n;
+    }
+    if let Some(n) = opts.max_bulk_reads {
+        runner_cfg.max_concurrent_bulk_reads = n;
+    }
+    if let Some(ms) = opts.slow_status_ms {
+        runner_cfg.locate.configured_path = Some(slow_status_git(ms).await?);
+    }
+    let runner = TokioGitRunner::new(runner_cfg)
         .await
         .map_err(|e| e.to_string())?;
     let mut cfg = core_config(opts);
@@ -622,6 +632,33 @@ pub(crate) async fn bench_core_with(
         Arc::new(MemoryStore::new()),
         cfg,
     ))
+}
+
+/// `git status` 만 `ms` 만큼 늦게 시작하는 git 감싸개를 임시 폴더에 만든다 (`--slow-status-ms`, 경합 측정용). 합성 저장소의
+/// status 는 수 ms 라, 작업 트리가 큰 실제 저장소처럼 status 가 느린 때의 줄 서기를 흉내 낸다. 다른 명령은 진짜 git 그대로다
+async fn slow_status_git(ms: u64) -> Result<PathBuf, String> {
+    let real = TokioGitRunner::new(RunnerConfig::default())
+        .await
+        .map_err(|e| e.to_string())?
+        .git_path()
+        .clone();
+    let dir = std::env::temp_dir().join(format!("mgit-bench-slow-status-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let script = dir.join("git");
+    let body = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    status) sleep {}.{:03}; break ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+        ms / 1000,
+        ms % 1000,
+        real.display()
+    );
+    std::fs::write(&script, body).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(script)
 }
 
 /// 코어를 새로 만들어 한 번 측정한다

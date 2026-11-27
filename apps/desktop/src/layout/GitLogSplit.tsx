@@ -233,6 +233,7 @@ export function GitLogSplit({
                 id={GIT_LOG_DETAIL_SPLIT.detailId}
                 defaultSize={GIT_LOG_DETAIL_SPLIT.detailDefault}
                 minSize={`${DETAIL_MIN_PX}px`}
+                className={styles.detailSlot}
                 style={{ overflow: 'hidden' }}
               >
                 {detail}

@@ -112,6 +112,42 @@ export const enWorkspace: Pick<
     withLocal: 'Compare with local content',
     twoCommits: 'Compare with selected commit',
     file: 'Compare file with branch/commit',
+    // Ref picker for the comparison's base and target fields (F4)
+    refPicker: {
+      search: (label: string) => `Search ${label}`,
+      placeholder: 'Search branches and tags, or enter a commit or expression',
+      typedValue: (text: string) => `Use typed value: ${text}`,
+      typedAside: 'Commit or expression',
+      typedTitle: (text: string) => `Typed value: ${text}`,
+      checking: 'Checking…',
+      notFound: (text: string) => `Ref not found: ${text}`,
+      noMatch: 'No matching refs. Press Enter to use the typed value as is.',
+      noRefs: 'No refs. Enter a commit hash or an expression.',
+      more: (n: number) => `${n} more — keep typing to narrow down`,
+      ambiguous: (fullName: string) => `A branch and a tag share this name. Git uses ${fullName}.`,
+      headTitle: (detail: string) => `HEAD · ${detail}`,
+      current: 'Current',
+      trigger: (label: string, kind: string, name: string) =>
+        kind ? `${label}: ${kind} ${name}` : `${label}: ${name}`,
+      option: (name: string, kind: string, current: boolean, chosen: boolean) =>
+        [name, kind, current ? 'current branch' : '', chosen ? 'selected' : '']
+          .filter(Boolean)
+          .join(', '),
+      kind: {
+        local: 'Local branch',
+        remote: 'Remote branch',
+        tag: 'Tag',
+        head: 'HEAD',
+        commit: 'Commit',
+        expression: 'Typed value',
+        workingTree: '',
+      },
+      sections: {
+        local: 'Local branches',
+        remote: 'Remote branches',
+        tags: 'Tags',
+      },
+    },
   },
 
   textContext: {

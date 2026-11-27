@@ -25,6 +25,7 @@ import type {
   StatusEntry,
   TagRefResult,
 } from '../types';
+import { bigDiffDelay, bigDiffDocument, bigDiffKnobs } from './mock-big-diff';
 import {
   mockBranchDeleteTarget,
   mockDeleteBranches,
@@ -1195,6 +1196,21 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
           mockCommitDetail(entryOf(session).source.graph, dataOf(session).commitDetail, oid),
         commitFileDiff: async (session, _oid, path, oldPath) =>
           mockCommitFileDiff(dataOf(session).commitDetail, path, oldPath),
+        /**
+         * 브랜치 ↔ 브랜치 비교 (반응성 기준선 M3 의 화면 측정용 최소 흉내): 두 쪽이 같은 커밋이면 변경 없음, 아니면 커밋
+         * 상세와 같은 파일 목록. 파일 diff 도 커밋 상세의 것을 준다 (두 ref 사이의 실제 차이를 계산하지 않는다)
+         */
+        async compareRefs(session, a, b) {
+          // 장면 메서드는 아래에서 전체 클라이언트에 합쳐지므로 this 는 전체 클라이언트다
+          const client = this as IpcClient;
+          const [from, to] = await Promise.all([
+            client.resolveRevision(session, a),
+            client.resolveRevision(session, b),
+          ]);
+          return from === to ? [] : [...dataOf(session).commitDetail];
+        },
+        compareFileDiff: async (session, _a, _b, _threeDot, path) =>
+          mockCommitFileDiff(dataOf(session).commitDetail, path, null),
         commitContainingRefs: (session, oid) =>
           containingReply('commitContainingRefs', () =>
             mockContainingRefs(entryOf(session).source.graph, dataOf(session).repoState.refs, oid),
@@ -2604,6 +2620,12 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       };
     },
     async compareLocalDocument(session, base, path, draft, _options, _full) {
+      // 측정용 큰 문서 (E-1, `mgit.mock.diffLines`)
+      const big = bigDiffKnobs();
+      if (big) {
+        await bigDiffDelay(big);
+        return bigDiffDocument(path, big, base, 'LOCAL');
+      }
       const old = (await this.revisionFileContent(session, base, path)) ?? '';
       const next = draft ?? textOf(session, path) ?? '';
       const doc = mockDiffDocument(null, base, 'LOCAL');
@@ -2644,6 +2666,16 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       return doc;
     },
     async workTreeDiffDocument(session, path, staged, full, options) {
+      const big = bigDiffKnobs();
+      if (big) {
+        await bigDiffDelay(big);
+        return bigDiffDocument(
+          path,
+          big,
+          staged ? 'HEAD' : 'Index',
+          staged ? 'Index' : 'Working tree',
+        );
+      }
       return mockDiffDocument(
         await this.workTreeDiff(session, path, staged, full, options),
         staged ? 'HEAD' : 'Index',
@@ -2659,6 +2691,11 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       );
     },
     async commitFileDiffDocument(session, oid, path, oldPath, full, options) {
+      const big = bigDiffKnobs();
+      if (big) {
+        await bigDiffDelay(big);
+        return bigDiffDocument(path, big, `${oid}^`, oid);
+      }
       return mockDiffDocument(
         await this.commitFileDiff(session, oid, path, oldPath, full, options),
         `${oid}^`,
@@ -2666,6 +2703,11 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       );
     },
     async compareFileDiffDocument(session, a, b, threeDot, path, options, full) {
+      const big = bigDiffKnobs();
+      if (big) {
+        await bigDiffDelay(big);
+        return bigDiffDocument(path, big, a, b);
+      }
       return mockDiffDocument(
         await this.compareFileDiff(session, a, b, threeDot, path, options, full),
         a,
@@ -2673,6 +2715,11 @@ export function createMockClient(opts: MockClientOptions): IpcClient {
       );
     },
     async folderCommitFileDiffDocument(session, repo, oid, path, oldPath, full, options) {
+      const big = bigDiffKnobs();
+      if (big) {
+        await bigDiffDelay(big);
+        return bigDiffDocument(path, big, `${oid}^`, oid);
+      }
       return mockDiffDocument(
         await this.folderCommitFileDiff(session, repo, oid, path, oldPath, full, options),
         `${oid}^`,

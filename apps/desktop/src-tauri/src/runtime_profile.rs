@@ -76,7 +76,7 @@ impl RuntimeProfile {
     }
 
     /// 배포 앱의 식별자·키체인·기본 WebKit 저장소를 그대로 유지한다.
-    fn production() -> Self {
+    pub(crate) fn production() -> Self {
         Self {
             info: RuntimeInfo {
                 kind: RuntimeKind::Production,

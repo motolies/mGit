@@ -40,14 +40,16 @@ function ctx(
       ? null
       : ({
           busy: false,
-          op: null,
+          inOp: false,
           path: '/r',
-          refs: {
-            remotes: [{ name: 'origin' }],
-            labels: [{ isCurrent: true, upstream: 'origin/main' }],
-          },
-          status: { summary: { staged: 0, unstaged: 1, untracked: 0, conflicted: 0 } },
-          undoState: { entries: [], redoCount: 0 },
+          // 원격 origin, 지금 브랜치에 업스트림 origin/main, 작업 트리 변경 하나, 되돌릴 것 없음
+          hasRemotes: true,
+          onBranch: true,
+          hasUpstream: true,
+          hasChanges: true,
+          undoLabel: null,
+          canRedo: false,
+          remoteKind: null,
           fetch: vi.fn(async () => {}),
           pull: vi.fn(async () => {}),
           push: vi.fn(async () => {}),
@@ -253,10 +255,7 @@ describe('actions', () => {
 
   it('진행 중 작업이 있으면 병합류·동기화가 꺼진다', () => {
     const byId = Object.fromEntries(
-      buildActions(ctx({ active: 2, session: { op: { kind: 'merge', head: 'x' } } })).map((a) => [
-        a.id,
-        a,
-      ]),
+      buildActions(ctx({ active: 2, session: { inOp: true } })).map((a) => [a.id, a]),
     );
     expect(byId['sync.pull']?.enabled).toBe(false);
     expect(byId['view.refresh']?.enabled).toBe(true);
@@ -329,7 +328,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
     const checkRemoteTags = vi.fn(async () => {});
     expect(byId(ctx())['sync.checkRemoteTags']?.enabled).toBe(false);
     expect(
-      byId(ctx({ active: 2, session: { refs: { remotes: [], labels: [] } } as never }))[
+      byId(ctx({ active: 2, session: { hasRemotes: false, onBranch: false, hasUpstream: false } }))[
         'sync.checkRemoteTags'
       ]?.enabled,
     ).toBe(false);
@@ -363,31 +362,24 @@ describe('아래 도구 창 동작 (WS-03)', () => {
     action?.run();
     expect(openTagsDoc).toHaveBeenCalledWith({ kind: 'pushAll', remote: null });
     const none = {
-      ...ctx({ active: 2, session: { refs: { remotes: [], labels: [] } } as never }),
+      ...ctx({ active: 2, session: { hasRemotes: false, onBranch: false, hasUpstream: false } }),
       openTagsDoc,
     };
     expect(byId(none)['sync.pushAllTags']?.enabled).toBe(false);
   });
 
   it('Pull Requests 도구 창(W24): 기본 키가 없고, 원격 프로젝트가 있는 저장소 탭에서만 켜진다. 열면 왼쪽 자리에 PR 을 열고 최대화를 푼다', () => {
-    const github = {
-      accountId: 'github:github.com:kim',
-      kind: 'github',
-      host: 'github.com',
-      project: 'kim/app',
-      remote: 'origin',
-    };
     // 탭 없음·폴더 탭·원격 프로젝트 없는 저장소 탭에서는 꺼진다
     expect(byId(ctx())['view.toolPullRequests']?.enabled).toBe(false);
     expect(byId(ctx({ active: 2, tabKind: 'folder' }))['view.toolPullRequests']?.enabled).toBe(
       false,
     );
     expect(
-      byId(ctx({ active: 2, session: { remoteProject: null } }))['view.toolPullRequests']?.enabled,
+      byId(ctx({ active: 2, session: { remoteKind: null } }))['view.toolPullRequests']?.enabled,
     ).toBe(false);
     const r = ctx({
       active: 2,
-      session: { remoteProject: github } as never,
+      session: { remoteKind: 'github' },
       dock: { tool: 'git', maximized: true },
     });
     const repoTab = byId(r)['view.toolPullRequests'];
@@ -401,7 +393,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
     const gitlab = byId(
       ctx({
         active: 2,
-        session: { remoteProject: { ...github, kind: 'gitlab', accountId: null } } as never,
+        session: { remoteKind: 'gitlab' },
       }),
     )['view.toolPullRequests'];
     expect(gitlab?.enabled).toBe(true);
@@ -411,7 +403,7 @@ describe('아래 도구 창 동작 (WS-03)', () => {
       byId(
         ctx({
           active: 2,
-          session: { remoteProject: github } as never,
+          session: { remoteKind: 'github' },
           overrides: { 'view.toolPullRequests': 'f8' },
         }),
       )['view.toolPullRequests']?.shortcut,
@@ -701,9 +693,7 @@ describe('영역 포커스 동작 (5.7절)', () => {
     panels('project*', 'pull-requests*', 'editor');
     const c = ctx({
       active: 2,
-      session: {
-        remoteProject: { accountId: null, kind: 'github', host: 'h', project: 'p', remote: 'o' },
-      } as never,
+      session: { remoteKind: 'github' },
     });
     byId(c)['view.toolPullRequests']?.run();
     vi.runAllTimers();

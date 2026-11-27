@@ -53,6 +53,9 @@ impl RefreshScope {
                     s.status = true;
                 }
                 ChangeKind::Config => s.refs = true,
+                // 저장소 탭은 FETCH_HEAD 에서 읽는 것이 없다 (마지막 fetch 시각은 화면이 fetch·`autoFetched` 로 적는다).
+                // fetch 가 ref 를 바꿨으면 `Refs`·`PackedRefs` 가 함께 온다
+                ChangeKind::FetchHead => {}
             }
         }
         s

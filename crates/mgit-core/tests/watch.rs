@@ -3,11 +3,15 @@
 
 mod common;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{collector, core_watching, wait_finished, wait_for, wait_quiet};
-use mgit_core::CoreEvent;
+use common::{
+    collector, core_watching, ran_since, wait_commands_quiet, wait_finished, wait_for, wait_quiet,
+};
+use mgit_core::{Core, CoreEvent, SessionId};
 use mgit_testkit::{Scenario, TestRepo, build};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 #[tokio::test]
 async fn external_commit_reloads_graph_within_two_seconds() {
@@ -235,4 +239,209 @@ async fn stash_changes_reload_main_tree_and_linked_worktree() {
         .unwrap();
     assert_eq!(counts(&list), [("m".into(), 0), ("w".into(), 0)]);
     core.close_folder(fid).unwrap();
+}
+
+/// `path` 에 ref 저장 방식 `format`(`files`·`reftable`)으로 저장소를 만들고 bare 원격에 main 을 올린 뒤 한 번 받아 둔다.
+/// 첫 fetch 는 `origin/HEAD` 를 만들 수 있어(`followRemoteHEAD`) 재기 전에 끝내 둔다. 원격 경로를 돌려준다
+fn repo_with_remote(path: &Path, format: &str) -> (TestRepo, PathBuf) {
+    std::fs::create_dir_all(path).unwrap();
+    let mut r = TestRepo::at(path);
+    r.git_ok([
+        "init",
+        "-q",
+        "-b",
+        "main",
+        &format!("--ref-format={format}"),
+    ]);
+    r.commit("first");
+    let remote = r.add_bare_remote();
+    r.git_ok(["push", "-q", "-u", "origin", "main"]);
+    r.git_ok(["fetch", "-q", "origin"]);
+    (r, remote)
+}
+
+/// 다른 clone 에서 원격 main 에 새 커밋을 올린다 (지켜보는 저장소는 건드리지 않는다)
+fn push_remote_commit(remote: &Path) {
+    let mut other = TestRepo::init();
+    let url = remote.to_string_lossy().into_owned();
+    other.git_ok(["remote", "add", "origin", &url]);
+    other.git_ok(["fetch", "-q", "origin"]);
+    other.git_ok(["checkout", "-q", "-b", "main", "--track", "origin/main"]);
+    other.commit("원격의 새 커밋");
+    other.git_ok(["push", "-q", "origin", "main"]);
+}
+
+/// 같은 저장소를 폴더 세션과 저장소 세션으로 함께 연 상태
+struct Watched {
+    core: Core,
+    folder: SessionId,
+    folder_rx: UnboundedReceiver<CoreEvent>,
+    repo_rx: UnboundedReceiver<CoreEvent>,
+}
+
+/// `root` 를 폴더로, 그 안의 `path` 를 저장소 탭으로 연다. 여는 동안의 명령·감시 이벤트가 잦아든 뒤 돌려준다
+async fn open_both(root: &Path, path: &Path) -> Watched {
+    let core = core_watching().await;
+    let (sink, mut folder_rx) = collector();
+    let folder = core.open_folder(root, sink).await.unwrap().session;
+    let (sink, mut repo_rx) = collector();
+    let opened = core.open_repo(path, sink).await.unwrap();
+    wait_finished(&mut repo_rx, opened.session).await;
+    wait_commands_quiet(&core, Duration::from_millis(800), Duration::from_secs(20)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    while folder_rx.try_recv().is_ok() {}
+    while repo_rx.try_recv().is_ok() {}
+    Watched {
+        core,
+        folder,
+        folder_rx,
+        repo_rx,
+    }
+}
+
+/// fetch 뒤 그 저장소의 `FolderChanged` 를 기다리고, 코어 명령이 잦아들 때까지 더 받은 폴더 이벤트의 `refs` 값들과
+/// 저장소 세션 이벤트를 돌려준다
+async fn after_fetch(w: &mut Watched, path: &Path) -> (Vec<bool>, Vec<CoreEvent>) {
+    let folder = w.folder;
+    let mut events = wait_for(&mut w.folder_rx, Duration::from_secs(10), |e| {
+        matches!(e, CoreEvent::FolderChanged { session, repo: Some(r), .. } if *session == folder && r == path)
+    })
+    .await;
+    wait_commands_quiet(
+        &w.core,
+        Duration::from_millis(1500),
+        Duration::from_secs(20),
+    )
+    .await;
+    while let Ok(e) = w.folder_rx.try_recv() {
+        events.push(e);
+    }
+    let refs = events
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::FolderChanged {
+                refs,
+                repo: Some(r),
+                ..
+            } if r == path => Some(*refs),
+            _ => None,
+        })
+        .collect();
+    let mut repo_events = Vec::new();
+    while let Ok(e) = w.repo_rx.try_recv() {
+        repo_events.push(e);
+    }
+    (refs, repo_events)
+}
+
+/// 받을 것이 없는 fetch 는 `FETCH_HEAD` 만 다시 쓴다 (G6). 폴더 세션은 요약만 다시 읽게 `refs: false` 로 알리고(마지막
+/// fetch 시각은 갱신된다) 타임라인 재로드 신호(`refs: true`)를 내지 않는다. 저장소 세션은 ref·status 를 다시 읽지 않아
+/// 코어 git 명령이 하나도 돌지 않는다. ref 저장 방식이 reftable 이어도 같다
+#[tokio::test]
+async fn noop_fetch_refreshes_folder_summary_only() {
+    for format in ["files", "reftable"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("r");
+        let (mut repo, _remote) = repo_with_remote(&path, format);
+        let mut w = open_both(&root, &path).await;
+        let before_fetch = w
+            .core
+            .folder_summaries(w.folder, std::slice::from_ref(&path))
+            .await
+            .unwrap()[0]
+            .last_fetch;
+        let start = w.core.command_log_recent(usize::MAX).len();
+        // 파일 시각이 밀리초 단위로 앞서도록 조금 둔다
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        repo.git_ok(["fetch", "-q", "origin"]);
+        let (refs, repo_events) = after_fetch(&mut w, &path).await;
+        let ran = ran_since(&w.core, start);
+        assert!(
+            !refs.is_empty() && refs.iter().all(|r| !r),
+            "{format}: {refs:?}"
+        );
+        assert!(ran.is_empty(), "{format}: 저장소 세션이 다시 읽음 {ran:?}");
+        assert!(
+            !repo_events
+                .iter()
+                .any(|e| matches!(e, CoreEvent::RefsChanged { .. })),
+            "{format}: {repo_events:?}"
+        );
+        let after = w
+            .core
+            .folder_summaries(w.folder, std::slice::from_ref(&path))
+            .await
+            .unwrap()[0]
+            .last_fetch;
+        assert!(
+            after > before_fetch,
+            "{format}: 마지막 fetch {before_fetch:?} → {after:?}"
+        );
+    }
+}
+
+/// 원격에 새 커밋이 있는 fetch 는 지금처럼 폴더 세션에 `refs: true`, 저장소 세션에 `RefsChanged` 가 온다
+#[tokio::test]
+async fn fetch_with_new_commits_still_reloads_refs() {
+    for format in ["files", "reftable"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("r");
+        let (mut repo, remote) = repo_with_remote(&path, format);
+        push_remote_commit(&remote);
+        let mut w = open_both(&root, &path).await;
+        repo.git_ok(["fetch", "-q", "origin"]);
+        let (refs, repo_events) = after_fetch(&mut w, &path).await;
+        assert!(refs.contains(&true), "{format}: {refs:?}");
+        assert!(
+            repo_events
+                .iter()
+                .any(|e| matches!(e, CoreEvent::RefsChanged { .. })),
+            "{format}: {repo_events:?}"
+        );
+    }
+}
+
+/// 연결된 워크트리의 `FETCH_HEAD` 는 워크트리 전용 디렉터리(`.git/worktrees/<이름>/`)에 쓰인다. 폴더 요약이 그 자리에서
+/// 마지막 fetch 시각을 읽고, 받을 것이 없는 fetch 는 그 워크트리 줄에도 `refs: false` 로만 알린다
+#[tokio::test]
+async fn noop_fetch_in_linked_worktree_is_summary_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let main_path = root.join("m");
+    let wt_path = root.join("w");
+    let (mut main, _remote) = repo_with_remote(&main_path, "files");
+    main.git_ok([
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "wt",
+        wt_path.to_str().unwrap(),
+    ]);
+    let mut wt = TestRepo::at(&wt_path);
+    wt.git_ok(["fetch", "-q", "origin"]);
+    assert!(main_path.join(".git/worktrees/w/FETCH_HEAD").is_file());
+    let mut w = open_both(&root, &wt_path).await;
+    let before_fetch = w
+        .core
+        .folder_summaries(w.folder, std::slice::from_ref(&wt_path))
+        .await
+        .unwrap()[0]
+        .last_fetch;
+    assert!(before_fetch.is_some());
+    let start = w.core.command_log_recent(usize::MAX).len();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    wt.git_ok(["fetch", "-q", "origin"]);
+    let (refs, _) = after_fetch(&mut w, &wt_path).await;
+    assert!(!refs.is_empty() && refs.iter().all(|r| !r), "{refs:?}");
+    assert!(ran_since(&w.core, start).is_empty());
+    let after = w
+        .core
+        .folder_summaries(w.folder, std::slice::from_ref(&wt_path))
+        .await
+        .unwrap()[0]
+        .last_fetch;
+    assert!(after > before_fetch, "{before_fetch:?} → {after:?}");
 }

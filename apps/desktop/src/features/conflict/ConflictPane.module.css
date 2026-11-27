@@ -1,7 +1,9 @@
+/* 작업 트리 diff 탭의 .pane(세로 flex) 안에서 높이를 flex 로 채운다. 세로 flex 안의 height:100% 는 WebKit 이 겹마다
+   하위 트리를 다시 배치한다 (bench/README.md "WebKit 배치 실험실") */
 .pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 0;
   min-height: 0;
 }
 

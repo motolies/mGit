@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Instant;
 
+use mgit_git::bulk_reads;
 use mgit_git::cmd::{AuthorCount, graph_log_request_with, log_authors};
 use mgit_git::parse::LogParser;
 use mgit_graph::{GraphLayout, LayoutOptions};
@@ -450,10 +451,11 @@ async fn load_timeline(
         let sem = Arc::clone(&sem);
         let query = query.clone();
         let found = repo.found.clone();
-        set.spawn(async move {
+        // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+        set.spawn(bulk_reads(async move {
             let _permit = sem.acquire().await;
             (i, load_repo(&inner, found, &query, cap).await)
-        });
+        }));
     }
     let mut slots: Vec<Option<RepoLoad>> = groups.iter().map(|_| None).collect();
     while let Some(r) = set.join_next().await {
@@ -825,7 +827,8 @@ impl Core {
         for path in need_git {
             let inner = Arc::clone(&inner);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 log_authors(
                     inner.runner(),
@@ -835,7 +838,7 @@ impl Core {
                     AUTHORS_TIMEOUT,
                 )
                 .await
-            });
+            }));
         }
         let mut timed_out = false;
         while let Some(r) = set.join_next().await {

@@ -54,11 +54,15 @@ vi.mock('../store', () => {
   return {
     useAppStore: (selector: (state: unknown) => unknown) => selector(state),
     getFolderStore: () => folder,
+    useFolder: (selector: (state: unknown) => unknown) => selector(folder.getState()),
     getSessionStore: () => undefined,
     getWorkspaceStore: () => ({ getState: () => ({ openDoc: fixture.doc }) }),
   };
 });
-vi.mock('../store/editor-drafts', () => ({ editorDrafts: fixture.drafts }));
+vi.mock('../store/editor-drafts', () => ({
+  editorDrafts: fixture.drafts,
+  editorDraftStamp: () => '',
+}));
 vi.mock('../store/file-editor-store', () => ({
   fileEditors: {
     subscribe: () => () => {},

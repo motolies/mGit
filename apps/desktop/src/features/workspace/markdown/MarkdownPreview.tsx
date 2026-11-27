@@ -15,6 +15,7 @@ import {
 } from 'react';
 import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { FocusTier, onFocusRefresh } from '../../../store/focus-refresh';
 import { canHighlight, countLines } from '../FileView';
 import styles from './MarkdownPreview.module.css';
 import { MermaidBlock } from './MermaidBlock';
@@ -298,11 +299,17 @@ export function MarkdownPreview({
   useEffect(() => {
     void checkImages(watch, stableSource);
   }, [checkKey, watch, stableSource]);
-  useEffect(() => {
-    const refresh = () => setFocusEpoch((value) => value + 1);
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
-  }, []);
+  // 창 포커스 복귀: 그림 캐시를 비우고 다시 확인한다. 포커스 갱신 조율기가 보이는 내용 단계로 돌리고, 간격 안에 다시 온
+  // 포커스는 건너뛴다 (G4 — 그사이 바뀐 그림은 편집기 표지 검사의 `checkKey` 가 잡는다)
+  useEffect(
+    () =>
+      onFocusRefresh({
+        name: 'markdown-preview:images',
+        tier: FocusTier.visible,
+        run: () => setFocusEpoch((value) => value + 1),
+      }),
+    [],
+  );
   useLayoutEffect(() => {
     restoreTarget.current = viewState.scrollTop;
     const restore = () => {

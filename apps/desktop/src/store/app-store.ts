@@ -39,6 +39,7 @@ import {
   writeSavedEditorTabs,
 } from './editor-tabs-persist';
 import { describeError } from './errors';
+import { markExplicitRefresh } from './explicit-refresh';
 import { guardFileEditorClose } from './file-editor-close';
 import { fileEditors } from './file-editor-store';
 import { createFolderStore } from './folder-store';
@@ -2660,6 +2661,8 @@ export function createAppStore(deps: AppStoreDeps) {
         if (id === null) {
           return;
         }
+        // 사용자가 고른 새로고침이다: 편집기의 Blame·HEAD 원문도 다시 묻는다 (G1)
+        markExplicitRefresh(id);
         // 저장소 탭은 상태와 함께 Project 도구 창의 펼친 파일 트리도 다시 읽는다 (W21). 트리를 아직 열지 않았으면 읽지 않는다
         const session = getSessionStore(id)?.getState();
         await Promise.all([session?.refresh(), session?.reloadFiles()]);

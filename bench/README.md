@@ -1,6 +1,6 @@
 # bench — 벤치 하네스
 
-`mgit-bench` 는 모드가 다섯이다. `repos/` 는 gitignore 대상이다.
+`mgit-bench` 는 모드가 여섯이다. `repos/` 는 gitignore 대상이다.
 
 - 저장소 모드(`--repo`): 명세 5절 PoC-1(대형 저장소 그래프)을 잰다. `--filters` 면 대신 해시 패스의 추가 시간을 잰다 (W18).
 - 폴더 모드(`--folder`): 저장소 여러 개가 든 폴더를 여는 경로를 잰다 (W0 측정 기준선, W18 측정 포함).
@@ -8,10 +8,14 @@
 - 파일 트리 모드(`--fs`): 큰 디렉터리 나열과 1 MiB 파일 읽기의 코어 쪽 시간 (W18).
 - stage 모드(`--stage`): 변경 파일이 많은 저장소의 폴더 stage·unstage 와 그 뒤 부분 갱신 (W18).
 - tags 모드(`--tags`): 원격 tag 조회·비교·보고서 크기, `RefsChanged` 기준선, 일괄 push·원격 삭제 (TG-17, B4).
+- 비교 모드(`--compare`): 로컬 내용과 비교·ref↔ref 비교의 목록·문서 시간과 git 명령 수 (반응성 개선 M2) — 맨 아래 "비교 모드" 절.
 
 벤치는 릴리스로 빌드해 바이너리를 바로 돌려도 된다(`cargo build --release -p mgit-bench` → `./target/release/mgit-bench …`).
 
 화면(프런트) 렌더링은 `frontend-measure.js`(브라우저 페이지 안에서 돌리는 측정 도구)로 잰다 — 맨 아래 "W18 ② 화면 측정" 절.
+
+실제 앱(`pnpm dev`)을 쓰는 동안의 IPC 호출·긴 프레임은 개발 프로필 전용 기록기가 `perf.jsonl` 로 남기고 `perf-summary.mjs` 로
+요약한다 — 맨 아래 "실제 앱 기록기" 절.
 
 tag 관리 측정(TG-17)의 저장소·원격은 `setup.sh tags` 로 만들고 `--tags` 로 잰다 — 맨 아래 "tags 픽스처" 절.
 
@@ -121,6 +125,7 @@ cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x10000
 cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x10000 --no-commit-graph
 cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x10000 --memory         # 메모리 분해 (W18, macOS)
 cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x2000-partial --lanes   # 화면당 레인 수 (W18)
+cargo run --release -p mgit-bench -- --folder bench/repos/folder-20x10000 --contention --runs 5  # 배경 읽기 도중 조작 읽기 (반응성 12)
 cargo run --release -p mgit-bench -- --fs bench/repos/fs-50000 --runs 5                     # 파일 트리 (W18)
 cargo run --release -p mgit-bench -- --stage bench/repos/stage-5000                         # 폴더 stage·unstage (W18)
 ```
@@ -1143,3 +1148,971 @@ macOS 27.2.1, Apple M4 Pro 14코어·24GB, git 2.54.0, 릴리스, 페이지 캐�
 - 일괄 push·삭제의 git 클라이언트 비용: 알려진 한계로 둔다. 후속 아이디어(아이디어만): 고른 것이 그 원격의 "로컬에만" 전부일 때
   패턴 refspec 쓰기 등.
 - 단일 조회: 이름별 패턴은 4개 이하일 때만 쓰도록 R 의 C2c 에서 바꾼다.
+
+## 2026-11-27 반응성 기준선 (고치기 전)
+
+계획 `plan/perf-responsiveness.md` 의 M3. 분석이 말한 현상(R1 파일을 열어 두면 2초마다 다시 그림, R2 비교 창의 2초 재조회, R4
+Project 트리의 전체 폭 재측정, R6 저장 뒤 후속 조회, R7 비교 첫 열기의 낭비)을 **고치기 전에** 목 화면에서 쟀다. 고친 뒤 같은
+시나리오로 다시 재 견준다.
+
+### 측정 환경과 방법
+
+- 2026-11-27 09:50~10:05, 커밋 `92f9727`(M1 기록기) 위에서 측정 도구·목만 바꾼 상태 — 앱 동작 코드는 고치기 전 그대로다. macOS
+  27.2.1, Apple M4 Pro·24GB(W18·W29 와 같은 기기). 다른 레인의 빌드와 겹쳐 load average(1분)가 7.8 → 12.2 였다.
+- W18 ② 의 방법 그대로: 프로덕션 목 빌드(`VITE_MGIT_MOCK=2000 VITE_MGIT_MOCK_SCENE=folder`) + 미리보기, Playwright 의
+  Chromium 158(rAF 120Hz — 바닥값 16.7ms), 1400×900 다크, `page.addInitScript({ path: 'bench/frontend-measure.js' })`. 측정마다
+  `localStorage.clear()` 뒤 `mgit.language = 'ko'`(시나리오가 한국어 문구로 요소를 찾는다)만 넣고 다시 읽었다.
+- **수(렌더·IPC·canvas)는 렌더 계수기를 켠 묶음**(`mgit.measure.renders = '1'`), **시간은 끈 묶음**에서 잰 값이다(표에 따로 적은
+  것 제외). IPC 수는 M1 기록기의 메모리 모드(`window.__mgitPerf`)의 `ipc` 줄 — 목 메서드 하나가 한 줄이다. 편집기 저장소 알림은
+  같은 기록기의 `stores` 줄(`fileEditors`).
+- canvas 측정은 `CanvasRenderingContext2D.prototype.measureText`·`HTMLCanvasElement.prototype.getContext` 를 감싸 센 수다.
+  트리 폭 효과(`components/tree-width.ts`)는 돌 때마다 캔버스를 하나 만들므로 `getContext` 수 = 효과 실행 수이고, 캔버스마다 처음 잰
+  글자(그 트리의 첫 행)로 어느 트리의 측정인지 나눴다(Project 트리 = `acme-platform`).
+- Project 트리 행: 기본은 `api-gateway` 만 펼친 27행, "큰 트리"는 `logs`·`api-gateway`·`docs` 를 펼친 2,029행(`dirEntries` 기본
+  2,400 — 가상 스크롤 높이 / 행 높이 22px 로 어림).
+- 편집 대상은 `api-gateway/README.md`, 로컬 비교 대상은 작업 트리 변경이 있는 `auth-service/src/main/resources/config/rate-limit.yaml`.
+- 쓴 호출(예): `scenarios.editorIdle({ expand: ['logs', 'api-gateway', 'docs'] })`, `editorType({})`, `editorSave({})`,
+  `compareLocalIdle({ withEditor: false })`, `compareOpen({})`, `projectTreeWidth({ file: 'api-gateway/README.md' })`,
+  `projectRepoArrow({ n: 8 })`, 저장소 탭을 연 뒤 `tabSwitchCost({ to: '/mock/acme-platform', toReady: S.folderTabReady,
+  back: '/mock/acme-platform/api-gateway', backReady: S.repoTabReady(), n: 3 })`.
+
+### 결과
+
+시간은 "중앙값 (최대)" ms, 렌더는 다시 그린 컴포넌트 수(영역별, 큰 것부터), "셸"은 `panel:shell-body`.
+
+| 시나리오                                       | 시간                                       | IPC (구간 안)                                                                                                                                                                                                                            | 렌더                                                                                         | Project 트리 `measureText`                |
+| ---------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `editorIdle` 6초, 27행                         | —                                          | `fsFileStamps` 3 (2초마다), `fileEditors` 알림 3                                                                                                                                                                                         | 커밋 6: `project` 297, `editor` 258, 셸 72                                                   | 414 (효과 3번 = 2초마다 1번)              |
+| `editorIdle` 6초, 2,029행                      | —                                          | 같음                                                                                                                                                                                                                                     | 커밋 6: `project` 315, `editor` 258, 셸 72                                                   | **36,027** (2초마다 약 12,000)            |
+| `editorType` 글자 10번, 27행                   | 16.0 (16.7), LT 0                          | 0                                                                                                                                                                                                                                        | 입력당 커밋 2. 합: `project` 990, `editor` 670, 셸 241 (첫 입력의 탭 고정: `git-log` 207 등) | 입력당 138                                |
+| `editorType` 글자 10번, 2,029행                | 24.9 (29.0), LT 0                          | 0 (주기 검사 1)                                                                                                                                                                                                                          | 입력당 커밋 2~4. 합: `project` 1,155, `editor` 737, 셸 265                                   | **입력당 12,009** (효과 1~2번)            |
+| `editorSave` 입력 → 저장 → 0.8초 잠잠          | 2,722 (자동 저장 대기 1초 포함)            | **15**: `fsSaveFile` → `fsFileStamps`·`submodules`·`worktreeWips` → `fsListDir` 2·`fsReadEditableFile` → (0.4초 뒤) `folderSummaries`·`folderBranches`·`folderChanges` → `blameContents`·`revisionFileContent`, 그 사이 `fsFileStamps` 4 | 커밋 20: `project` 1,006, `editor` 898, `git-log` 621, 그 밖 370, 셸 243, `git-branches` 60  | 1,172 (효과 14번)                         |
+| `compareLocalIdle` 열기 (편집기에 연 채)       | 334.4 (348.7), 3회 — 300ms 는 첫 조회 지연 | 3: `resolveRevision`·`compareLocalFiles`·`compareLocalDocument`                                                                                                                                                                          | —                                                                                            | —                                         |
+| 〃 6초 대기                                    | —                                          | **9**: 2초마다 `fsFileStamps` → 약 300ms 뒤 `compareLocalFiles`·`compareLocalDocument` (각 3)                                                                                                                                            | 커밋 15: `editor` 792, `project` 384, 셸 72                                                  | 477 (+ 비교 파일 트리 45)                 |
+| `compareLocalIdle` 6초 대기 (편집기 없이)      | —                                          | 0 (열기는 `folderOpenRepoSession`·`mergeToolName` 포함 5)                                                                                                                                                                                | 0                                                                                            | 0                                         |
+| `compareOpen` 브랜치 ↔ 브랜치 (저장소 탭)      | 33.3 (71.4), 3회, LT 0                     | 7: `compareRefs`(세션 스토어 — 결과를 쓰지 않는다) → `resolveRevision` 2 → `compareRefs` → `comparisonCommits` 2·`compareFileDiffDocument`                                                                                               | 커밋 14: `editor` 267, `git-log` 225, `git-branches` 78, `project` 69                        | 183 (전체 canvas)                         |
+| `projectTreeWidth` 로그 행 고르기 5번, 2,029행 | 24.0 (24.9), 렌더 계수 켬                  | —                                                                                                                                                                                                                                        | `project` 0                                                                                  | **0** (잰 45~66 은 상세의 변경 파일 트리) |
+| 〃 창 포커스 (전체 갱신)                       | 66.5, 렌더 계수 켬                         | `fsClipboardRead`·`folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 4                                                                                                                                                       | `project` 300, `git-log` 207, `editor` 138                                                   | **28,021** (효과 3번)                     |
+| 〃 편집기 글자 하나 (첫 입력)                  | 46.4, 렌더 계수 켬                         | 0                                                                                                                                                                                                                                        | `git-log` 207, `project` 105, `editor` 67                                                    | 12,009                                    |
+| `projectRepoArrow` ↓ 8번 (최상위 행), 27행     | 16.5 (16.7), LT 0                          | 0                                                                                                                                                                                                                                        | 키마다 `git-log` 207, 그 밖 119, `project` 85, `editor` 46~47                                | 키마다 111                                |
+| `tabSwitchCost` 저장소 → 폴더 (3회)            | 16.0~24.9, 렌더 계수 켬                    | `fsClipboardRead`·`folderTimelineFindRow`                                                                                                                                                                                                | `git-log` 545, `project` 196, 그 밖 141, Git 도구 창 틀 126, `git-branches` 120              | 327 (전체 canvas)                         |
+| 〃 폴더 → 저장소 (3회)                         | 16.5~16.6, 렌더 계수 켬                    | `fsClipboardRead`·`findRow`·`remoteTags` 2                                                                                                                                                                                               | `git-log` 368, 그 밖 165, `project` 143, 틀 123, `git-branches` 116                          | 186 (전체 canvas)                         |
+- 비교 창 6초 대기의 DOM 변화(`domWatch`, 비교 화면 뿌리 아래): 편집기에 연 채 459건 — 모두 속성 변경(`tabindex` 252·`name` 150·
+  `type` 57)이고 노드 추가·삭제 0, "불러오는 중…" 표시 0회. 편집기 없이 0건.
+- 같은 동작을 렌더 계수기를 켜고 잰 시간(참고): `editorType` 27행 16.0 (17.0), 저장소 탭 열기 뒤 `compareOpen` 50.7(1회).
+
+### 재현 여부 (확인한 것과 추정 구분)
+
+- **R1 2초마다 다시 그림: 재현됐다.** 파일 하나를 편집기에 연 채 가만히 있어도 2초마다 `fsFileStamps` 한 번 → 편집기 저장소 알림
+  한 번 → 커밋 2개(`project`·`editor`·셸)다. 파일이 바뀌지 않았는데도 알린다(`stores` 의 `fileEditors` 3 = 주기 3번).
+- **R2 2초마다 비교 재조회: 재현됐다 — 단 편집기에 문서가 열려 있을 때만.** 그때 비교 창은 주기 검사 약 300ms 뒤(재조회 지연)
+  `compareLocalFiles`·`compareLocalDocument` 를 다시 부른다. 편집기 문서가 없으면 6초 동안 0 이다 — 재조회 신호가 편집기 저장소의
+  전역 버전이라는 분석과 맞는다. **로딩 표시("불러오는 중…")는 목에서 한 번도 켜지지 않았다**: 첫 조회 뒤에는 문서가 있어
+  `!document && loading` 이 거짓이다. 목의 깜빡임으로 보인 것은 다시 그릴 때의 속성 변경뿐이다. 실제 앱에서 보이는 깜빡임이 조회가
+  길어질 때의 다른 표시인지, diff 다시 그리기인지는 목으로 확인하지 못했다(목 조회는 1ms 안팎 — 실제는 R3 의 프로세스 남발로 수백
+  ms~초).
+- **R4 렌더마다 전체 폭 측정: 재현됐다.** Project 트리가 다시 그려질 때마다(글자 입력, 2초 주기, 창 포커스, ↓ 이동) 펼친 행 전체를
+  다시 잰다. 2,029행에서 글자 하나에 `measureText` 12,009번(행당 약 6. 추정: 효과 한 번 안에서 직접 호출·ResizeObserver 첫
+  콜백·`fonts.ready` 가 갱신을 세 번 돌고, 갱신마다 캐시를 새로 만들어 행의 글자들을 다시 잰다), 가만히 6초에 36,027번. 시간은 입력당 24.9ms(27행 16.0ms)로 아직 100ms 아래다(Chromium). 로그 행 고르기는
+  Project 트리를 다시 그리지 않아 재지 않는다.
+- **R6 저장 뒤 후속 조회: 재현됐다.** 저장 하나에 IPC 15개 — 파일 트리 다시 읽기(`fsListDir` 2), 원문 다시 읽기, 폴더 요약·브랜치·
+  변경(상태 이벤트 뒤), Blame·HEAD 원문 재조회(`blameContents`·`revisionFileContent`), 렌더 커밋 20.
+- **R7 비교 첫 열기: 버려지는 `compareRefs` 가 재현됐다**(같은 비교를 두 번, 첫째는 세션 스토어). resolve 2회는 목에서 같은 시각에
+  끝나 직렬인지 이 측정으로는 가릴 수 없다(코드로는 차례로 await). 로컬 비교 첫 열기의 300ms 지연은 열기 시간 334ms 에 그대로 보인다.
+- 그 밖에 본 것: Project 트리 ↓ 이동은 저장소 행이든 아니든 키마다 로그 칸(`git-log` 207)을 다시 그린다. 편집기 첫 글자(탭 고정)도
+  `git-log` 207 을 다시 그린다. 시간은 모두 두 프레임(16.7ms) 안팎이다.
+
+### 측정 도구와 목 변경
+
+- `frontend-measure.js` 새 시나리오: `editorIdle`·`editorType`·`editorSave`·`compareLocalIdle`·`compareOpen`·`projectTreeWidth`·
+  `projectRepoArrow`·`tabSwitchCost`. 도우미: `ipcWindow()`(M1 기록기로 구간의 IPC·저장소 알림·이벤트), `canvasCounter()`,
+  `cost()`(시간 + IPC + canvas + 렌더), `idle()`, `domWatch()`, `projectPath()`·`revealProjectFile()`·`expandProjectDirs()`·
+  `openEditorFile()`·`insertText()`(편집 영역에 `execCommand('insertText')`)·`contextItem()`·`comparisonRoot()`·`comparisonShown()`.
+- 지금 틀의 탭 막대(`[role="tablist"]` 단추의 `title` = "폴더: <경로>"·"Git 저장소: <경로>", 활성은 `aria-selected`)에 맞춰
+  `sessionTab`·`tabActive`·`tabSwitch` 를 보강했다(옛 `nav[aria-label="repositories"]` 도 그대로 찾는다).
+- 목(`mock-client.ts`): 브랜치 ↔ 브랜치 비교가 비어 있어(널 스텁) `compareRefs`·`compareFileDiff` 의 최소 흉내를 더했다 — 두 쪽이 같은
+  커밋이면 변경 없음, 아니면 커밋 상세와 같은 파일 목록·diff. 두 ref 사이의 실제 차이는 계산하지 않는다.
+
+### F1 뒤 — 편집기 저장소의 주제별 알림 (2026-11-27)
+
+`fileEditors` 의 전역 버전 하나를 주제별 알림으로 나눴다(문서·그림 재확인·탭 표시·전체, `store/file-editor-store.ts`,
+`store/use-file-editors.ts`). 바뀐 것 없는 검사는 아무도 깨우지 않는다. 같은 방법으로 다시 쟀다(10:30~10:33, load average(1분)가
+42 → 19 로 높았다 — 수는 결정적이고 시간은 흔들린다). 기록기의 `stores` 줄은 주제별로 나뉘었다: `fileEditors`(어느 문서든 실제로
+바뀐 알림), `fileEditors.marks`(탭 표시가 바뀐 알림), `fileEditors.image`(그림 재확인 신호, 검사마다).
+
+| 시나리오                          | 고치기 전                                                                    | F1 뒤                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `editorIdle` 6초, 27행            | 커밋 6 (`project` 297·`editor` 258), `fileEditors` 알림 3, `measureText` 414 | **커밋 0, 알림 0**(`fileEditors.image` 3), `measureText` 0. IPC 는 그대로 `fsFileStamps` 3              |
+| `editorIdle` 6초, 2,029행         | 커밋 6, `measureText` 36,027                                                 | **커밋 0, `measureText` 0**                                                                             |
+| `editorType` 10번, 27행 — 렌더    | 입력당 커밋 2. 합: `project` 990, `editor` 670, 셸 241                       | 입력당 커밋 1. 둘째 입력부터 **`editor` 19 만**(`project` 0). 첫 입력(탭 고정·● 켜짐)만 `project` 99 등 |
+| `editorType` 10번, 2,029행 — 렌더 | 합: `project` 1,155, `editor` 737. 입력당 `measureText` 12,009               | 둘째 입력부터 `editor` 19 만, `measureText` 0. 첫 입력만 `project` 105·`measureText` 12,009             |
+| `editorType` 시간 (렌더 계수 끔)  | 27행 16.0 (16.7), 2,029행 24.9 (29.0)                                        | 27행 15.6 (16.7), 2,029행 16.2 (43.3 = 첫 입력)                                                         |
+- 첫 입력은 미리보기 탭을 고정하고(`onDirty` → 워크스페이스 스토어) ● 를 켜므로 워크스페이스가 한 번 다시 그려진다 — 그때의
+  Project 트리 전체 폭 측정(12,009번)은 R4(F3)의 몫이다.
+- 그림 재확인 신호는 검사마다 그대로 간다(`fileEditors.image` 3). 받는 것은 그 문서의 미리보기(`DocMarkdownPreview`)뿐이고, 마크다운
+  미리보기가 보이지 않는 이 측정에서는 다시 그린 컴포넌트가 없다.
+
+### F2 뒤 — 로컬 비교의 재조회와 깜빡임 (2026-11-27)
+
+`ComparisonDoc` 의 로컬 비교 재조회 신호를 전역 버전에서 값(이 저장소·그 파일의 편집기 초안·저장 지문 + Git 감시의 status·refs)으로
+바꾸고, 배경 갱신은 로딩·오류 표시를 건드리지 않게, 진행 중 조회는 버리지 않고 끝난 뒤 한 번만 다시 돌게 했다. 파일 비교
+(`filterPath`)는 저장소 전체 목록 없이 문서 하나로 변경 여부와 내용을 얻고, 첫 조회의 300ms 지연을 없앴다. 편집기에 열리지 않은
+파일의 외부 변경은 창 포커스와 보이는 동안의 느린 재검사(5초, 직전 조회가 그 안이면 건너뜀)로 잡는다. 같은 방법으로 쟀다(10:42~10:50,
+load average 16 → 2.5).
+
+목은 작업 트리 변경 파일의 원문을 HEAD 와 같게 둬서, 파일 하나만 보는 F2 뒤 화면은 그 파일을 "차이 없음"으로 본다(고치기 전에는
+목록이 status 로 그 파일을 넣고 빈 diff 를 그렸다). 그래서 F2 뒤에는 `compareLocalIdle({ edit: true })` — 한 글자 고쳐 자동 저장한 뒤
+비교 — 로 쟀다. 고치기 전 수치는 고치지 않은 같은 파일로 잰 것이지만 재조회 수는 내용과 무관하게 2초마다였다.
+
+| 시나리오 (`auth-service/…/rate-limit.yaml`) | 고치기 전                                                                            | F2 뒤                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| 열기 시간 (렌더 계수 끔, 3회)               | 334.4 (348.7) — 그중 300ms 는 첫 조회 지연                                           | **33.3 (33.4)**                                                                         |
+| 열기 IPC                                    | 3: `resolveRevision`·`compareLocalFiles`·`compareLocalDocument`                      | 2: `resolveRevision`·`compareLocalDocument` (목록 조회 없음)                            |
+| 편집기에 연 채 6초 — IPC                    | 9: 2초마다 `fsFileStamps` → 약 300ms 뒤 `compareLocalFiles`·`compareLocalDocument`   | `fsFileStamps` 3 (편집기 검사) + **느린 재검사 `compareLocalDocument` 1**               |
+| 〃 — 렌더 · DOM 변화 · 로딩 표시            | 커밋 15 (`editor` 792·`project` 384), DOM 변화 459(`tabindex`·`name`·`type`), 로딩 0 | **커밋 0, DOM 변화 0**, 로딩 0                                                          |
+| 편집기에 연 채 12초                         | —                                                                                    | 느린 재검사 2 (5초 간격), 커밋 0, DOM 변화 0                                            |
+| 편집기 없이 6초                             | IPC 0, 렌더 0 (재조회 신호가 편집기 저장소뿐이라 외부 변경을 놓쳤다)                 | 느린 재검사 1, 커밋 0, DOM 변화 0                                                       |
+| 변경 없는 파일(`api-gateway/README.md`) 6초 | (재지 않음)                                                                          | 열기 21.0ms(렌더 계수 켬)·IPC 2, 대기 중 재검사 1, 커밋 0, DOM 변화 0, "차이 없음" 유지 |
+
+### 1라운드 뒤 — F1·F2·F3 전부 (2026-11-27)
+
+`866ae14`(F3 트리 폭 측정 캐시) 위에서 M3 시나리오 전부를 기준선과 같은 조건으로 다시 쟀다(10:55~11:00). 수는 렌더 계수기를 켠 묶음,
+시간은 끈 묶음이다. 수를 잰 묶음은 load average(1분)가 15~25 로 높았고, 시간을 잰 묶음 끝은 2.8 이었다(탭 전환만 부하가 내려간
+뒤 따로 다시 쟀다). 표의 각 칸은 "기준선 → 1라운드 뒤"다.
+
+| 시나리오                                   | 시간                                             | IPC (구간 안)                                                             | 렌더                                                                                        | Project 트리 `measureText` |
+| ------------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------- |
+| `editorIdle` 6초, 27행                     | —                                                | `fsFileStamps` 3 → 3                                                      | 커밋 6 → **0**                                                                              | 414 → **0**                |
+| `editorIdle` 6초, 2,029행                  | —                                                | 3 → 3                                                                     | 커밋 6 → **0**                                                                              | 36,027 → **0**             |
+| `editorType` 10번, 27행                    | 16.0 (16.7) → 16.1 (17.8)                        | 0 → 0                                                                     | 입력당 커밋 2 → 1. 둘째 입력부터 `editor` 19 만(합 171)                                     | 입력당 138 → **0**         |
+| `editorType` 10번, 2,029행                 | 24.9 (29.0) → **15.5 (16.5)**                    | 0 → 0                                                                     | 둘째 입력부터 `editor` 19 만                                                                | 입력당 12,009 → **0**      |
+| 〃 첫 입력 (탭 고정·● 켜짐)                | (위에 포함)                                      | 0                                                                         | `project` 105, `git-log` 207, 그 밖 122 (탭 고정으로 워크스페이스가 다시 그려진다 — 그대로) | 12,009 → **0**             |
+| `editorSave` 입력 → 저장 → 잠잠            | 2,722 → 2,716 (자동 저장 대기 1초 포함)          | **15 → 15** (같은 구성 — G1 전)                                           | 커밋 20 → 11. `project` 1,006 → 701, `editor` 898 → 640, `git-log` 621 → 621                | 1,172 → **0**              |
+| `compareLocalIdle` 열기                    | 334.4 (348.7) → **33.6 (33.6)**                  | 3 → 2                                                                     | —                                                                                           | —                          |
+| 〃 6초 대기 (편집기에 연 채)               | —                                                | 9 → `fsFileStamps` 3 + 재검사 1                                           | 커밋 15 → **0**, DOM 변화 459 → **0**                                                       | 477 → 0                    |
+| 〃 6초 대기 (편집기 없이)                  | —                                                | 0 → 재검사 1                                                              | 0 → 0                                                                                       | 0                          |
+| `compareOpen` 브랜치 ↔ 브랜치              | 33.3 (71.4) → 30.1 (31.8)                        | 7 → 7 (같은 순서 — 버려지는 `compareRefs` 그대로)                         | 커밋 14 → 14 (같은 영역)                                                                    | (전체 canvas 183 → 30)     |
+| `projectTreeWidth` 로그 행 고르기, 2,029행 | 24.0 (24.9, 계수 켬) → 16.5 (22.7)               | —                                                                         | `project` 0 → 0                                                                             | 0 → 0                      |
+| 〃 창 포커스 (전체 갱신)                   | 66.5 (계수 켬) → 16.5 (계수 켜면 24.7)           | 같음 (`folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 4 …) | `project` 300 → 300, `git-log` 207 → 207                                                    | **28,021 → 0** (효과 1번)  |
+| 〃 편집기 글자 하나 (첫 입력)              | 46.4 (계수 켬) → 22.7 (계수 켜면 17.1)           | 0                                                                         | `project` 105 → 105                                                                         | 12,009 → **0**             |
+| `projectRepoArrow` ↓ 8번, 27행             | 16.5 (16.7) → 16.6 (17.7)                        | 0 → 0                                                                     | 키마다 `git-log` 207·`project` 85 → **같음**                                                | 키마다 111 → **0**         |
+| `tabSwitchCost` 저장소 → 폴더              | 16.0~24.9 (계수 켬) → 17.7 (18.2) (6번, 계수 끔) | 같음                                                                      | `git-log` 545·`project` 196 → **같음**                                                      | (전체 canvas 327 → 0)      |
+| 〃 폴더 → 저장소                           | 16.5~16.6 (계수 켬) → 15.2 (15.6)                | 같음                                                                      | `git-log` 368·`project` 143 → **같음**                                                      | (전체 canvas 186 → 0)      |
+- **F3 가 측정에서도 효과가 났다.** Project 트리가 다시 그려져도(첫 입력·창 포커스·↓ 이동·탭 전환) 펼친 행의 글자 폭을 다시 재지
+  않는다 — 첫 입력 12,009 → 0, 창 포커스 28,021 → 0, ↓ 키마다 111 → 0. 2,029행 글자 입력이 24.9ms → 15.5ms 로 27행과 같아졌다.
+  남은 `measureText` 는 다른 트리의 새 행 몇 개(창 포커스 1, 로그 행 고르기 0~20 = 상세의 변경 파일 트리, 브랜치 비교 30)다.
+- 그대로인 것(1라운드 범위 밖): 다시 그리는 범위 자체(↓ 이동·탭 전환·첫 입력·창 포커스의 `git-log`·`project` 컴포넌트 수 — R5/G2),
+  저장 한 번의 IPC 15개(R6 — G1), 브랜치 비교 첫 열기의 IPC 7개(R7 — G5). 저장의 렌더 커밋은 F1 로 20 → 11 이 됐다.
+- 탭 전환 시간은 처음 묶음(부하 15~25)에서 26~36ms 로 나왔다가 부하가 2.8 로 내려간 뒤 다시 재면 17.7·15.2ms 였다 — 렌더 수가
+  기준선과 같으므로 부하의 흔들림으로 본다(추정).
+
+### G1 뒤 — 자동 저장 한 번의 후속 작업 (2026-11-27)
+
+저장 뒤 갱신(`FileViewDoc.tsx` 의 `afterSave`)을 좁혔다: 그 파일의 디렉터리 하나만 다시 읽고(트리 epoch 그대로), Git 상태는 파일
+감시에 맡긴다(전체 새로고침 `refreshRepo` 없음 — 감시가 죽은 경우의 대체 경로는 아래). 편집기의 Blame·HEAD 원문 재조회는 트리
+epoch 대신 명시적 새로고침 신호(`store/explicit-refresh.ts`)를 본다. 폴더의 부분 갱신은 ref 가 바뀐 저장소만 브랜치 목록을 읽고,
+바쁨 표시는 전부 읽기에만 켜며, 다시 읽은 요약·변경이 같으면 옛 배열을 둔다. 같은 방법(렌더 계수 켬)으로 G1 바로 앞(`8ea8a15`)과
+G1 뒤를 견줬다(11:13~11:15, load average 15 → 4.6). 저장소 탭은 폴더에서 연 `api-gateway` 탭의 `README.md`(저장 전 깨끗한 파일)다.
+
+| `editorSave` (입력 → 저장 → 0.8초 잠잠) | G1 앞                                                                                                                                                                                                    | G1 뒤                                                                                                                                            |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 폴더 탭 — IPC                           | 15: `fsSaveFile`, `fsFileStamps` 4, `submodules`, `worktreeWips`, `fsListDir` 2, `fsReadEditableFile`, `folderSummaries`·**`folderBranches`**·`folderChanges`, **`blameContents`·`revisionFileContent`** | **10**: `fsSaveFile`, `fsFileStamps` 3, `submodules`, `worktreeWips`, `fsListDir` **1**, `fsReadEditableFile`, `folderSummaries`·`folderChanges` |
+| 폴더 탭 — 렌더 커밋                     | 11 (고치기 전 기준선 20)                                                                                                                                                                                 | **7**: `git-log` 621, `project` 499(701), `editor` 399(640), 그 밖 366                                                                           |
+| 저장소 탭 — IPC                         | 15: 위와 같은 구성 + **`refreshRepo`**(코어 ref 읽기 git 7), `fsListDir` 1                                                                                                                               | **9**: `refreshRepo`·`folderBranches`·`blameContents`·`revisionFileContent` 없음                                                                 |
+| 저장소 탭 — 렌더 커밋                   | 8                                                                                                                                                                                                        | 6                                                                                                                                                |
+- 남은 것: `submodules`·`worktreeWips`(세션의 status 이벤트 처리), 폴더의 `folderSummaries`·`folderChanges`(감시의 `folderChanged`),
+  `fsFileStamps` + `fsReadEditableFile` 한 번(status 가 바뀌어 편집기가 디스크를 확인 — 저장 뒤 파일 표지가 바뀌어 원문을 한 번
+  읽는다, revision 이 같아 화면은 그대로). 저장소 탭의 `folderSummaries`·`folderChanges` 는 같은 저장소를 품은 폴더 탭이 열려 있어서다.
+- 감시가 죽은 경우의 대체 경로(`confirmSavedStatus`): 코어는 감시 시작 실패를 로그에만 남기고 세션 상태로 알리지 않는다(알림 감시가
+  안 되면 2초 폴링으로 바꾸고, 그마저 실패해야 감시가 없다). 그래서 화면은 결과로 판단한다 — 저장 전에 깨끗하던 파일(status 목록에
+  없음)은 저장으로 상태가 바뀌어야 하므로 3초(`WATCH_GRACE_MS`) 안에 status 가 바뀌지 않으면 그때만 예전처럼 전체 새로고침을 한다.
+  이미 바뀐 파일은 다시 저장해도 status 가 그대로일 수 있어(코어는 바뀔 때만 알린다) 기다리지 않는다 — 감시가 없고 그 저장으로
+  HEAD 와 같아진 경우만 낡을 수 있다(창 포커스·새로고침 때 맞춰진다). `.gitignore` 된 파일은 status 에 없어 저장마다 3초 뒤 전체
+  새로고침을 한다(예전과 같은 비용).
+- 코어 기준선 테스트 `crates/mgit-core/tests/editor_cost.rs` 의 `editor_save_once_git_commands` 는 "화면이 `refresh` 를 부른다"를
+  전제로 저장 2 + 전체 새로고침 7 + 감시 1 을 고정하고 있다. 화면은 이제 감시가 살아 있으면 새로고침을 부르지 않으므로 **저장 2 +
+  감시 1** 이 실제다(대체 경로가 도는 경우만 + 7). 그 테스트는 이 레인에서 고치지 않았다.
+
+### 2라운드 뒤 — G1·G2·G3·G5 (2026-11-27)
+
+`9209955`(G3 스토어 구조 공유 — 그 커밋 자체, G2 `4046e41`, G5 `8ea8a15`, G1 `d20d2ab`) 위에 화면 레인의 눈 확인 수정(비교 ref 칸 CSS)과 C-3(편집기
+첫 조회 한 번)을 얹은 빌드로 M3 시나리오 전부와 새 시나리오 넷을 기준선과 같은 조건으로 다시 쟀다(11:39~11:55). 수는 렌더 계수기를
+켠 묶음, 시간은 끈 묶음이다. load average(1분)는 수 묶음 3.4, 시간 묶음 2.5 → 8.3(다른 레인 빌드와 겹침) — 로그 행 고르기·탭
+전환은 4.4 로 내려간 뒤 다시 쟀다. 칸은 "기준선 → 1라운드 → 지금"이고, 새 시나리오는 지금 값만 있다.
+
+| 시나리오                                    | 시간                                             | IPC (구간 안)                                                                       | 렌더                                                                                                                                           |
+| ------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `editorIdle` 6초, 27행·2,029행              | —                                                | `fsFileStamps` 3 → 3 → 3                                                            | 커밋 6 → 0 → **0** (`measureText` 414·36,027 → 0 → 0)                                                                                          |
+| `editorType` 10번, 27행                     | 16.0 (16.7) → 16.1 (17.8) → 16.6 (17.2)          | 0 → 0 → 0                                                                           | 둘째 입력부터 `editor` 19 만 (그대로)                                                                                                          |
+| `editorType` 10번, 2,029행                  | 24.9 (29.0) → 15.5 (16.5) → 16.1 (19.0)          | 0 → 0 → 0                                                                           | 〃                                                                                                                                             |
+| 〃 첫 입력 (탭 고정·● 켜짐)                 | (위에 포함)                                      | 0                                                                                   | `git-log` 207 → 207 → **0**, `project` 105 → 105 → 99(27행)·105(2,029행), `editor` 67, 그 밖 33, 셸 24                                         |
+| `editorSave` 입력 → 저장 → 잠잠             | 2,722 → 2,716 → 2,716 (자동 저장 대기 1초 포함)  | 15 → 15 → **10** (G1 뒤와 같은 구성)                                                | 커밋 20 → 11 → **7**. `git-log` 621 → 621 → **207**, `project` 1,006 → 701 → 400, `editor` 898 → 640 → 351, 그 밖 80 (G1 뒤 366), 셸 96        |
+| `compareLocalIdle` 열기 (한 글자 고쳐 저장) | 334.4 (348.7) → 33.6 → 25.4 (30.5)               | 3 → 2 → 2 (`resolveRevision`·`compareLocalDocument`)                                | —                                                                                                                                              |
+| 〃 6초 대기 (편집기에 연 채)                | —                                                | 9 → `fsFileStamps` 3 + 재검사 1 → 같음                                              | 커밋 15 → 0 → **0**, DOM 변화 459 → 0 → **0**                                                                                                  |
+| `compareOpen` 브랜치 ↔ 브랜치               | 33.3 (71.4) → 30.1 (31.8) → **25.6 (27.1)**      | 7 → 7 → **4**: `resolveRevision` 2 → `compareRefs` → `compareFileDiffDocument`      | 커밋 14 → 14 → 14. `editor` 267 → 317(ref 칸이 입력칸 → 선택 단추, F4), `git-log` 225, `git-branches` 78, `project` 69 (그대로)                |
+| 비교 탭 → 다른 탭 → 비교 탭 복귀 (새, 5회)  | 19.7 (22.7) — load 8                             | **0** (3번 중 2번 `fsFileStamps` 1 — 열어 둔 파일 탭의 2초 검사가 겹친 것으로 추정) | 커밋 4: `editor` 206, `project` 69, 그 밖 33, 셸 7                                                                                             |
+| `projectTreeWidth` 로그 행 고르기, 2,029행  | 24.0 (24.9, 계수 켬) → 16.5 (22.7) → 16.6 (16.7) | —                                                                                   | `project` 0 → 0 → 0                                                                                                                            |
+| 〃 창 포커스 (전체 갱신)                    | 66.5 (계수 켬) → 16.5 → 14.6                     | 같음 (`folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 4 …)           | `project` 300 → 300 → **200**, `git-log` 207 → 207 → **0**, `editor` 138 → 138 → **92**, 셸 48                                                 |
+| 〃 편집기 글자 하나 (첫 입력)               | 46.4 (계수 켬) → 22.7 → 13.1                     | 0                                                                                   | `git-log` 207 → 207 → **0**, `project` 105 → 105 → 105                                                                                         |
+| `projectRepoArrow` ↓ 8번, 27행              | 16.5 (16.7) → 16.6 (17.7) → 16.5 (17.0) — load 8 | 0 → 0 → 0                                                                           | 키마다 `git-log` 207 → 207 → **207**, 그 밖 119 → 119 → **22~26**, `project` 85, `editor` 46~47, Git 도구 창 틀 39, 셸 24                      |
+| 숨은 세션이 열린 저장소끼리 ↓↑ (새)         | 13.3~19.1                                        | 0                                                                                   | 키마다 `git-log` **207**, `project` 85, `editor` 83, 틀 39, 그 밖 29, 셸 24                                                                    |
+| `tabSwitchCost` 저장소 → 폴더 (6번)         | 16.0~24.9 (계수 켬) → 17.7 (18.2) → 17.0 (24.7)  | 같음                                                                                | `git-log` 545·`project` 196·그 밖 141·틀 126·`git-branches` 120 → **같음** (+ `editor` 51)                                                     |
+| 〃 폴더 → 저장소 (6번)                      | 16.5~16.6 (계수 켬) → 15.2 (15.6) → 16.7 (16.9)  | 같음                                                                                | `git-log` 368·그 밖 165·`project` 143·틀 123·`git-branches` 116 → **같음**                                                                     |
+| 폴더 주기 요약 갱신 (새, 간격 2초 · 6초)    | —                                                | 주기마다 `folderSummaries`·`folderBranches`·`folderChanges`                         | 주기마다 커밋 1: `editor` 21(개요 탭)만. 루트·`project`·`git-log` **0**                                                                        |
+| 저장소 탭 파일 하나 스테이징 (새, 2회)      | 17.9 — load 8                                    | `stagePaths` 1                                                                      | 커밋 3: 바쁨 켜짐·꺼짐에 **같은 범위가 두 번**(`git-log` 220, 그 밖 91, `commit` 65, 틀 47, `git-branches` 43, 셸 8, `editor` 6) + `commit` 26 |
+| Git 도구 창 닫기 (새, 4회)                  | 14.7 (16.4) — load 8                             | 0                                                                                   | 커밋 2: `project` 85, 그 밖 55, `editor` 46, 셸 25, 틀 8                                                                                       |
+| Git 도구 창 열기 (새, 4회)                  | 24.7 (26.3) — load 8                             | `folderTimelineFindRow` 1                                                           | 커밋 5: `git-log` 549(새로 마운트), 틀 126, `git-branches` 120, `project` 85, 그 밖 55, `editor` 46                                            |
+- 쓴 호출(새 시나리오): `scenarios.compareTabReturn({ n: 5 })`(저장소 탭에서 `compareOpen` 뒤 `README.md` 를 열고 비교 탭으로 돌아와서),
+  `projectRepoArrow` 대신 두 저장소의 파일을 편집기에 열어(`folderOpenRepoSession` 2) 저장소 행 사이를 ↓↑, `folderAutoRefresh({ secs: 2,
+  wait: 6000 })`(개요 탭의 "폴더 설정…" 에서 간격을 바꿔 저장), 저장소 탭(`auth-service`)에서 `repoStage({ path })`, `dockToggle({ n: 4 })`.
+- **G2 가 측정에서 효과가 난 곳**: 편집기 첫 입력·창 포커스의 `git-log` 207 → 0, 저장 한 번의 `git-log` 621 → 207·그 밖 366 → 80, ↓
+  이동의 그 밖 119 → 22~26, 폴더 주기 갱신의 루트 다시 그리기 0. G5: 브랜치 비교 첫 열기 IPC 7 → 4, 비교 탭 복귀 IPC 0.
+- **G2 가 측정에서 재현되지 않은 곳**: 폴더 탭 Project 트리의 ↓ 이동은 숨은 세션이 열린 저장소끼리여도 `git-log` 207 이 그대로다.
+  렌더 훅으로 그 커밋에서 props 가 그대로인데 다시 그려진 가장 위 컴포넌트를 찾으면 넷이다 — 툴바의 동기화 묶음(저장소 이름을
+  키로 한 맵 값이 바뀜), `FolderWorkspace`(파일 트리 스토어의 `selected`·`selection` — 예상된 것), 폴더 Git 로그(첫 DOM 이
+  `div.timeline` — props·context 의존이 없고 값이 바뀐 상태 훅도 보이지 않는다), 상태 표시줄(활성 저장소 — 예상된 것). `git-log` 207 은
+  셋째에서 나온다. 어느 구독이 알렸는지는 프로덕션 빌드(이름이 줄어 있다)라 가리지 못했다.
+- 저장소 탭의 쓰기 한 번은 바쁨 표시의 켜짐·꺼짐마다 `git-log`·Git 도구 창·`git-branches`·Commit 도구 창이 같은 범위로 두 번
+  다시 그려진다(G2 다음 후보). Git 도구 창을 닫아도 `project`·`editor` 가 다시 그려진다(85·46).
+- `compareOpen` 의 `editor` 267 → 317 은 비교 머리의 ref 칸이 `<input list>` 에서 선택 단추(아이콘·말줄임 조각·숨은 설명)로 바뀐
+  만큼으로 본다(F4 — 추정, 컴포넌트별로 나눠 보지 않았다).
+- 시간은 대부분 rAF 바닥값(16.7ms) 근처다. load 8 에서 잰 칸은 따로 적었다 — 같은 날 load 2.8~4.4 에서 잰 칸과 바로 견주지 않는다.
+
+#### G3 확인 항목 (G4 가 들어간 빌드)
+
+G3 레인이 다시 재 달라고 한 항목이다. 재기 전에 G4(`6861da9`, 창 포커스 갱신 조율기 — 같은 듣는 쪽은 5초 안에 다시 돌리지 않고
+단계별로 차례를 둔다)가 이 브랜치에 들어와, 미리보기를 다시 만든 빌드는 **G1~G5 가 모두 든 상태**다(12:00~12:10, 렌더 계수 켬,
+load 8~13). G3 만 든 상태의 값은 위 표다. 창 포커스는 조율기 간격 밖이 되게 6초 기다린 뒤 `focus` 이벤트를 한 번 보내고 3초를 쟀다.
+바쁨은 Project 트리 머리의 새로고침 단추(`disabled`)를 `MutationObserver` 로 봤다.
+
+| 항목                                                | IPC                                                                                                                                                                       | 렌더                                                                                                                                                                             | 바쁨 표시·`measureText`           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 폴더 탭 창 포커스 1회, 바뀐 것 없음 (27행, 개요 탭) | `folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 1                                                                                                          | 커밋 2: `project` **85**(G3 레인 설명대로 파일 트리 pending 토글로 추정), `editor` 67, 셸 24. `git-log`·`git-branches` 0                                                         | 깜빡임 0 · 0                      |
+| 〃 기준선 조건 (2,029행 + 편집기에 파일)            | `folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 4·`fsFileStamps` 3·`fsReadEditableFile` 1                                                                  | 커밋 2: `project` 300 → 200(G3 빌드) → **105**, `git-log` 207 → 0 → **0**, `editor` 138 → 92 → **86**, 셸 24                                                                     | — · 28,021 → 1 → **0**            |
+| 주기 자동 갱신 1틱 (간격 3초)                       | `folderSummaries`·`folderBranches`·`folderChanges`                                                                                                                        | 커밋 1: `editor` 21(개요 탭)만. `project`·`git-log`·루트 0                                                                                                                       | **깜빡임 0** · 0                  |
+| 툴바 새로고침                                       | `folderSummaries`·`folderBranches`·`folderChanges`·`fsListDir` 1                                                                                                          | 커밋 3: `project` 170, `editor` 113, 셸 48                                                                                                                                       | **바쁨 보임** (켜짐·꺼짐 2) · 0   |
+| 저장소 탭 파일 하나 수정 (status 이벤트)            | `fsSaveFile` → `submodules`·`worktreeWips`·**`workTreeDiffDocument` 1**·`fsListDir`·`fsReadEditableFile`·`fsFileStamps` 2 (+ 폴더 탭의 `folderSummaries`·`folderChanges`) | 저장 뒤 커밋 5. 변경 목록은 status 반영 커밋 2번마다 `staged` 24·`unstaged` 25·머리 16 (행 5 → 6). **열어 둔 작업 트리 diff(왼쪽 그룹)가 다시 그려진다**: 합 278(커밋마다 16~82) | — · 0                             |
+| 폴더 브랜치 트리 (창 포커스 때)                     | (위 포커스와 같음)                                                                                                                                                        | `git-branches` **0**                                                                                                                                                             | — · **0** (트리를 다시 재지 않음) |
+- 저장소 탭 status 항목의 장면: `auth-service` 저장소 탭에서 `README.md`(깨끗한 파일)를 열어 "오른쪽으로 분할" 한 뒤, Commit 도구 창의
+  `rate-limit.yaml` 을 두 번 눌러 왼쪽 그룹에 작업 트리 diff 를 띄우고, 오른쪽 `README.md` 에 한 글자를 넣어 자동 저장까지 셌다
+  (`M.split` 으로 그룹·변경 목록 칸을 나눴다). 그 파일은 바뀌지 않았는데 diff 를 다시 묻고(`workTreeDiffDocument`) 다시 그린다 —
+  G3 다음 후보. 한 글자 입력 자체(첫 입력)도 왼쪽 diff 164·변경 목록 98 을 다시 그리고(탭 고정·● 켜짐으로 추정), 저장 뒤 첫 커밋에는
+  `git-log` 165 가 함께 그려진다.
+- 툴바 새로고침은 바쁨 표시가 그대로 보이고, 창 포커스·주기 갱신(배경 전부 읽기)은 바쁨이 깜빡이지 않는다(G3 의도대로).
+
+### 2라운드 뒤 보완 — D-2·D-3·D-4·D-5 (2026-11-27)
+
+G4(`6861da9`) 뒤 화면 레인의 D-2(`1fc45dc`)·D-3(`66bc708`)·D-4(`571c0e3`)·D-5(`7a37125`)를 같은 방법으로 쟀다(12:20~12:30, 프로덕션 목 빌드,
+수는 렌더 계수 켬·시간은 끔, load 7~19). "전"은 위 2라운드 표와 G3 확인 항목의 값이다. 출처는 압축하지 않은 빌드
+(`vite build --minify false`)에 렌더 훅을 걸어 "props 가 그대로인데 그려진 컴포넌트"와 그 훅의 바뀐 값을 뽑아 확인했다.
+
+| 시나리오                                                                                       | 전                                                                                                                 | 뒤                                                                                                             |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| 폴더 Project 트리 ↓ (저장소 행끼리, 27행)                                                      | 키마다 `git-log` 207, Git 도구 창 틀 39, 그 밖 22~26, `project` 85, `editor` 46~47, 셸 24                          | `git-log` **0**, 틀 **0**, 그 밖 4, `project` 85, `editor` 47, 셸 24 · 16.5 (16.7)ms                           |
+| 숨은 세션이 열린 저장소끼리 ↓↑                                                                 | `git-log` 207, `editor` 83, `project` 85, 그 밖 29                                                                 | `git-log` **0**, `editor` 83, `project` 85, 그 밖 7                                                            |
+| 저장소 탭 파일 하나 stage (바쁨 켜짐·꺼짐 커밋마다)                                            | `git-log` 220, 그 밖 91, `commit` 65, 틀 47, `git-branches` 43, 셸 8, `editor` 6 · 17.9ms                          | `git-log` **57**, 그 밖 70, `commit` 62, 틀 38, `git-branches` 43, 셸·`editor` **0** · 12.7 (13.2)ms           |
+| Git 도구 창 닫기 (폴더 탭)                                                                     | 커밋 2: `project` 85, 그 밖 55, `editor` 46, 셸 25, 틀 8                                                           | 커밋 2: 그 밖 54, 틀 8 (`project`·`editor`·셸 **0**) · 16.2 (17.6)ms                                           |
+| Git 도구 창 열기 (폴더 탭)                                                                     | 커밋 5: `git-log` 549(새로 마운트) … `project` 85, `editor` 46 · 24.7ms                                            | 같은 마운트 수, `project`·`editor` **0** · 16.5 (17.6)ms                                                       |
+| 창 포커스 1회, 바뀐 것 없음 (27행, 개요 탭)                                                    | 커밋 2: `project` 85, `editor` 67, 셸 24                                                                           | 커밋 1: `editor` 21(개요 탭의 갱신 시각)만                                                                     |
+| 〃 2,029행 + 편집기에 파일                                                                     | `project` 105, `editor` 86, 셸 24                                                                                  | `editor` 39 (`project`·셸 **0**)                                                                               |
+| 5초 안에 다시 포커스                                                                           | —                                                                                                                  | IPC 0, 렌더 0 (G4 조율기가 건너뜀)                                                                             |
+| 주기 재조회(간격 3초) 바로 뒤 포커스                                                           | —                                                                                                                  | 1.5초 안 `folderSummaries` **1** (+ `folderBranches`·`folderChanges` 1, 파일 트리 `fsListDir` 1)               |
+| Project 트리 "더 보기" (`logs` 2,400 항목)                                                     | —                                                                                                                  | "… 402개 더 보기" 를 누르면 "더 불러오는 중…" 이 보인다                                                        |
+| 저장소 탭 다른 파일 저장 → status 이벤트, 열어 둔 `rate-limit.yaml` 작업 트리 diff (왼쪽 그룹) | `workTreeDiffDocument` 1, 왼쪽 그룹 합 278(커밋 5 — diff 비움·읽는 중 16, 새 문서 29 포함 — 커밋별 수로 가른 추정) | `workTreeDiffDocument` 1(남김), 왼쪽 그룹 합 246(커밋 3 — 모두 `RepoWorkspace` 에서 번진 것), diff 상태 변화 0 |
+- D-2 원인(확정): 폴더 일괄 작업 흐름 `useFolderBatchFlows` 가 고른 저장소(파일 트리 선택)를 구독했다. 이 흐름을 쓰는
+  `FolderTimeline`(Git 로그 칸)·툴바 동기화 묶음·`FolderWorkspace`·흐름 호스트가 행을 옮길 때마다 다시 그려졌다. 흐름은 고른
+  저장소를 부를 때 읽고, 대상 수를 보이는 단추 이름만 `useBatchScope` 로 수를 구독한다. 저장소가 아닌 행에서 저장소 행으로
+  넘어가는 한 번은 대상 표기("전체 N개" → "선택 1개")가 바뀌어 로그 칸의 단추 이름이 다시 그려진다(의도한 예외).
+  남은 `project` 85·`editor` 47 은 트리 선택을 그리는 `FolderWorkspace` 의 몫이다(편집기 공간은 그 자식이라 함께 그려진다).
+- D-3 구조: 동작 목록은 그대로 두고(활성 여부를 그리는 툴바·팔레트·단축키가 받는다), 본문(`AppBody` 아래)에는 활성 여부와
+  무관한 동작 출처(`CommandSource` — 안내 글자·링크, 누를 때 지금 목록을 읽는 `current()`)를 넘긴다. busy 를 직접 구독하던
+  그래프 칸·저장소 구조 훅은 쓰는 그때 읽고, 보이는 비활성만 작은 컴포넌트가 따로 구독한다. stage 한 번에 남은 것: 툴바의
+  동기화·되돌리기 단추, 작업 진행 띠, 닫힌 세션 대화상자들(그 밖 70), Commit 도구 창(단추 비활성, 62), 로그 칸의 필터 바 잠금·
+  안내 띠(57), 브랜치 칸(툴바·행 단추의 비활성이 busy 를 따른다 — `useRepoBranchTree`, 43 + 틀 38).
+- D-4: 창 포커스의 `project` 85(27행)·105(2,029행)는 파일 트리 pending 이 아니라 이름 필터 훅이 트리 다시 읽기 신호(`epoch`)를
+  늘 구독한 탓이었다 — 필터가 파일 목록을 쓰는 동안에만 구독하게 고쳤다.
+- D-5: status 이벤트의 diff 재조회는 남기고(코어는 status 가 달라질 때만 이 이벤트를 보내므로, 항목이 그대로 "수정됨"인 파일의
+  내용 변경을 잡는 길은 이 재조회와 편집기 저장의 `reloadWorkingFile` 뿐 — 창 포커스·새로고침은 열린 작업 트리 diff 를 다시
+  읽지 않는다), 조용한 재조회로 바꿨다: 보던 diff·읽는 중 표시를 그대로 두고 같은 문서면 상태를 바꾸지 않는다. 남은 왼쪽 그룹
+  246 은 diff 가 아니라 `RepoWorkspace` 가 status(`entries`·`summary` — Project 트리 장식)를 구독해 다시 그려지며 편집기 공간을
+  함께 그리는 몫이다. 같은 장면의 첫 입력(왼쪽 diff 164·변경 목록 98)은 탭 고정으로 `focusedDoc` 이 바뀌어 `RepoWorkspace` 가
+  다시 그려진 것이고, 저장 뒤 첫 커밋의 `git-log` 165 는 그래프 칸이 WIP 행의 변경 요약(`summary`)을 그리는 몫이다 — 둘 다
+  D-3(동작 목록·busy)과 다른 뿌리다.
+- 시간은 대부분 rAF 바닥값(16.7ms) 근처라 수의 변화만큼 줄지 않는다. 부하가 달라(전 2.5~8, 뒤 7) 시간 칸은 참고값이다.
+
+### 3라운드 — diff 화면 그리기 (2026-11-27)
+
+실제 앱 기록(`pnpm dev --release`, WKWebView + 개발 React, 사용자가 폴더 탭에서 "현재 로컬 내용과 비교"를 열고 키보드로 파일을
+옮기며 diff 를 스크롤)이 보인 느림: 파일 이동 키 한 번 → 다음 그리기 120~680ms(18건, 중앙값 약 315ms, 그중 IPC
+`compareLocalDocument` 65~86ms), 키마다 100~110ms 프레임 3~4개(가끔 230~350ms), 스크롤 135ms 프레임 연속 7개, 비교 열기 직후
+144·321·116ms. 같은 동작이 기존 목 화면(프로덕션, 감속 없음)에서는 16~33ms 였다.
+
+#### 재현 방법 (E-1)
+
+- 목 조절값 `mgit.mock.diffLines=3000`·`diffHunks=40`·`diffDelayMs=75`(실제 IPC 흉내)·`worktreeChanges=20` — 로컬 비교·작업
+  트리·커밋 diff 문서가 패치와 양쪽 원문이 맞는 3,000줄 코드 문서(`.tsx`, 3,080행)가 된다. 기본 장면은 그대로다.
+- 개발 빌드는 `VITE_MGIT_MOCK=2000 VITE_MGIT_MOCK_SCENE=folder pnpm -F @mgit/desktop dev:web`(StrictMode·개발 React — 사용자와
+  같은 조건, 조절값은 `/__mgit/settings` 로 넣는다), 프로덕션은 `build:web` + 미리보기. Playwright Chromium 1400×900 다크,
+  CPU 감속은 CDP `Emulation.setCPUThrottlingRate`(1·4배). load average 2.6~6.9.
+- 시나리오(`bench/frontend-measure.js`): `compareOpenBig({ repo: 'web-console' })`, `compareFileStep({ n: 8 })`(파일 → 파일 ↓,
+  사이 디렉터리 행은 재지 않고 건넌다), `diffScroll({ frames: 60, step: 120 })`.
+- **개발 빌드 + 4배 감속에서 실제 기록의 모양을 재현했다**: 파일 이동마다 긴 프레임 3~4개(68·242·75·52ms), 스크롤 p95 125ms·최대
+  135ms. 프로덕션 + 4배는 키마다 긴 프레임 1개(58~65ms)·스크롤 p95 17ms 로, 비용의 대부분이 개발 빌드에서 커진다.
+
+#### 시간이 쓰이던 곳 (E-2, 개발 빌드 4배 CPU 프로필·렌더 훅)
+
+- 개발 React 의 요소 만들기(`jsxDEV`, 요소마다 디버그 정보를 만든다)가 자기 시간의 대부분이었다 — 스크롤 30프레임에 585ms.
+  같은 줄을 계속 다시 만들었기 때문이다.
+- 스크롤 한 프레임에 diff 본문이 2~3번 다시 그려졌다: 가상 스크롤의 동기 다시 그리기(`flushSync`), 첫 보이는 줄로 커서를 옮기는
+  상태, 커서가 줄마다 바뀔 때마다 새로 등록되는 탐색(`onNavigationReady` → `DiffPaneView` 상태 → diff 칸 전체). 줄 컴포넌트가
+  memo 가 아니어서 매번 보이는 줄 전부(겹쳐 그리는 여분 포함 약 50~100줄)를 다시 만들었다.
+- 파일 이동 키 한 번에 커밋 6~7개: 경로 변경(옛 문서를 가리며 diff 본문을 내림) → 읽는 중 상태 효과 → 문서 도착(본문 마운트) →
+  커서 이동 → 강조 도착 → 탐색 갱신. diff 본문(141 컴포넌트)이 4번, 변경 파일 트리(29)가 3번, 머리의 기준/대상 칸이 3번
+  그려졌다. 트리는 고른 경로를 밖에서 받을 때 접힘 집합을 늘 새로 만들어 키마다 한 번 더 그려졌다.
+- 문서 도착 계산 중 구문 강조(`tokenize`)는 4배에서 키마다 약 35~40ms(양쪽 원문 합이 5,000줄을 넘어 hunk 문맥만 강조), 줄 폭
+  계산은 약 6ms 였다. 응답 파싱 비용은 목이 직렬화를 하지 않아 재지 않았다 — 이 문서는 대략 400KB(양쪽 원문 + 패치, 추정)이고
+  실제 앱의 IPC 65~86ms 안에 들어 있다.
+
+#### 고친 것과 전후 (E-3·E-4)
+
+`b3f94e2`(재현 환경) → `49f0837`(고침). 칸은 "전 → 뒤", 시간은 ms, 파일 이동은 8번(4배 개발 빌드 예비 측정은 6번)의 중앙값.
+"입력 → 그리기"는 키 → 다음 그리기, "문서"는 키 → 새 문서가 그려질 때까지(목 응답 지연 75ms 포함), 긴 프레임은 50ms 넘는 것.
+
+| 빌드 · 감속                        | 비교 열기                       | 파일 이동: 입력 → 그리기 · 문서 · 키마다 긴 프레임 | 스크롤 p50 · p95 · 최대 (50ms 넘음)       |
+| ---------------------------------- | ------------------------------- | -------------------------------------------------- | ----------------------------------------- |
+| 개발 · 4배                         | 563 [117·85·59] → 492 [100·76]  | 79 → **39** · 412 → **271** · 3~4개 → **1개**      | 26 · 125 · 135 (8) → 16 · **27** · 35 (0) |
+| 개발 · 1배                         | 199 → 175                       | 42 → 24 · 186 → 152 · 1 → 0~1                      | 8.3 · 9.8 · 33.5 → 8.3 · 8.4 · 9.6        |
+| 프로덕션 · 4배                     | 209 → 269 [57] (부하 차이 추정) | 16 → 14 · 162 → 155 · 1 → 0~1                      | 8.4 · 16.7 · 18.4 → 8.3 · 10.2 · 17.7     |
+| 프로덕션 · 1배                     | 140 → 153                       | 14 → 14 · 124 → 123 · 0 → 0                        | 8.3 · 8.8 · 9.3 → 8.3 · 8.4 · 10          |
+| 작업 트리 diff 스크롤 (개발 · 4배) | —                               | —                                                  | 33 · 134 · 168 (8) → 10 · **26** · 27 (0) |
+| 커밋 diff 스크롤 (개발 · 4배)      | —                               | —                                                  | 27 · 125 · 143 (9) → 10 · **26** · 27 (0) |
+- 고친 것: diff 가상 행·줄·변경 위치 띠 memo(안정된 행 값·콜백), 가상 스크롤 `useFlushSync: false`, 탐색 등록을 변경 구간 차례가
+  바뀔 때만, 불러온 언어는 문서 렌더에서 바로 강조(최근 결과 기억), 줄 폭의 ASCII 빠른 길, 변경 파일 트리 행 memo + 접힘 집합
+  유지, 비교 화면의 문서 대기를 파생값으로·트리와 기준/대상 칸에 안정된 값. 키마다 diff 본문은 마운트 한 번, 트리는 두 행만
+  다시 그린다.
+- 목표(개발 · 4배): 파일 이동 입력 → 그리기 100ms 안쪽은 맞췄다(39ms). 긴 프레임은 키마다 1개(117~166ms) — 새 문서를 그리는
+  프레임이다. 스크롤 p95 32ms 안쪽도 맞췄다(26~27ms).
+- 남은 것: 새 문서 프레임은 diff 본문 마운트(가상 스크롤·보이는 줄 + 여분 20줄씩)와 hunk 문맥 강조가 한 프레임에 든다. 비교
+  화면은 다른 파일로 옮기면 옛 문서를 바로 가리므로(의도한 동작) 본문을 내렸다 다시 올린다 — 옛 문서를 남긴 채 기다리게
+  바꾸거나 강조를 한가할 때로 미루면(그러면 프레임이 둘) 줄일 수 있다. 연달아 누른 키는 이미 마지막 문서만 그린다(앞 조회의
+  결과는 버린다 — 조회는 키마다 나간다). 비교 열기(개발 · 4배 492ms, 긴 프레임 2개)는 따로 줄이지 않았다.
+- 개발 빌드와 프로덕션: 4배 감속에서 고치기 전 개발 빌드는 프로덕션보다 파일 이동에 약 2.5배(412 대 162ms), 스크롤 p95 에 약 7배(125 대
+  17ms)를 더 썼다(요소 디버그 정보·StrictMode 두 번 렌더). 사용자가 쓰는
+  `pnpm dev --release` 는 화면이 개발 빌드라 이 몫이 그대로 보인다. 배포 빌드의 화면은 프로덕션 줄이다.
+- 눈 확인: `.playwright-mcp/perf-check/e3-diff-{split,unified}-1400-{dark,light}.png`(큰 문서의 좌우·통합 보기, 강조·단어 강조·
+  "2 / 40" 구간 표시).
+
+### 3라운드 F — diff 본문 휠 입력 (2026-11-27)
+
+두 번째 실제 앱 기록(`plan/perf-responsiveness-실제앱-기록-2.jsonl`, E 를 넣은 뒤 `pnpm dev`, WKWebView + 개발 React, 514초)에서도
+diff 스크롤이 끊겼다: 휠 뒤 50ms 넘는 프레임 61개(p50 110 · p95 158 · 최대 232ms), 그중 29개는 앞 프레임에 바로 이어졌고 길이가
+내용과 상관없이 거의 같았다. 파일 이동 키는 32번 중 12번이 100~115ms 프레임 3개, 7번이 2개, 3번이 4개였다.
+
+**E 의 `diffScroll` 은 휠 입력을 대표하지 못했다.** `scrollTop` 을 스크립트로 바꿔 스크롤해 diff 본문의 휠 리스너가 한 번도 돌지
+않았다. 위 E 표의 스크롤 칸은 "가상 스크롤이 줄을 다시 그리는 비용"만 잰 것이다.
+
+#### 재현 (F-1)
+
+- 시나리오 `diffWheelStart({ side })` → 휠 보내기 → `diffWheelStop()`(`bench/frontend-measure.js`). 휠은 Playwright
+  `page.mouse.wheel`(CDP 입력 — 실제 휠처럼 hit test·리스너·기본 스크롤을 거친다)로 8ms 간격으로 보내고, 페이지 안에서 프레임 간격,
+  휠 수·가로 성분이 있는 수·기본 동작이 취소된 수, 휠 하나의 처리 시간(창 capture → bubble 사이), 세로 이동 거리, 가로 위치(CSS
+  변수)를 모은다.
+- 휠 모양: `y` 세로만(dy 20~60, 120개), `yx` 트랙패드·매직 마우스처럼 세로에 가로 ±1~3 을 섞음(120개), `inertia` 관성(dy 60 에서
+  줄어듦 + 가로 ±1, 90개), `x` 가로가 큰 휠(dx 8~16, dy 0·1, 60개).
+- 문서: 큰 문서(E 의 3,000줄 · 40 hunk, 1400×900 창에 약 70행 마운트), 같은 문서를 6K 화면 창 크기(3008×1692, 108행)로, 작은
+  문서(150줄 — 문서 전부 약 155행이 마운트된다). 좌우·통합·줄바꿈, 개발·프로덕션, CPU 1·4배.
+- **휠 처리 비용은 재현했다**: 가로 성분이 0 이 아닌 휠마다 리스너가 기본 스크롤을 취소하고 스크립트로 세로(`scrollTop`)·가로를
+  옮겼다. 가로 위치 CSS 변수를 쓴 뒤 막대 위치를 읽어 그려진 모든 줄의 스타일·레이아웃을 그 자리에서 다시 계산했으므로 휠 하나의
+  처리 시간이 마운트된 행 수에 비례했다(개발 · 4배: 70행 12ms, 108행 19ms, 155행 33ms). Chromium 에서는 같은 휠에 세로로 두 번
+  움직였다(이동 거리 2배). 가로 성분이 없는 휠(`y`)은 처리 시간 0 이다.
+- **WKWebView 의 "110ms 로 일정한 프레임"은 재현하지 못했다**: Chromium 에서 50ms 넘는 프레임은 개발 · 4배 · 작은 문서에서만
+  나왔다(10개, 최대 66ms). 기록의 프레임 길이가 내용과 상관없이 일정하고 키 이동 프레임도 같은 100~115ms 인 것은 휠 처리만으로는
+  설명되지 않는다(아래 "남은 것").
+
+#### 고친 것과 전후 (F-2)
+
+`cda727a`·`ac1464b`. 휠 리스너를 passive 로 두고 세로는 브라우저 기본 스크롤에 맡긴다. 가로로 보는 휠은 Shift+휠, 또는 가로 성분이
+더 큰 휠이고 한 제스처(120ms 안에 이어진 휠) 안에서는 처음 정한 축을 지킨다. 가로 휠은 아래 막대만 옮기고, 코드 이동은 막대의
+scroll 이벤트(프레임에 한 번)가 막대 위치를 다 읽고 쓴 뒤 CSS 변수를 마지막에 쓴다(같은 값은 다시 쓰지 않는다).
+
+칸은 "전 → 뒤". 프레임은 rAF 간격 p50 · p95 · 최대(50ms 넘는 수, 0 이면 생략), 처리는 휠 하나의 처리 시간 p50/p95, 취소는 기본
+동작이 취소된 휠 수, 세로는 세로 이동 거리(px). 측정 기계 화면은 120Hz 라 프레임 바닥값이 8.3ms 다.
+
+| 경우                                               | 프레임                                      | 처리 (ms)         | 취소        | 세로          |
+| -------------------------------------------------- | ------------------------------------------- | ----------------- | ----------- | ------------- |
+| 작은 문서 · 좌우 · 개발 · 4배 · `yx`               | 8.5 · 49 · 66.5 (10) → 8.3 · **9.3** · 24.4 | 33.1/46.6 → 0/0.4 | 120 → **0** | 2,680 → 2,680 |
+| 6K 창 · 좌우 · 개발 · 4배 · `yx`                   | 9.1 · 25.2 · 34.2 → 8.3 · **9.3** · 25.2    | 18.7/22.6 → 0/0.5 | 120 → 0     | 9,600 → 4,800 |
+| 큰 문서 · 좌우 · 개발 · 4배 · `yx`                 | 8.4 · 17.1 · 33.2 → 8.3 · **9.3** · 16.6    | 12.2/13.6 → 0/0.5 | 120 → 0     | 9,600 → 4,800 |
+| 큰 문서 · 좌우 · 개발 · 4배 · `inertia`            | 8.5 · 17.1 · 25.2 → 8.3 · 9.2 · 25          | 11.5/14.9 → 0/0.3 | 90 → 0      | 2,976 → 1,488 |
+| 큰 문서 · 좌우 · 개발 · 4배 · `y`                  | 8.3 · 9.3 · 16.8 → 8.3 · 9.3 · 17.2         | 0/0.4 → 0/0.6     | 0 → 0       | 4,800 → 4,800 |
+| 큰 문서 · 좌우 · 개발 · 1배 · `yx`                 | 8.3 · 9.3 · 9.4 → 8.3 · 9.3 · 9.4           | 3.6/4.1 → 0/0.1   | 120 → 0     | 9,600 → 4,800 |
+| 큰 문서 · 좌우 · 프로덕션 · 4배 · `yx`             | 8.3 · 16.2 · 25.2 → 8.3 · 9.2 · 9.4         | 10/11.9 → 0/0.5   | 120 → 0     | 9,600 → 4,800 |
+| 큰 문서 · 좌우 · 프로덕션 · 1배 · `yx`             | 8.3 · 9.2 · 9.4 → 8.3 · 9.3 · 9.4           | 3/3.6 → 0/0.1     | 120 → 0     | 9,600 → 4,800 |
+| 큰 문서 · 통합 · 개발 · 4배 · `yx` (뒤만)          | → 8.3 · 9.3 · 17.1                          | → 0/0.5           | → 0         | → 4,800       |
+| 큰 문서 · 좌우 · 줄바꿈 · 개발 · 4배 · `yx` (뒤만) | → 8.3 · 9.3 · 17.4                          | → 0/0.5           | → 0         | → 4,800       |
+| 큰 문서 · 좌우 · 개발 · 4배 · `x` (뒤만)           | → 8.3 · 9.4 · 17.3                          | → 0.1/0.7         | → 0         | → 30          |
+- 가로: `x` 는 좌우 동기에서 양쪽 코드가 같이 562px, 통합은 215.5px(막대 끝)까지 옮겼다. 줄바꿈은 고치기 전에도 휠 리스너를 걸지
+  않았다(가로 스크롤이 없다). 통합·줄바꿈·`x` 의 고치기 전은 재지 않았다(같은 리스너다).
+- Shift+휠: Chromium 에 Shift+deltaY 휠(OS 가 가로로 바꿔 주지 않은 것)을 보내면 passive 로 바꾼 직후(`cda727a`)에는 세로 400px 도
+  같이 움직였다. `ac1464b` 에서 Shift 를 누르는 동안에만 그런 휠을 취소하는 리스너(passive 아님)를 걸어 세로 0 · 가로 215.5px ·
+  취소 10/10 이 됐다. macOS 는 Shift+마우스 휠을 deltaX 로 바꿔 주므로 취소할 것이 없다.
+- passive 판단: 세로 본문은 `overflow-x: hidden` 이라 가로 휠의 기본 동작이 없고, 조상 중 가로로 움직이는 요소도 없음을 확인했다
+  (가로 휠 40개 뒤 `scrollLeft` 가 0 이 아닌 요소는 아래 막대뿐). 가로 제스처 중의 세로 흔들림은 기본 스크롤이 맡는다(전에는
+  스크립트가 deltaY 를 더했다 — 결과는 같다). 가로 휠이 창의 뒤로/앞으로 쓸어넘기기가 될 일도 없다 — WKWebView 의 그 제스처는 wry 기본값(`back_forward_navigation_gestures: false`)대로 꺼져 있고 앱이 켜지 않는다.
+- 유지 확인: 가로 막대 끌기·좌우 동기 켜고 끄기·파일을 바꾸면 가로 0 으로·고정 거터는 이 수정이 건드리지 않은 경로이고, 막대의
+  scroll → 코드 이동은 테스트(`packages/diff-view/src/__tests__/wheel.test.tsx`)와 브라우저에서 확인했다.
+- 본문 scroll 의 커서 옮기기(`setCursor`)는 그대로 두었다: 가상 스크롤의 다시 그리기와 같은 커밋에 묶이고 첫 보이는 줄이 바뀔 때만
+  값이 바뀐다(위 표의 `y` 전후가 같다).
+
+#### 남은 것
+
+- 휠 처리 몫은 없앴지만 WKWebView 에서 110ms 로 일정하던 프레임이 이것만으로 사라지는지는 실제 앱에서 봐야 한다. 키 이동 프레임
+  (휠 리스너와 무관)도 같은 100~115ms 라 한 프레임에 드는 고정 몫이 따로 있을 수 있다 — 후보는 넓은 창(6K · 배율 2)의 스타일·칠하기,
+  개발 React 의 렌더. 기록기가 이제 긴 프레임마다 그동안의 React 렌더 시간(`react`)과 창 크기(`viewport`)를 남기므로 다음 기록으로
+  가른다: `react` 가 프레임 길이에 가까우면 렌더, 작으면 스타일·레이아웃·칠하기다.
+- 키 이동의 프레임 3개: 키 뒤 6~18ms 에 `compareLocalDocument`(67~84ms)가 나가고, 프레임은 키 → 옛 문서 가리기(본문 내림) · 문서
+  도착 → 본문 마운트 · 강조·탐색 갱신 순으로 이어진다(Chromium 개발 · 4배는 E 뒤 키마다 1개). 옛 문서를 새 문서가 올 때까지 남기면
+  커밋 하나(본문 내렸다 올리기)가 준다 — E 의 "남은 것"과 같은 선택이다.
+
+## 실제 앱 기록기 (반응성 측정 M1)
+
+`pnpm dev`(또는 `pnpm dev --release`)로 띄운 실제 앱을 쓰는 동안 무엇이 느렸는지를 파일로 남긴다. 나중에 그 파일을 요약해 원인
+후보를 찾는 용도다(계획 `plan/perf-responsiveness.md` M1). 코드는 `apps/desktop/src/perf/`, IPC 를 감싸는 자리는
+`packages/ipc/src/observe.ts`(Tauri 명령 묶음은 `client.ts`, 목 클라이언트는 `store/app-store-instance.ts` 에서 감싼다).
+
+### 켜는 법
+
+| 실행                                                       | 기록                                 |
+| ---------------------------------------------------------- | ------------------------------------ |
+| `pnpm dev`·`pnpm dev --release`·`pnpm dev:test` (네이티브) | 파일 (`perf.jsonl`)                  |
+| `pnpm dev:web`, 목 빌드(`VITE_MGIT_MOCK`) 미리보기         | 메모리만 (`window.__mgitPerf`)       |
+| 패키징(배포) 앱                                            | 없음 — 기록기 모듈을 불러오지 않는다 |
+- 기본으로 켜진다. 끄려면 개발 도구 콘솔에서 `localStorage.setItem('mgit.perf', '0')` 뒤 새로 고친다(지우면 다시 켜진다).
+- 영역별 렌더 수는 `localStorage.setItem('mgit.perf.renders', '1')` 일 때만 센다(커밋마다 바뀐 파이버를 훑어 비용이 있다).
+- 배포 프로필에서는 코어 명령 `perf_append` 도 거부한다(`commands_runtime.rs` 의 `PerfLog`, 경로가 없다).
+
+### 파일 위치
+
+- 개발 런처의 격리된 실행 환경 폴더, `ui-settings.json` 옆이다: `target/runtime/<id>/perf.jsonl`(테스트 프로필은
+  `target/runtime/<id>/test/<실행 ID>/perf.jsonl`). `<id>` 는 런처가 시작할 때 찍는 `Runtime: …` 경로다.
+- 앱이 처음 쓸 때 이전 실행의 파일을 `perf.prev.jsonl` 로 넘기고 새로 시작한다. 같은 실행에서 창을 새로 고치면 같은 파일에 이어
+  쓴다(새 `start` 줄로 구간이 나뉜다).
+- 줄은 메모리에 모았다가 2초마다(또는 500줄마다) 한 번에 쓴다. 창을 닫을 때(`pagehide`) 남은 줄을 쓰려고 하지만 끝나기 전에 쓰지
+  못한 몫은 잃는다.
+- 상한 20 MiB: 넘으면 `{"t":null,"kind":"capped",…}` 한 줄을 남기고 그 실행 동안 더 쓰지 않는다.
+
+### 줄 형식 (JSON 한 줄에 하나)
+
+공통 필드는 `t`(ms, 문서 시작 = 앱 시작 기준, 소수 첫째 자리)와 `kind` 다.
+
+| `kind`        | 필드                                                                                                                                   | 뜻                                                                                                                                                                                                                                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`       | `wall`(epoch ms)·`mode`(`file`·`memory`)·`profile`·`renders`·`userAgent`·`viewport`: `{width, height, dpr, screenWidth, screenHeight}` | 기록기 설치 (새로 고침마다 하나 — 구간의 시작). `viewport` 로 다시 칠하는 면적을 가늠한다                                                                                                                                                                                                                                                            |
+| `ipc`         | `name`(카멜 표기 명령·목 메서드 이름)·`ms`·`ok`                                                                                        | IPC 호출 하나. `t` 는 시작 시각, `ms` 는 프런트에서 본 왕복(직렬화·역직렬화 포함)                                                                                                                                                                                                                                                                    |
+| `events`      | `counts`: `"<통로>:<종류>"` → 수                                                                                                       | 그 1초(`t` = 초의 시작) 동안 받은 코어 이벤트. 통로는 그 통로를 연 명령(`openFolder`·`openRepo` 등)                                                                                                                                                                                                                                                  |
+| `frame`       | `ms`·`focus`(창 포커스)·`input`: `{type, panel, since}` 또는 null·`react`(개발 빌드만)                                                 | 50ms 넘은 rAF 간격. `t` 는 그 간격의 시작, `since` 는 직전 입력부터 간격 시작까지(음수 = 간격 중 입력). `react` 는 그 간격 동안 커밋한 React 렌더 시간(ms, 파이버 `actualDuration` 합) — `ms` 에 견주어 작으면 스크립트(렌더)가 아니라 스타일·레이아웃·칠하기가 긴 프레임이다. 잰 커밋을 한 번 본 뒤로 커밋이 없던 간격은 0, 프로덕션 빌드는 늘 없음 |
+| `interaction` | `type`·`panel`·`delay`·`processing`·`presentation`·`duration`                                                                          | Event Timing 을 쓸 수 있을 때 50ms 넘은 상호작용: 입력 지연(처리 시작 − 입력), 리스너 처리, 그 뒤 그리기까지, 합                                                                                                                                                                                                                                     |
+| `handlers`    | `counts`: `<종류>:n`·`<종류>:ms`(합)·`<종류>:over16`                                                                                   | Event Timing 을 쓸 수 없을 때의 대체: 휠·키·포인터의 리스너 시간을 창 capture → bubble 사이로 잰 1초 묶음                                                                                                                                                                                                                                            |
+| `wheel`       | `counts`: `n`·`x`(가로 성분이 있는 휠)·`prevented`(기본 동작을 취소한 휠)                                                              | 그 1초 동안의 휠 통계 (늘 센다)                                                                                                                                                                                                                                                                                                                      |
+| `input`       | `type`(`keydown`·`click`)·`panel`·`ms`                                                                                                 | 입력 → 다음 그리기가 50ms 를 넘은 것. `t` 는 입력 시각                                                                                                                                                                                                                                                                                               |
+| `renders`     | `counts`: 영역 → 다시 그린 컴포넌트 수, `(commits)` → 커밋 수                                                                          | 그 1초 동안의 렌더 (`mgit.perf.renders='1'` 일 때만)                                                                                                                                                                                                                                                                                                 |
+| `stores`      | `counts`: 저장소 이름 → 알림 수                                                                                                        | 그 1초 동안의 외부 저장소 알림 (지금은 편집기 저장소 `fileEditors` — 세는 구독자 하나를 더할 뿐 동작은 그대로)                                                                                                                                                                                                                                       |
+| `note`        | `message`                                                                                                                              | 기록기 안내 (예: 렌더 계수를 걸 수 없었다, Event Timing 을 쓸 수 없어 리스너 시간으로 대신한다, 자가 진단의 시작·창 크기·끝). 다른 필드가 붙을 수 있다                                                                                                                                                                                               |
+| `resize`      | `width`·`height`·`dpr`                                                                                                                 | 창 크기·배율이 바뀌고 0.5초 멎은 뒤의 크기 (끄는 동안의 중간 크기는 남기지 않는다)                                                                                                                                                                                                                                                                   |
+| `selftest`    | `probe`·`stage`·`ms`·`frames`·`p50`·`p95`·`max`·`react`·`state`·`detail`, 또는 `skipped`                                               | 그리기 자가 진단의 탐침 하나 (아래 "그리기 자가 진단")                                                                                                                                                                                                                                                                                               |
+
+`panel` 은 입력 대상을 감싼 `[data-panel]` 이름이다(`project`·`editor`·`git-log` 등, 없으면 null).
+
+### 요약
+
+```bash
+node bench/perf-summary.mjs target/runtime/<id>/perf.jsonl            # 구간마다
+node bench/perf-summary.mjs target/runtime/<id>/perf.jsonl --segment 2 --top 30
+```
+
+구간마다 명령별 호출 수·합계·p50·p95·최대, 분당 호출 수 상위(평균·가장 많았던 1분), **일정 간격으로 반복되는 호출**(같은 명령의
+호출 간격 중앙값 ±15% 안에 든 간격이 60% 이상인 것 — 2초 주기 검사 같은 것), 코어 이벤트 종류별·저장소 알림 초당 최댓값, 50ms 넘는 프레임을
+직전 입력(1초 안)·영역별로 묶은 표(그 프레임들의 React 렌더 시간 p50·p95 포함), 입력 → 다음 그리기 50ms 초과, (있으면) 느린 상호작용의
+입력 지연·처리·그리기, 리스너 시간(대체), 휠(가로 성분·취소 수), 영역별 렌더를 낸다. 구간 머리에 창·화면 크기와 기록기 안내를 적는다.
+node 표준 모듈만 쓴다.
+
+메모리 모드(웹)에서는 콘솔이나 `bench/frontend-measure.js` 가 `window.__mgitPerf` 로 읽는다: `entries()`(모은 줄),
+`since(t, kind?)`, `flush()`(지난 초의 묶음 닫기), `clear()`(측정 구간의 시작 — 열린 묶음도 버린다), `cut()`(측정 구간의 끝 — 이번 초의
+묶음까지 닫는다), `watchStore(name, subscribe)`, `selftest(value?)`(그리기 자가 진단을 지금 돌린다 — 아래).
+
+git 명령 수는 기록기가 따로 모으지 않는다. 코어가 모든 git 실행을 최근 500개 링버퍼에 남기므로(`command_log_recent`, 명령 로그
+패널과 같은 출처) 동작 전후로 불러 견준다. 개발 도구 콘솔에서:
+
+```js
+const log = (limit = 500) => window.__TAURI_INTERNALS__.invoke('command_log_recent', { limit });
+const before = (await log(1))[0]?.id ?? 0;
+// … 동작 …
+const ran = (await log()).filter((r) => r.id > before); // 최신 순
+console.table(ran.map((r) => ({ ms: r.elapsedMs, args: r.args.join(' ') })));
+```
+
+`id` 는 실행마다 오르는 번호이고 `elapsedMs` 는 그 git 한 번의 시간이다. 500개를 넘게 돌면 앞의 것은 빠진다.
+
+### 그리기 자가 진단 (반응성 G)
+
+실제 앱(WKWebView) 안에서 화면의 한 가지만 프레임마다 바꾸며 rAF 간격을 재 "무엇을 바꿔야 한 프레임이 길어지는가"를 가른다.
+사람이 앱을 조작하지 않아도 띄우기만 하면 돌고 결과는 `perf.jsonl` 의 `selftest` 줄로 남는다. 코드는
+`apps/desktop/src/perf/selftest.ts`, 개발·테스트 프로필에서만 불린다(배포 프로필은 기록기째 불러오지 않는다). 진단은 원인을
+고치지 않고, 끝나면 넣은 요소·인라인 스타일 속성·스크롤 위치·창 최대화 상태를 되돌린다.
+
+켜는 법 (앱이 떠 있지 않을 때 설정 파일에 키를 넣고 띄운다 — 앱은 시작할 때 `ui-settings.json` 을 읽는다):
+
+```bash
+# 이 checkout 의 개발 환경 폴더 (런처가 찍는 Runtime: 경로와 같다)
+R="target/runtime/$(node -e "console.log(require('crypto').createHash('sha256').update(require('fs').realpathSync('.')).digest('hex').slice(0,16))")"
+node -e "const fs=require('fs'),f=process.argv[1];const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,'utf8')):{};s['mgit.perf.selftest']=process.argv[2];fs.writeFileSync(f,JSON.stringify(s))" "$R/ui-settings.json" exit
+pnpm dev --release            # 화면이 잠잠해지면 진단이 돌고, exit 면 끝난 뒤 창을 닫는다 (약 1~2분)
+node bench/perf-summary.mjs "$R/perf.jsonl"
+```
+
+- 값은 쉼표·공백으로 나눈 낱말이다: `exit`(끝나면 창 닫기), `frames=N`(탐침 하나의 프레임 수, 기본 24), `nowindow`(창 크기 단계
+  건너뛰기). 낱말이 없어도 비어 있지 않으면(`1`) 돈다. 목 미리보기·`dev:web` 은 `localStorage`·`/__mgit/settings` 의 같은 키를
+  읽는다. 개발 도구 콘솔에서는 `await __mgitPerf.selftest('frames=24')` 로 지금 돌린다(시작 뒤 최소 대기만 건너뛴다).
+- 팔레트(⌘⇧A)의 **"성능 자가 진단 실행 (개발용)"**: 지금 화면(예: diff 를 연 상태)에서 바로 잰다(`frames=24`, 끝나도 창을 닫지
+  않는다). 개발·테스트 프로필에만 있고 배포 프로필에는 없다. 기록기가 꺼져 있으면(`mgit.perf=0`) 꺼진 채로 보인다. 겹쳐 돌리지
+  않는다(돌고 있으면 `selftest already running` 안내만).
+- 시작 조건: ① 잠잠함 — 화면(`[data-panel]`)이 떴고, 앱 시작 뒤 6초가 지났고, IPC 완료·코어 이벤트가 2.5초 동안 없을 때(기록기
+  자신의 쓰기는 뺀다). 90초 안에 잠잠해지지 않으면 그대로 넘어가고 `selftest begin` 의 `quiet: false` 로 남긴다. ② 보임 —
+  창이 보이고(`visibilityState`) rAF 가 실제로 올 때까지 **상한 없이** 기다린다(화면 잠금·최소화·가려짐). 기다렸으면
+  `selftest waited for visible`(`waitedMs`·`reason`: `hidden`·`no frames`·`phase: start`)을 남기고 잠잠함을 한 번 더(최대 8초)
+  기다린다.
+- 키는 측정을 실제로 시작할 때(보임까지 기다린 뒤) 지우고 저장한다 — 기다리는 동안 앱이 닫히면 다음 실행에서 다시 돈다.
+- 탐침 도중 창이 숨으면(rAF 가 끊기거나 `visibilityState` 가 바뀌면) 그 탐침을 되돌리고 버린 뒤(`selftest probe interrupted`) 다시
+  보일 때까지 기다렸다가(`selftest waited for visible`, `phase: <단계>:<탐침>`) 그 탐침부터 다시 한다. 보이는데도 프레임이 2초 넘게
+  오지 않을 때만 `stalled` 로 남기고 끝낸다.
+- 화면 왼쪽 아래(상태 막대 위)에 작은 표시를 띄운다: "앱이 잠잠해지길 기다리는 중" → "진단 중 — 창을 가리거나 조작하지 마세요" →
+  "끝남"(4초 뒤 사라진다). 고정 위치·누를 수 없는 작은 상자이고 탐침 동안에는 바꾸지 않는다.
+- `exit` 는 기존 닫기 경로를 탄다(`mgit-close-requested` → 편집 중인 문서 확인 → 설정 저장 → 창 파괴 → 앱 끝 → 런처 끝). 저장하지
+  않은 편집 문서가 있으면 확인 창이 떠 닫히지 않는다. 닫기 전에 기록을 내보낸다. `exit` 가 없으면 "끝남" 표시 뒤 창을 열어 둔다.
+
+탐침 (차례대로, 탐침마다 준비 → 두 프레임 쉼 → N 프레임 동안 바꾸며 간격 재기 → 되돌리기):
+
+| `probe`                                           | 프레임마다 바꾸는 것                                                                           |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `idle`                                            | 없음 — 창의 기본 프레임 간격                                                                   |
+| `paint-corner`                                    | 창 구석 고정 8×8 상자의 배경 (body 아래)                                                       |
+| `paint:editor`·`paint:project`·`paint:git-log`    | 같은 상자를 그 영역(`[data-panel]`) 안, 영역 왼쪽 위에                                         |
+| `row-highlight`                                   | 편집기의 보이는 diff 행 하나(없으면 CodeMirror 거터 칸)의 배경 인라인 스타일 — hover 강조 흉내 |
+| `style-root`·`style:editor`                       | 쓰이지 않는 사용자 정의 속성 `--mgit-probe`(상속된다)를 문서 루트·편집기 영역 루트에           |
+| `layout-flow`·`layout-abs`                        | 보이지 않는 작은 요소의 폭 10↔11px (body 의 블록 / 절대 위치)                                  |
+| `layout:editor`·`layout:git-log`·`layout:project` | 그 영역 안 흐름 속 자리(아래)에 넣은 높이 0·보이지 않는 요소의 폭 10↔11px                      |
+| `repaint-root`·`repaint:editor`                   | `#root`·편집기 영역의 배경을 거의 같은 두 색으로                                               |
+| `scroll:editor`·`scroll:git-log`·`scroll:project` | 그 영역에서 가장 큰 세로 스크롤 요소를 40px 씩 `scrollTop` 으로 내렸다(반) 올림(반)            |
+- `layout-flow`·`layout-abs` 는 body 바로 아래라 영역의 flex 사슬을 지나지 않아 "패널 안 변화가 문서 루트부터 배치를 부르는" 비용을
+  잡지 못한다(슬라이스 K). `layout:<영역>` 이 그것을 잰다 — 자리는 실험실 `webkit-layout-probe.mjs` 의 주 사슬 끝(넘치는 스크롤
+  칸 안 등, 가로 flex 면 그 위 블록)이고 비고의 `<자리> 안 (깊이 N)` 으로 남는다. 영역에 배치 경계
+  (`contain: layout size`)가 있으면 경계 안만 다시 배치된다.
+- 줄마다 `state`: 전체 요소 수, 영역별 요소 수(`panels`), 스타일시트 규칙 수, 창 크기·배율, 편집기에 보이는 것(`view`: `diff`·
+  `code`·`other`·`none`, diff 면 마운트된 행 수 `rows`). `react` 는 그 탐침 동안 커밋한 React 렌더 합(개발 빌드). 영역·대상이 없으면
+  `skipped`(예: `no panel`·`no scroller`·`no visible row`), 프레임이 2초 넘게 오지 않으면(창이 숨음) `stalled` 로 남기고 멈춘다.
+- 창 크기 단계(네이티브만, `nowindow` 가 아니면): 창 최대화를 켜고 끈다 — 제목 막대를 두 번 누를 때와 같은 명령
+  (`plugin:window|internal_toggle_maximize`, 기본 권한 `core:window:default` 에 든 `allow-internal-toggle-maximize`). 최대화돼
+  있으면 보통 크기(창 상태 플러그인이 기억한 크기)로, 아니면 최대화로 바뀐다. 정확히 절반으로 줄이려면 `core:window:allow-set-size`
+  권한을 더해야 해 넣지 않았다. 바뀐 크기에서 `idle`·`paint-corner`·`row-highlight`·`repaint-root`·`scroll:*` 를 `stage: "resized"`
+  로 다시 재고, 처음 최대화 상태로 되돌린다(`selftest window resized`·`selftest window restored` 안내, 크기 변화는 `resize` 줄).
+- 요약은 "자가 진단" 표(단계·탐침·프레임·p50·p95·최대·React·요소·창·보기·비고)와 "창 크기 변화" 표를 낸다. 진단 중의 긴 프레임은
+  `(자가 진단 중)` 으로 따로 묶는다.
+- 한계: 지금 열린 화면만 잰다 — 진단이 문서를 열지 않는다(열면 탭이 저장돼 사용자 작업 상태가 바뀐다). diff 를 재려면 앱이
+  비교·diff 탭을 복원한 채 떠야 한다(`view`·`rows` 로 확인). 탐침 중에도 앱의 주기 호출(로컬 비교 10초 주기 등)이 돌 수 있다(같은
+  시각의 `ipc` 줄). 스크롤 탐침은 앱의 스크롤 처리(가상 목록 다시 그리기, diff 커서를 첫 보이는 줄로)를 함께 재고, 되돌린 뒤 diff
+  커서는 그 자리의 첫 줄로 옮겨져 있을 수 있다. Chromium(목)에서는 모든 탐침이 한 프레임 안이다(아래).
+- 첫 확인 (2026-11-27, Chromium 목 `dev:web` 개발 빌드, 1400×900 · 배율 1 · 120Hz, 감속 없음, `frames=12`): 키를 넣고 새로
+  고치면 6.2초 뒤 시작해 1.6~1.9초 만에 끝났고 키가 지워졌다. 바꾸기 탐침(칠하기·줄 강조·스타일·배치·다시 칠하기)은 모두 p50 8.3 ·
+  p95 8.4~10.3ms · React 0. `scroll:editor`(diff 3,000줄, 마운트 47행) p95 9.2 · React 33ms, `scroll:git-log` p95 16.7~16.9 ·
+  React 77~106ms. 창 크기 단계는 웹이라 건너뛰었다. 보이기 기다림·멈췄다 잇기는 rAF 와 `visibilityState` 를 페이지 안에서 가려
+  확인했다(Playwright 의 Chromium 은 창을 내리거나 다른 탭을 앞으로 해도 숨지 않는다): 키를 넣고 12초 가린 동안 시작하지 않고 키도
+  남았으며, 보이자 시작했고, 탐침 도중 3초 가리자 그 탐침을 버렸다가 다시 해 15개를 모두 남겼다. 끝난 뒤 넣은 요소 0, `#root`·문서 루트의 인라인 스타일과 diff 스크롤 위치가
+  처음과 같았다. 목 미리보기(프로덕션 빌드, `localStorage` 키)도 같은 모양으로 돌았고 `react` 는 없음(null)이다.
+
+### 한계
+
+- **전후 비교용이다.** `pnpm dev`·`pnpm dev --release` 모두 화면은 Vite 개발 서버의 개발용 React + StrictMode 로 돈다(개발 검사,
+  효과 두 번 실행). `--release` 는 Rust 만 최적화한다. 절댓값을 명세 기준과 바로 견주지 않는다.
+- 긴 프레임은 rAF 간격이다(WKWebView 는 `longtask` 관측을 지원하지 않는다). 창이 숨으면(`visibilityState`) 재지 않지만, 다른 창에
+  가려져 엔진이 rAF 를 늦추는 경우는 걸러지지 않는다 — 요약은 `focus: false` 를 "(창 포커스 없음)"으로 따로 묶는다.
+- 기록기는 늘 rAF 하나와 입력 수신기(캡처·passive)를 돌린다. 호출마다 하는 일은 객체 하나를 배열에 넣는 것이고 JSON 직렬화는 쓸 때
+  묶음으로 한다. 스토어·React 상태를 건드리지 않는다.
+- 빠지는 것: 기록기 설치 전의 호출(`runtime_profile`·`ui_settings_snapshot`), `runtime.ts`·저장소 어댑터가 직접 부르는
+  `ui_settings_set`, 터미널(PTY) 통로의 이벤트, 기록기 자신의 `perf_append`.
+- 목 클라이언트는 목 메서드 단위로 센다. 목 안에서 다른 목 메서드를 부르는 것(`this.x()`)은 따로 세지 않는다.
+
+## 비교 모드 — 로컬 내용과 비교·ref↔ref (M2)
+
+비교 화면(`ComparisonDoc`)이 부르는 코어 API 를 화면과 같은 순서로 불러 구간별 시간과 git 명령 수를 잰다(반응성 개선 계획 M2,
+C1 전후 비교). 저장소는 읽기만 한다(쓰기 명령을 부르지 않는다).
+
+### 실행
+
+```bash
+cargo build --release -p mgit-bench
+./target/release/mgit-bench --compare bench/repos/stage-5000/repo-01 --runs 1   # HEAD ↔ 디스크, 5,000경로
+./target/release/mgit-bench --compare . --base master --runs 3                  # 이 checkout ↔ master
+./target/release/mgit-bench --compare bench/repos/folder-20x10000/repo-01 --base main --other origin/release/1.0 --runs 5
+```
+
+옵션: `--base <rev>`(기본 `HEAD`, 로컬 비교의 기준이자 ref↔ref 의 왼쪽), `--other <rev>`(ref↔ref 의 오른쪽, 없으면 그 구간을
+건너뜀), `--runs N`(기본 3). 픽스처 `stage-5000`·`folder-20x10000` 은 `setup.sh stage`·`setup.sh folder` 로 만든다(위 절).
+
+| 출력                                   | 재는 것                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| local `resolve`                        | `resolve_revision(base)` — 화면이 기준을 oid 로 확정하는 호출               |
+| local `local_files` (`paths`)          | `compare_local_files(oid, 초안 없음)` — "현재 로컬 내용과 비교"의 파일 목록 |
+| local `local_document`                 | 결과 첫 파일(경로 순)의 `compare_local_document`                            |
+| refs `resolve_a`·`resolve_b`           | 양쪽 `resolve_revision`                                                     |
+| refs `compare_refs` (`paths`)          | `compare_refs(a, b, two-dot)`                                               |
+| refs `commits_only_b`·`commits_only_a` | `comparison_commits` 양방향 (`rows`, `+` 는 200개 상한을 넘김)              |
+| refs `file_document`                   | 첫 파일의 `compare_file_diff_document`                                      |
+- 실행마다 `이름=시간/git수(요약)` 한 줄, 끝에 구간별 중앙값과 `[하위 명령×횟수(명령 로그 소요 합계)]` 구성, 그리고 JSON 한 줄을
+  찍는다. git 수·요약·구성은 첫 실행 값이다(읽기만 하므로 실행마다 같다).
+- git 수는 코어 명령 로그 기준이다(다른 모드의 `git_cmds` 와 같다). 저장소는 한 번 열고 그래프 로드가 끝난 뒤 같은 세션으로 잰다.
+- 이 checkout 을 대상으로 하면 경로 수가 작업 중인 변경에 따라 조금씩 달라진다.
+
+### 2026-11-27 기준선과 C1 뒤
+
+macOS 27.2.1, Apple M4 Pro 14코어·24GB, git 2.54.0, 릴리스. 고치기 전은 `0250828` + 이 벤치, 고친 뒤는 C1(`compare_local_files`
+일괄 조회) 커밋이다. 다른 레인의 빌드와 겹쳐 load average 가 고치기 전 10~14, 고친 뒤 6~8 이었다(시간은 흔들림이 크고 git 수는
+결정적이다). 횟수는 고치기 전 / 고친 뒤의 실행 수이고 시간은 중앙값이다.
+
+| 대상                                    | 구간                        | 경로      | 고치기 전 시간 | 고치기 전 git | 고친 뒤 시간 | 고친 뒤 git | 고친 뒤 구성                                                | 횟수  |
+| --------------------------------------- | --------------------------- | --------- | -------------- | ------------- | ------------ | ----------- | ----------------------------------------------------------- | ----- |
+| `stage-5000/repo-01` HEAD ↔ 디스크      | `local_files`               | 5,000     | 85,959ms       | 10,004        | **323ms**    | **6**       | rev-parse diff×2 ls-files ls-tree cat-file(`--batch-check`) | 1 / 3 |
+| 〃                                      | `local_document`            | —         | 68ms           | 5             | 51ms         | 5           | rev-parse diff×2 ls-tree cat-file                           | 1 / 3 |
+| 이 checkout master ↔ 디스크             | `local_files`               | 326 / 329 | 4,682ms        | 546           | **87ms**     | **6**       | rev-parse diff×2 ls-files ls-tree cat-file(`--batch-check`) | 3 / 3 |
+| 〃                                      | `local_document`            | —         | 46ms           | 5             | 34ms         | 5           | rev-parse diff×2 ls-tree cat-file                           | 3 / 3 |
+| `folder-20x10000/repo-01` main ↔ 디스크 | `local_files`               | 0         | 28ms           | 4             | 31ms         | 4           | rev-parse diff×2 ls-files                                   | 5 / 5 |
+| 〃 main ↔ `origin/release/1.0`          | `resolve` ×2                | —         | 7.9 / 6.9ms    | 1 / 1         | 7.0 / 8.0ms  | 1 / 1       | rev-parse                                                   | 5 / 5 |
+| 〃                                      | `compare_refs`              | 52        | 7.6ms          | 1             | 7.8ms        | 1           | diff                                                        | 5 / 5 |
+| 〃                                      | `comparison_commits` 양방향 | —         | 7.4 / 8.6ms    | 1 / 1         | 9.0 / 9.7ms  | 1 / 1       | log (0행 / 200+행)                                          | 5 / 5 |
+| 〃                                      | `file_document`             | —         | 64ms           | 8             | 58ms         | 8           | rev-parse×2 diff×2 ls-tree×2 cat-file×2                     | 5 / 5 |
+- 고치기 전 `local_files` 는 변경 경로마다 `ls-tree` 하나와, 기준 쪽이 일반 파일이면 `cat-file blob` 하나를 차례로 띄웠다(구성
+  `ls-tree×5000 cat-file×5000 …`, 이 checkout 은 326경로 중 216개가 기준에 있는 일반 파일). 명령 하나가 부하 아래 8~9ms 라 경로
+  수에 비례해 늘었다.
+- 고친 뒤는 기준 트리를 `ls-tree -r -t` 한 번으로 나열해 경로를 찾고, 기준이 일반 파일인 경로는 `cat-file --batch-check` 한 번으로
+  크기를 견준다. 크기가 같은 것만 `cat-file --batch` 로 원문을 읽는다(누적 32 MiB 마다 하나 — 두 표본 모두 크기가 같은 경로가 없어
+  돌지 않았다). 초안이 있으면 `ls-files` 가 하나 더 돈다(초안 경로 묶음 하나, 모르는 경로인 초안은 하나씩 다시 확인). 글자 그대로
+  견줄 수 없는 경로(`/` 로 끝나는 미추적 하위 저장소, macOS 에서 결합 문자·한글 자모가 든 이름)만 예전처럼 경로마다 묻는다.
+- stage-5000 고친 뒤 323ms 중 명령 로그의 git 소요 합계는 약 99ms(diff×2 56, ls-files 12, cat-file 10, ls-tree 9, rev-parse 6)다.
+  나머지는 코어 안의 작업 파일 5,000개 읽기(`work_source`)와 판정으로 추정한다(따로 나눠 재지 않았다).
+- `local_document`·ref↔ref 는 고치지 않았다. 시간 차이는 부하 차이다. ref↔ref 목록은 명령 하나(`diff --name-status -M`)라 이
+  규모에서 문제가 아니다. 파일 문서 하나(`file_document`)는 직렬 git 8개다.
+- 픽스처는 읽기만 했다(stage-5000 은 측정 뒤에도 변경 5,000개 그대로).
+
+## 받을 것 없는 fetch → 갱신 (G6)
+
+`git fetch` 는 받은 것이 없어도 `FETCH_HEAD` 를 다시 쓴다. 감시가 이것을 `HEAD` 와 같은 종류로 보아 폴더 세션은
+`FolderChanged{refs: true}`(화면이 통합 타임라인을 전체 재로드)를, 같은 저장소를 연 저장소 탭은 ref·status 재조회를 했다. 자동
+fetch(배포 기본 5분)가 저장소마다 돌 때마다 따라왔다. 이제 `FETCH_HEAD` 만 바뀌면 폴더 세션은 `refs: false`(요약만 — 마지막 fetch
+시각)로 알리고 저장소 탭은 다시 읽지 않는다. 실제로 ref 가 바뀐 fetch 는 `refs/`·`packed-refs`·`reftable/` 변경이 함께 와서 지금처럼
+동작한다.
+
+벤치 픽스처의 원격은 `https://example.invalid/…` 라 실제 fetch 를 할 수 없어 `--folder` 에 줄을 더하지 않았다. 대신 통합 테스트
+`crates/mgit-core/tests/watch.rs` 의 `noop_fetch_refreshes_folder_summary_only`(files·reftable)와
+`noop_fetch_in_linked_worktree_is_summary_only` 가 이벤트와 명령 수를 고정하고, `fetch_with_new_commits_still_reloads_refs` 가
+받을 것이 있는 fetch 의 동작을 고정한다.
+
+| 받을 것 없는 fetch 한 번 (저장소 하나)      | 고치기 전                                                                        | 고친 뒤                      |
+| ------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------- |
+| 폴더 세션 감시 이벤트                       | `FolderChanged{refs: true}`                                                      | `FolderChanged{refs: false}` |
+| 화면이 이어서 하는 일                       | 그 저장소 부분 갱신 + 타임라인 전체 재로드                                       | 부분 갱신만                  |
+| 그 비용 (`folder-20x10000`, 위 W18 표의 값) | 부분 59ms·git 9 + 재로드 358ms·git 120                                           | 부분 59ms·git 9              |
+| 같은 저장소를 연 저장소 탭의 감시 재조회    | git 8 (symbolic-ref, rev-parse, for-each-ref, stash, remote×2, worktree, status) | 0                            |
+- 부분 갱신·재로드 비용은 W18 "저장소 1개 ref 변경 → 갱신" 표의 값을 옮긴 것이고 이번에 다시 재지 않았다. 저장소 탭의 git 8 과 0 은
+  통합 테스트에서 분류를 되돌려 센 값이다(2026-11-27).
+- 연결된 워크트리의 `FETCH_HEAD` 는 워크트리 전용 디렉터리(`.git/worktrees/<이름>/`)에 쓰이고 폴더 요약도 그 자리에서 읽는다. 주 작업
+  트리의 `FETCH_HEAD`(공용 디렉터리)가 바뀌면 그 워크트리 줄에도 `refs: false` 가 간다(분류 단위 테스트로 확인).
+
+## 배경 묶음 읽기와 조작 읽기의 경합 (`--contention`, 반응성 슬라이스 12)
+
+러너의 읽기 명령은 전역 세마포어 하나(`RunnerConfig::max_concurrent_reads`, 기본 8, 공정한 FIFO)를 거친다. 폴더 전체 갱신(창
+포커스·주기·새로고침)은 요약·브랜치·변경 세 갈래가 저마다 저장소를 동시 8개까지 훑으므로, 그사이 사용자가 누른 읽기는 그 줄 뒤에 선다.
+`--contention` 은 이것을 잰다: 코어를 새로 만들어 폴더를 열고 타임라인을 다 읽은 뒤(데우기: 전체 갱신·커밋 상세 한 번씩), 배경 읽기
+(`refresh` = 요약 + 브랜치 + 변경 동시, `timeline_reload` = `folder_timeline_reload` → `GraphReloaded`)를 시작하고 5·20·50ms 뒤 경로순
+첫 저장소의 `folder_commit_detail`(커밋을 눌렀을 때 화면이 기다리는 것 — `log -1`·`diff-tree` 를 차례로)을 보낸다. 같은 실행 안에서 바로
+앞에 한가할 때의 같은 호출을 잰다. 응답 시간은 읽기 permit 대기(명령 로그의 시간 − 러너가 permit 뒤에 잰 실행 시간, 러너의
+`git run` 추적 이벤트를 벤치의 작은 구독자가 받는다)와 git 실행으로 가른다. 저장소를 바꾸지 않는다. `--max-reads N` 은 대조군용으로
+읽기 상한을, `--max-bulk-reads N` 은 묶음 읽기 상한을 바꾼다. `--slow-status-ms N` 은 `git status` 만 N ms 늦게 시작하는 git
+감싸개(임시 폴더에 만든다)를 써서 작업 트리가 커 status 가 느린 실제 저장소를 흉내 낸다.
+
+### 2026-11-27 측정 (고치기 전)
+
+macOS 27.2.1, Apple M4 Pro 14코어, git 2.54.0, 릴리스 빌드, `--runs 5`. 다른 레인(화면 측정·빌드)이 함께 돌아 load average 가 높았다
+(측정 전후 1분 값 14.7 → 21.8, 21.8 → 16.7). 한가할 때 값은 앞 표본 뒤 300ms 쉬고 잰 것이라 CPU 클록이 내려간 영향이 섞여(git 실행
+13~16ms 가 한가할 때 20~34ms 로 나온다) 배수는 낮게 나온다 — 판단은 permit 대기로 한다.
+
+| `refresh` 도중 커밋 상세 (중앙값, 최대) | 저장소 20개 (`folder-20x10000`)        | 저장소 50개 (`folder-50x10000`)       |
+| --------------------------------------- | -------------------------------------- | ------------------------------------- |
+| 한가할 때                               | 22.0ms (permit 대기 0)                 | 34.5ms (permit 대기 0)                |
+| +5ms                                    | 70.6ms, 최대 118 — permit 대기 53 (85) | 69.0ms, 최대 75 — permit 대기 55 (56) |
+| +20ms                                   | 60.8ms, 최대 63 — permit 대기 43 (49)  | 60.8ms, 최대 71 — permit 대기 43 (56) |
+| +50ms                                   | 50.2ms, 최대 73 — permit 대기 35 (57)  | 48.7ms, 최대 51 — permit 대기 33 (34) |
+| 그때 조작 읽기의 git 실행               | 13~16ms                                | 13~15ms                               |
+| 전체 갱신 시간 (조작 읽기 없이 / 함께)  | 224ms / 218~226ms                      | 533ms / 501~515ms                     |
+
+| `timeline_reload` 도중 커밋 상세 | 저장소 20개 | 저장소 50개 |
+| -------------------------------- | ----------- | ----------- |
+| permit 대기 (중앙값, 최대)       | 1~2ms (5)   | 1~3ms (11)  |
+| 재로드 시간                      | 384~393ms   | 930~956ms   |
+- 전체 갱신 도중의 조작 읽기는 응답 시간의 약 70%(33~55ms)를 permit 대기로 쓴다 — 자기 git 실행(13~16ms)의 2~4배. 대기는 저장소
+  수(20 → 50)와 거의 무관하다: 줄의 길이는 저장소 수가 아니라 세 갈래 × 동시 8개가 세마포어 8칸을 다투는 깊이로 정해진다. 그래서
+  실제 저장소처럼 status 가 느리면(명령 하나가 수백 ms) 대기는 그 명령 시간에 비례해 늘어난다고 본다(추정 — 합성 저장소의 status 는 싸다).
+- 타임라인 재로드는 permit 대기가 거의 없다 (저장소별 `log` 스트림이 세마포어를 채우지 않는다). 고칠 대상이 아니다.
+- 대조: `--max-reads 64` 로 같은 측정을 번갈아 돌리면(20개, `--runs 3` 두 번씩) 전체 갱신 도중 응답은 흔들림이 커 뚜렷이 갈리지 않았다
+  (+20ms 중앙값 8칸 55.6·57.8ms ↔ 64칸 27.3·40.6ms, +5ms 는 68.9·71.4 ↔ 61.6·68.0). 칸을 늘리면 배경 읽기도 더 많이 동시에 돌아 CPU 를
+  다투므로 대조군으로는 부족하고, 위의 permit 대기 직접 측정으로 판단했다.
+
+### 고친 뒤 — 묶음 읽기 한도 (2026-11-27)
+
+러너에 묶음 읽기 한도(`RunnerConfig::max_concurrent_bulk_reads`, 기본 7)를 더했다. 묶음 읽기(`mgit_git::bulk_reads` 범위 안의
+읽기)는 이 한도를 먼저 얻고(대기열이 따로다) 전체 한도(8)를 얻는다. 그래서 사용자가 누른 읽기는 묶음 읽기의 긴 줄 뒤에 서지 않고,
+한 칸은 늘 비어 있어 한 번에 git 하나씩 도는 조작(커밋 상세)은 기다리지 않는다. 범위는 폴더 훑기가 저장소마다 띄우는 작업에 건다:
+요약(`folder_summaries`, 부분 포함)·브랜치(`folder_branches`)·변경(`folder_changes`)·타임라인 로드(`load_timeline`, 재로드 포함)·작성자
+후보(`folder_timeline_authors` 의 git 경로)·자동 fetch 한 바퀴(`auto_fetch_round`)·하루 한 번 백업 정리(`folder_prune_backups_daily`).
+저장소 탭의 읽기, 폴더 커밋 상세·diff·포함 브랜치, 일괄 작업, 폴더 열기는 걸지 않는다.
+
+같은 조건(macOS 27.2.1, M4 Pro, git 2.54.0, 릴리스, load average 4~6)의 `--runs 5`:
+
+| 커밋 상세 (중앙값) — permit 대기   | 고치기 전 (위 표, 부하 높음) | 고친 뒤 20개              | 고친 뒤 50개              |
+| ---------------------------------- | ---------------------------- | ------------------------- | ------------------------- |
+| `refresh` +5 / +20 / +50ms         | 대기 53·43·35 / 55·43·33     | 31.9·25.1·14.6ms — 대기 0 | 32.8·25.9·13.0ms — 대기 0 |
+| `timeline_reload` +5 / +20 / +50ms | 대기 1~3                     | 33.6·25.9·13.4ms — 대기 0 | 34.0·25.1·14.6ms — 대기 0 |
+
+묶음 읽기 한도의 비용은 같은 벤치 코드로 만든 두 바이너리(고치기 전과 같은 단일 대기열 / 고친 러너)를 번갈아 돌려 쟀다(실행마다
+폴더를 연 뒤 전체 갱신 6번, 세 번씩 — 아래는 그 범위이고 단일 대기열 50개의 첫 값 430ms 하나는 뺐다, load average 3~8). `8` 은
+대기열만 따로 두고 칸을 비우지 않은 것이다:
+
+| 전체 갱신 한 번 (ms) | 단일 대기열 (전) | 묶음 8  | 묶음 7 (기본) | 묶음 6  |
+| -------------------- | ---------------- | ------- | ------------- | ------- |
+| 저장소 20개          | 141~153          | 139~166 | 151~185       | 169~211 |
+| 저장소 50개          | 342~367          | 340~377 | 369~388       | 401~435 |
+| 타임라인 재로드 20개 | 328~337          | 329~364 | 335~345       | 367~375 |
+| 타임라인 재로드 50개 | 826~856          | 830~836 | 855~873       | 969~989 |
+
+status 가 느린 저장소 흉내(`--slow-status-ms 200`, 20개, `--runs 3`, 두 번씩 번갈아):
+
+| 설정          | 전체 갱신 도중 커밋 상세의 permit 대기 (+5 / +20 / +50ms) | 전체 갱신 (조작 읽기 없이) |
+| ------------- | --------------------------------------------------------- | -------------------------- |
+| 단일 대기열   | 491~495 / 472~511 / 465~502ms                             | 1,341~1,396ms              |
+| 묶음 8        | 12~15 / 6~8 / 217~243ms                                   | 1,490~1,534ms              |
+| 묶음 7 (기본) | 0 / 0 / 0                                                 | 1,586~1,631ms              |
+| 묶음 6        | 0 / 0 / 0                                                 | 1,911~1,941ms              |
+- 대기열만 따로 두어도(묶음 8) 대기는 대부분 사라진다 — 사용자가 누른 읽기가 묶음 읽기 뒤가 아니라 지금 도는 명령 하나가 끝나기를
+  기다린다. 그러나 그 명령이 느린 status 면(위 +50ms) 그 시간만큼 기다린다. 한 칸을 비우면(7) 그것도 없다.
+- 기본을 7 로 둔 이유: 6 은 두 번째 동시 조작(파일 열 때의 blame·HEAD 원문)까지 비워 두지만 전체 갱신을 약 20%(status 가 느리면
+  약 39%) 늦춘다. 7 은 약 6%(약 17%)다. 배경 전체 갱신은 바쁨 표시를 켜지 않으므로(G3·G4) 이 정도 늘어나는 것은 화면에 드러나지
+  않는다고 본다(추정). 7 에서 두 번째 동시 조작은 지금 도는 묶음 명령 하나를 기다릴 수 있다.
+- 실제 저장소 대기는 재지 않았다 — 위 흉내는 status 만 늦춘다. 화면 레인의 실제 앱 기록(`MGIT_PERF`)으로 확인할 일이다.
+
+## WebKit 배치 실험실 (`webkit-layout-probe.mjs`, 반응성 슬라이스 I·K)
+
+실제 앱(WKWebView)의 WebContent 표본에서 바쁜 시간의 절반이 `RenderView` 부터 도는 배치였고, 스크립트의 크기 읽기
+(`scrollHeight`·`clientWidth`)가 그것을 강제했다. Chromium 에서는 재현되지 않아 Playwright 의 WebKit 으로 목 프로덕션 빌드를
+열어 잰다. 도구는 화면(목 장면 + 조작)을 새 문맥에서 하나씩 열고 네 가지를 한다:
+
+- `cost`: 영역(`[data-panel]`·콘솔·터미널·상태 막대)마다 "주 사슬"(뿌리에서 넓이가 가장 큰 자식으로 내려가 실제로 넘치는 스크롤
+  칸·CodeMirror·xterm 에서 멈춘 곳)의 끝에 1px 상자를 넣은 뒤 `document.body.offsetHeight` 까지의 시간(중앙값·최대, `--runs` 번),
+  문서 루트 사용자 정의 속성 바꾸기(`root --x` — 모든 요소의 스타일을 다시 계산하고 배치를 다시 한다), Git 로그 ↔ 편집기
+  포커스 이동, 요소 수.
+- `audit`: 문서 전체에서 부모가 flex 인데 높이를 백분율로 선언한(인라인 또는 맞는 규칙) 보이는 요소와 그 부모.
+- `shape`: 모든 요소(터미널 xterm 안은 뺀다)의 `getBoundingClientRect` 를 DOM 경로별로 떠서 JSON 으로 남긴다. `--shots` 면
+  화면마다 스크린샷도.
+- `compare <전.json> <후.json>`: 두 `shape` 결과의 상자를 경로별로 견줘(0.01px 넘게 다르면 차이) 화면별 차이 수와 앞 12개를 적는다.
+  차이가 하나라도 있으면 종료 코드 1.
+
+CSS 모듈 이름(`_frame_13657_16`)은 같은 해시를 쓰는 지역 이름 묶음과 가장 많이 겹치는 `*.module.css` 를 찾아
+`SplitEditorArea.frame` 처럼 바꿔 적는다(추정 매칭 — 지역 이름이 같은 작은 파일끼리는 틀릴 수 있다).
+
+### 준비
+
+```bash
+VITE_MGIT_MOCK=2000 VITE_MGIT_MOCK_SCENE=folder pnpm -F @mgit/desktop build:web
+pnpm -F @mgit/desktop preview --port 4317 --strictPort     # 1420(개발 서버)과 겹치지 않게
+# playwright 는 저장소 의존성이 아니다 — 저장소 밖 임시 폴더에 설치한다
+mkdir -p /tmp/pw && cd /tmp/pw && npm i playwright && npx playwright install webkit chromium
+```
+
+전후를 견줄 때는 고치기 전 빌드의 `apps/desktop/dist` 를 다른 곳에 복사해 두고 정적 서버를 다른 포트에 띄워 `--url` 로 고른다
+(장면은 `localStorage['mgit.mock.scene']` 로 바꾸므로 빌드 하나로 모든 화면을 연다).
+
+### 실행
+
+```bash
+export PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs
+node bench/webkit-layout-probe.mjs cost webkit                       # 모든 화면, 15번씩 (WebKit 약 3분)
+node bench/webkit-layout-probe.mjs cost chromium --scenes folder-compare,repo
+node bench/webkit-layout-probe.mjs audit webkit --scenes conflict-merge
+node bench/webkit-layout-probe.mjs shape webkit --out /tmp/before.json --shots /tmp/shots-before
+node bench/webkit-layout-probe.mjs shape webkit --url http://127.0.0.1:4318/ --out /tmp/after.json
+node bench/webkit-layout-probe.mjs compare /tmp/before.json /tmp/after.json
+```
+
+선택: `--url`(기본 `http://127.0.0.1:4317/` 또는 `MGIT_PREVIEW_URL`), `--scenes a,b`, `--size 3360x1828`(기본), `--dpr 2`(기본),
+`--theme dark|light`(기본 dark, 문맥의 `prefers-color-scheme` — 앱 테마 기본값 "시스템"이 따른다), `--variants`(아래, `shape` 기본
+전부·나머지 기본 `plain`), `--runs 15`, `--inject <js>`(실험용: 화면을 연 뒤 재기 전에 페이지에서 돌릴 함수 본문 — 스타일을 인라인으로
+덮어써 고칠 곳을 미리 견준다. `window.__probePercent(el)`·`window.__probeLabel(el)` 을 쓸 수 있다).
+
+화면 (모두 `diffLines=3000`·`diffHunks=40`·`worktreeChanges=20`, 한국어, `repo-no-selection` 말고는 Git 로그의 네 번째 행을 골라 상세에
+변경 파일 트리를 띄운 뒤):
+
+| 이름                 | 장면     | 조작                                                           |
+| -------------------- | -------- | -------------------------------------------------------------- |
+| `folder`             | folder   | 없음 — 통합 타임라인 + 편집기의 개요 탭                        |
+| `folder-compare`     | folder   | `compareOpenBig` — 큰 비교 diff (슬라이스 I 의 기준 화면)      |
+| `folder-file`        | folder   | `api-gateway/README.md` 를 파일 편집기(CodeMirror)로           |
+| `folder-split`       | folder   | 같은 파일 + 팔레트 "편집기: 오른쪽으로 분할" (편집기 두 그룹)  |
+| `folder-markdown`    | folder   | 같은 파일의 Markdown 보기 "분할" (편집기 + 미리보기)           |
+| `repo`               | repo     | 없음 — 저장소 탭, 편집기 빈 상태                               |
+| `repo-no-selection`  | repo     | 커밋을 고르지 않는다 — 상세 칸은 작업 트리 요약                |
+| `repo-pr`            | repo     | Pull Requests 도구 창                                          |
+| `repo-dock-max`      | repo     | 아래 Git 도크 "도구 창 최대화"                                 |
+| `repo-worktree-diff` | repo     | Commit 도구 창 → 첫 변경 파일 두 번 눌러 작업 트리 diff        |
+| `repo-console`       | repo     | 아래 도크의 콘솔 탭 (Git 로그 대신 명령 로그)                  |
+| `repo-terminal`      | repo     | 통합 터미널 (목 PTY)                                           |
+| `repo-tags`          | repo     | 빈 편집기의 "태그 관리 열기"                                   |
+| `conflict`           | conflict | 삭제 충돌 `CardForm.tsx` → 충돌 문서 (어느 쪽을 남길지)        |
+| `conflict-merge`     | conflict | 내용 충돌 `PaymentStep.tsx` → 3단 머지 편집기 (CodeMirror 4개) |
+
+변형(`--variants`): `plain`, `moved`(보이는 분할선을 앞에서부터 4개까지 차례로 40px 씩 끈다 — 세로선은 오른쪽, 가로선은 위로.
+끌 때마다 자리를 다시 읽고, 끄는 동안 글자가 선택되면 경고한다),
+`no-left`(눌려 있는 첫 도구 창 띠 단추 = 왼쪽 도구 창을 접는다), `no-dock`(띠의 Git 단추로 아래 Git 도크를 닫는다).
+
+### 읽는 법
+
+- `cost` 한 줄: `<엔진> <크기> <테마> <화면> <변형> | <영역> | 중앙값 (최대) | 상자를 넣은 곳 깊이 N | % 사슬`. 사슬은 상자를 넣은
+  곳에서 `html` 까지 올라가며 부모가 flex·grid 인 백분율 높이 요소를 위에서부터 `요소<부모 배치>` 로 적는다(`<flex-col>` 이 원인 후보).
+- WebKit 에서 흐름 속 변경 하나의 배치는 그 자리와 상관없이 문서 전체의 백분율 높이 하위 트리를 다시 배치한다 — 그래서 한 화면의
+  영역별 값이 거의 같다(상태 막대만 0). 값은 "세로 flex 부모 아래 `height:100%`" 가 몇 겹으로 무거운 하위 트리(큰 diff)를 감싸는지에
+  따라 겹마다 약 두 배가 된다(슬라이스 I: 편집기 → diff 사슬 6겹을 위에서부터 하나씩 풀면 216 → 101 → 47 → 27 → 18 → 18 → 16ms).
+  가로 flex 부모 아래의 백분율 높이는 풀어도 달라지지 않았다.
+- `root --x` 는 모든 요소를 다시 배치하는 값이라 상자 넣기보다 조금 크다.
+- `compare` 의 차이 0 은 "같은 DOM 에서 모든 요소의 상자가 같다"는 뜻이다. 같은 빌드를 두 번 떠도 차이 0 인지 먼저 본다(비동기 읽기가
+  끝나기 전에 뜨면 흔들린다 — 2026-11-27 비교 diff·작업 트리 diff × plain·moved·no-left 에서 상자 15,384개 중 0).
+
+### 한계
+
+- headless 다: 합성(compositor)·화면 갱신 주기가 실제 창과 다르고, `document.hasFocus()` 가 늘 참이며 손쉬운 사용 클라이언트가
+  붙지 않는다. 그래서 "포커스 없는 창의 주기적 긴 프레임"·"클릭·키가 배치를 무효화하는 까닭" 은 여기서 재현되지 않았다(슬라이스 I).
+- 절댓값은 실제 앱과 다르다(실제 앱 배치 한 번은 약 0.1초, 실험실은 같은 화면에서 약 0.23초 — 기계 부하·빌드 플래그가 다르다).
+  같은 실행 안의 전후·화면끼리만 견준다.
+- 목 데이터다. 실제 저장소의 파일 수·diff 크기에 따라 무거운 하위 트리의 크기가 달라진다.
+- 실제 앱 안에서는 `apps/desktop/src/perf/selftest.ts` 의 `layout:*` 탐침으로 같은 종류의 무효화를 잰다(위 "그리기 자가 진단").
+
+### 배치 경계 실험 (`webkit-reflow-probe.mjs`, 슬라이스 I)
+
+같은 준비로 `node bench/webkit-reflow-probe.mjs <webkit|chromium> [--no-diff]`. 큰 비교 diff 화면에서 자리별 건드리기(diff 도구 모음
+글자, diff 본문 안쪽 높이 +1px, Git 로그·Project 트리에 상자 넣고 빼기, 상태 막대 글자, 포커스 이동, 문서 루트 사용자 정의 속성)
+뒤 `offsetHeight` 까지를 12번 중앙값으로 재고, 배치 경계 후보에 `contain: layout size` 를 쌓아 가며 / 하나씩 넣었을 때를 견준다.
+각 단계의 배치 지문(diff·그래프 스크롤러, Project 트리, 상태 막대의 상자)도 적는다.
+
+2026-11-27 결과(WebKit, 고치기 전 `49985af`): 흐름 속 변경은 자리와 상관없이 213~222ms(상태 막대만 0), 영역 내용(`[data-panel]` 다섯
+곳)에 경계를 넣으면 0~5ms, 상자 2,585개의 변화 0(WebKit·Chromium). 문서 루트 사용자 정의 속성은 경계와 상관없이 약 230ms 그대로.
+크기 조절 패널 자체(`[data-panel="true"]`)에 넣으면 루트 쪽이 약 410ms 로 나빠지고, 스크롤러에만 넣으면 그 목록 안의 변화만 준다.
+
+### 기준선 (2026-11-27, `49985af`, 3360×1828·dpr 2·다크, 15번 중앙값 ms)
+
+| 화면                 | WebKit 상자 넣기 (영역별 범위) | WebKit `root --x` | Chromium 상자 넣기 / `root --x` | 요소 수 |
+| -------------------- | ------------------------------ | ----------------- | ------------------------------- | ------- |
+| `folder`             | 33~34                          | 39                | 0.2 / 1.8                       | 1,227   |
+| `folder-compare`     | 227~231                        | 241               | 0.2 / 3.6                       | 2,693   |
+| `folder-file`        | 44~45                          | 50                | 0.2~0.3 / 2.2                   | 1,429   |
+| `folder-split`       | 62~63 (편집기 110)             | 69                | 0.2~0.3 / 2.4                   | 1,720   |
+| `folder-markdown`    | 42~43                          | 51                | 0.2~0.3 / 2.3                   | 1,798   |
+| `repo`               | 47~48                          | 52                | 0.2 / 1.8                       | 1,125   |
+| `repo-no-selection`  | 11                             | 15                | 0.1~0.2 / 1.5                   | 1,023   |
+| `repo-pr`            | 44~45                          | 48                | 0.2~0.3 / 1.5                   | 996     |
+| `repo-dock-max`      | 45                             | 49                | 0.2~0.3 / 1.9                   | 1,271   |
+| `repo-worktree-diff` | 72~73                          | 80                | 0.2~0.3 / 3.4                   | 2,459   |
+| `repo-console`       | 4                              | 5                 | 0.1~0.2 / 0.9                   | 421     |
+| `repo-terminal`      | 0~4                            | 6                 | 0~0.1 / 0.9                     | 448     |
+| `repo-tags`          | 52~53                          | 57                | 0.2 / 1.8                       | 1,196   |
+| `conflict`           | 69~70                          | 75                | 0.2~0.3 / 1.8                   | 1,091   |
+| `conflict-merge`     | 118~119                        | 125               | 0.2~0.4 / 2.4                   | 1,823   |
+- 상태 막대에 넣으면 0~1ms 다(배치 경계가 있는 자리). 콘솔·터미널 화면은 Git 도크(로그·브랜치·상세)가 빠져 싸다.
+- `audit` 가 찾은 "세로 flex 부모 아래 백분율 높이" 겹: 편집기 쪽 `SplitEditorArea.root`·그 안의 분할 Group(라이브러리 인라인)·
+  `EditorArea.area`·문서 루트(ComparisonDoc 인라인 section·`Dashboard.pane`·`TagsDoc.doc`·`WorktreeDiffDoc.doc`·`FileEditor.pane`·
+  `FileView.pane`·`DiffPane.pane`)·`ConflictPane.pane`·`cm-scroller`, 왼쪽 영역 `ProjectEditing.host`·`ToolWindowFrame.window`·
+  `ChangesPanel.panel`, 로그·상세 `BranchTree.window`·`GraphPane.pane`·`GraphView.wrapper`·`CommitDetailPane.pane`·그 안의 분할
+  Group·`CommitDetailView.view`.
+
+### 고친 뒤 — 세로 flex 안의 백분율 높이 풀기 (슬라이스 K)
+
+원칙: 늘 세로 flex 부모 안에 놓이는 요소는 `height: 100%` 대신 `flex: 1 1 0; min-height: 0` 으로 높이를 채운다(모든 쓰임새의
+부모를 코드에서 확인한 것만). 분할 라이브러리 Group(인라인 `height: 100%`)을 하나만 담는 감싸개(`SplitEditorArea .root`·
+`CommitDetailPane .pane`)는 `display: block` 으로 두어 Group 이 블록 부모 아래에 놓이게 한다. 로그 탭 오른쪽 칸은 분할 패널 안쪽 요소에
+`GitLogSplit .detailSlot`(세로 flex)을 주고 저장소 탭 `.detail`·폴더 탭 `CommitDetailPane` 이 flex 로 채운다(`.detail` 을 block
+으로 바꾸면 커밋을 고르지 않았을 때의 작업 트리 요약이 스크롤하지 못한다).
+
+- 왼쪽 영역: `ProjectEditing .host`, `ToolWindowFrame .window`, `ChangesPanel .panel`
+- 로그·상세: `BranchTree .window`, `GraphPane .pane`, `GraphView .wrapper`(packages/graph-view), `RepoGitLog .detail`,
+  `CommitDetailPane .pane`, `CommitDetailView .view`
+- 편집기: `SplitEditorArea .root`, `EditorArea .area`, 문서 뿌리(`ComparisonDoc` 인라인 section, `Dashboard .pane`,
+  `TagsDoc .doc`, `WorktreeDiffDoc .doc`, `FileEditor .pane`, `FileView .pane`, `DiffPane .pane`), `ConflictPane .pane`
+- 남긴 것(`audit`): CodeMirror 의 `.cm-scroller`(기본 테마의 `height: 100%`, 파일 편집기·머지 편집기)와 비교 화면 section 안의 분할
+  Group(라이브러리 인라인). 실험실에서 둘을 덮어써도 1ms 안팎이라 건드리지 않았다. `packages/diff-view` 안쪽은 세로 flex 겹으로
+  잡히지 않는다.
+
+| 화면                 | WebKit 상자 넣기 전 → 후 | WebKit `root --x` 전 → 후 | Chromium 상자 넣기 / `root --x` 후 |
+| -------------------- | ------------------------ | ------------------------- | ---------------------------------- |
+| `folder`             | 33~34 → 13~14            | 39 → 18                   | 0.2 / 1.8                          |
+| `folder-compare`     | 227~231 → 14             | 241 → 23                  | 0.2~0.3 / 3.5                      |
+| `folder-file`        | 44~45 → 15               | 50 → 20                   | 0.2 / 2.0                          |
+| `folder-split`       | 62~63 (110) → 17         | 69 → 23                   | 0.2~0.3 / 2.2                      |
+| `folder-markdown`    | 42~43 → 14~15            | 51 → 23                   | 0.2~0.3 / 2.3                      |
+| `repo`               | 47~48 → 5~6              | 52 → 9                    | 0.2 / 1.6                          |
+| `repo-no-selection`  | 11 → 5                   | 15 → 9                    | 0.2 / 1.5                          |
+| `repo-pr`            | 44~45 → 5                | 48 → 9                    | 0.2~0.3 / 1.5                      |
+| `repo-dock-max`      | 45 → 5                   | 49 → 10                   | 0.2~0.3 / 1.8                      |
+| `repo-worktree-diff` | 72~73 → 5~6              | 80 → 13                   | 0.2~0.3 / 3.1                      |
+| `repo-console`       | 4 → 1~2                  | 5 → 3                     | 0.1~0.2 / 0.9                      |
+| `repo-terminal`      | 0~4 → 0~2                | 6 → 3                     | 0~0.2 / 0.9                        |
+| `repo-tags`          | 52~53 → 5~6              | 57 → 10                   | 0.2 / 1.8                          |
+| `conflict`           | 69~70 → 6                | 75 → 9                    | 0.2~0.3 / 1.7                      |
+| `conflict-merge`     | 118~119 → 6              | 125 → 11                  | 0.2~0.4 / 2.4                      |
+- 폴더 탭(13~17ms)이 저장소 탭(5~6ms)보다 크다. 까닭은 따로 재지 않았다(남은 겹이 없는 상태에서의 차이라 영역 안 하위 트리
+  크기 차이로 본다, 추정).
+- 모양: 두 빌드를 `shape` → `compare` 로 견줬다 — WebKit·Chromium × 3360×1828 다크(plain·moved·no-left·no-dock)·1400×900
+  라이트(plain·moved·no-dock) × 15개 화면, 상자 약 24만 개. 다른 상자는 `folder` 화면의 "갱신 시각" 글자(시계라 실행마다 글자 폭이
+  다르다)와 그 옆 빈칸 둘뿐이다.
+
+### 영역 경계 — `contain: layout size` (슬라이스 K)
+
+자리: 영역 내용 단위 다섯 곳 — `WorkspaceShell .area`(왼쪽 도구 창·편집기 영역), `GitLogSplit .branches`·`.graph`, 저장소 탭
+`RepoGitLog .detail`, 폴더 탭 `CommitDetailPane .pane[data-panel]`(폴더 탭에서는 이 칸이 git-detail 영역 그 자체다). 크기는 분할 패널이
+정하므로 `size` 도 가두고 `paint` 는 가두지 않는다. 분할 패널 자체(슬라이스 I: 루트 쪽이 약 410ms 로 나빠짐)와 스크롤러(그 목록 안
+변화만 준다)에는 걸지 않았다. 아래 도크의 콘솔·터미널은 이미 1~2ms 라 넣지 않았다.
+
+| 화면                 | WebKit 상자 넣기 P3 → 경계 | WebKit `root --x` P3 → 경계 | Chromium 상자 넣기 / `root --x` (경계) |
+| -------------------- | -------------------------- | --------------------------- | -------------------------------------- |
+| `folder`             | 13~14 → 0                  | 18 → 15                     | 0~0.2 / 1.9                            |
+| `folder-compare`     | 14 → 0                     | 23 → 20                     | 0~0.2 / 3.5                            |
+| `folder-file`        | 15 → 0                     | 20 → 18                     | 0~0.2 / 2.2                            |
+| `folder-split`       | 17 → 0                     | 23 → 21                     | 0~0.2 / 2.5                            |
+| `folder-markdown`    | 14~15 → 0                  | 23 → 21                     | 0~0.2 / 2.4                            |
+| `repo`               | 5~6 → 0                    | 9 → 11                      | 0~0.2 / 1.7                            |
+| `repo-no-selection`  | 5 → 0                      | 9 → 9                       | 0~0.2 / 1.7                            |
+| `repo-pr`            | 5 → 0                      | 9 → 9                       | 0~0.2 / 1.5                            |
+| `repo-dock-max`      | 5 → 0                      | 10 → 10                     | 0~0.2 / 2.0                            |
+| `repo-worktree-diff` | 5~6 → 0                    | 13 → 13                     | 0~0.3 / 3.0                            |
+| `repo-console`       | 1~2 → 0~2                  | 3 → 1                       | 0~0.1 / 0.9                            |
+| `repo-terminal`      | 0~2 → 0                    | 3 → 2                       | 0~0.1 / 0.9                            |
+| `repo-tags`          | 5~6 → 0                    | 10 → 10                     | 0~0.2 / 1.9                            |
+| `conflict`           | 6 → 0                      | 9 → 11                      | 0~0.2 / 1.8                            |
+| `conflict-merge`     | 6 → 0                      | 11 → 11                     | 0~0.3 / 2.2                            |
+- 영역 안 변화는 0ms(폴더 탭 git-log 는 15번 중 최대 한 번 13~20ms)다. 문서 루트 쪽 변화(`root --x` — 창 크기·테마)는 경계와 상관없이
+  그대로다.
+- 모양(경계 전후, 두 엔진 × 두 크기 × 변형 × 15개 화면): 다른 상자는 CodeMirror 의 `.cm-announced`(크기 0×0, `position: fixed;
+  top: -10000px` 인 화면 읽기용 알림 칸) 하나씩뿐이다 — 고정 위치의 기준 블록이 창에서 영역으로 바뀌어 y 가 -10000 → -9923(영역 위
+  끝 77px 만큼)이 됐다. 여전히 화면 밖·크기 0 이라 보이는 것은 같다. 그 밖은 위 시계 글자.
+- 영역 밖으로 넘쳐 보이는 자손: 전후 모두 0(넘친 자손은 모두 영역 안의 스크롤·`overflow: hidden` 조상에 잘린다). 영역 크기가 내용으로
+  정해지는 상태는 없었다(도크 최대화의 높이 0 인 영역 포함 — 모양이 같다).
+- 영역 안의 `position: fixed` 자손(포털이 아닌 것): CodeMirror `.cm-announced`(위), CodeMirror 도구 설명(지금 편집기들은 쓰지 않는다.
+  쓰더라도 CodeMirror 가 기준 블록이 창이 아님을 알아채 `absolute` 로 바꾼다 — `@codemirror/view` 의 tooltip `readMeasure`), 그리기
+  자가 진단의 `paint:<영역>` 상자(이 변경에서 놓인 자리를 읽어 창 기준 자리로 되돌리게 했다). 팔레트·토스트·워크스페이스 검색·
+  Popover·mermaid 측정 상자는 body 또는 앱 루트에 있다.
+- 폴더 탭의 `root --x`(15~21ms)가 저장소 탭(9~13ms)보다 큰 까닭: 폴더 탭의 로그·상세 하위 트리가 루트 배치마다 다시 배치된다(실험실에서
+  두 영역 내용을 숨기면 14 → 4ms, 상세만 숨기면 14 → 5ms). 저장소 탭의 같은 컴포넌트(CommitDetailPane)는 그렇지 않다. 감싸개를 한 겹
+  더하거나 상세의 분할 Group 을 flex 로 덮어써도 14 → 11ms 에 그쳐 원인은 확인하지 못했다.

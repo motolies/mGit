@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -28,12 +29,36 @@ const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(300);
 #[cfg(unix)]
 const SIGTERM: i32 = 15;
 
+tokio::task_local! {
+    /// 묶음 읽기 범위 표시 (`bulk_reads` 가 건다). 값은 없고 걸려 있는지만 본다
+    static BULK_READ: ();
+}
+
+/// `fut` 안에서 도는 읽기 명령을 묶음 읽기로 센다 (반응성 슬라이스 12): 폴더 전체를 훑는 배경 읽기(요약·브랜치·변경·타임라인
+/// 로드·작성자 후보·자동 fetch·백업 정리)가 읽기 한도 전부를 차지해 사용자가 누른 읽기를 줄 세우지 않게, 묶음 읽기는 따로 둔 작은
+/// 한도(`RunnerConfig::max_concurrent_bulk_reads`)를 먼저 얻는다. 표시는 작업(task) 범위라 `tokio::spawn` 으로 넘긴 future 에는
+/// 이어지지 않는다 — 훑기가 저장소마다 띄우는 작업마다 걸어야 한다. 쓰기·네트워크 명령에는 영향이 없다
+pub async fn bulk_reads<F: Future>(fut: F) -> F::Output {
+    BULK_READ.scope((), fut).await
+}
+
+/// 지금 작업이 묶음 읽기 범위 안인지
+pub fn in_bulk_reads() -> bool {
+    BULK_READ.try_with(|_| ()).is_ok()
+}
+
 /// 러너 설정
 #[derive(Clone, Debug)]
 pub struct RunnerConfig {
     pub locate: LocateConfig,
     /// 동시 읽기 명령 상한 (명세 2.3 동시성). 쓰기 명령은 쓰기 큐가 직렬화하므로 세지 않는다
     pub max_concurrent_reads: usize,
+    /// 그중 묶음 읽기(`bulk_reads` 범위)가 동시에 쓸 수 있는 상한. 묶음 읽기는 이것을 먼저 얻고(대기열이 따로다) 전체 한도를
+    /// 얻으므로, 사용자가 누른 읽기는 묶음 읽기의 긴 줄 뒤에 서지 않는다. 기본 7 은 전체 8 중 한 칸을 사용자가 누른 읽기에 늘
+    /// 비워 둔다 — 커밋 상세(`log`·`diff-tree` 차례로)처럼 한 번에 git 하나씩 도는 조작은 기다리지 않는다. 측정(`mgit-bench
+    /// --contention`, bench/README.md)에서 7 은 전체 갱신을 약 6%(status 가 느린 흉내에서 약 17%) 늦췄고, 6 은 약 20%(39%)
+    /// 늦췄다. 전체 한도 이상이면 칸을 비워 두지 않는다(대기열만 따로)
+    pub max_concurrent_bulk_reads: usize,
     /// 모든 명령에 붙는 환경 변수 (macOS 로그인 셸에서 얻은 PATH 등)
     pub extra_env: Vec<(String, String)>,
     /// `Network` 프로파일에만 붙는 환경 변수 (askpass 헬퍼)
@@ -47,6 +72,7 @@ impl Default for RunnerConfig {
         RunnerConfig {
             locate: LocateConfig::default(),
             max_concurrent_reads: 8,
+            max_concurrent_bulk_reads: 7,
             extra_env: Vec::new(),
             network_env: Vec::new(),
             terminate_grace: Duration::from_secs(2),
@@ -61,6 +87,8 @@ pub struct TokioGitRunner {
     version: GitVersion,
     local_env_vars: Vec<String>,
     reads: Arc<Semaphore>,
+    /// 묶음 읽기 한도 (`bulk_reads` 범위의 읽기만 먼저 얻는다)
+    bulk_reads: Arc<Semaphore>,
     extra_env: Vec<(String, String)>,
     network_env: Mutex<Vec<(String, String)>>,
     grace: Duration,
@@ -78,11 +106,15 @@ impl TokioGitRunner {
             });
         }
         let local_env_vars = probe_local_env_vars(&git, &cfg.extra_env).await;
+        let reads = cfg.max_concurrent_reads.max(1);
         Ok(TokioGitRunner {
             git,
             version,
             local_env_vars,
-            reads: Arc::new(Semaphore::new(cfg.max_concurrent_reads.max(1))),
+            reads: Arc::new(Semaphore::new(reads)),
+            bulk_reads: Arc::new(Semaphore::new(
+                cfg.max_concurrent_bulk_reads.clamp(1, reads),
+            )),
             extra_env: cfg.extra_env,
             network_env: Mutex::new(cfg.network_env),
             grace: cfg.terminate_grace,
@@ -140,18 +172,49 @@ impl TokioGitRunner {
         wrap_command(cmd)
     }
 
-    /// 읽기 명령이면 세마포어 permit 을 얻는다. 쓰기는 큐가 직렬화하므로 바로 통과
-    async fn permit(&self, profile: EnvProfile) -> Result<Option<OwnedSemaphorePermit>, GitError> {
+    /// 지금 남은 (전체 읽기, 묶음 읽기) permit 수 (진단·테스트용)
+    pub fn available_read_permits(&self) -> (usize, usize) {
+        (
+            self.reads.available_permits(),
+            self.bulk_reads.available_permits(),
+        )
+    }
+
+    /// 읽기 명령이면 세마포어 permit 을 얻는다. 쓰기는 큐가 직렬화하므로 바로 통과. 묶음 읽기 범위면 묶음 한도를 먼저 얻고
+    /// 전체 한도를 얻는다 — 묶음 읽기가 전체 한도를 다 차지하지 못한다. 기다리는 중에 버려지면(취소) 얻은 것도 돌려준다
+    async fn permit(&self, profile: EnvProfile) -> Result<Option<ReadPermit>, GitError> {
         if profile.is_write() {
             return Ok(None);
         }
-        self.reads
+        let bulk = if in_bulk_reads() {
+            Some(
+                self.bulk_reads
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| GitError::Cancelled)?,
+            )
+        } else {
+            None
+        };
+        let read = self
+            .reads
             .clone()
             .acquire_owned()
             .await
-            .map(Some)
-            .map_err(|_| GitError::Cancelled)
+            .map_err(|_| GitError::Cancelled)?;
+        Ok(Some(ReadPermit {
+            _bulk: bulk,
+            _read: read,
+        }))
     }
+}
+
+/// 읽기 명령 하나가 쥔 permit (드롭하면 둘 다 돌려준다)
+#[derive(Debug)]
+struct ReadPermit {
+    _bulk: Option<OwnedSemaphorePermit>,
+    _read: OwnedSemaphorePermit,
 }
 
 /// 플랫폼별 프로세스 그룹·콘솔 숨김을 적용한다. 드롭 시 kill 은 보험으로 항상 켠다
@@ -571,7 +634,7 @@ struct TokioGitStream {
     rx: mpsc::Receiver<Vec<u8>>,
     exit: Option<oneshot::Receiver<Result<ExitInfo, GitError>>>,
     _cancel: oneshot::Sender<()>,
-    _permit: Option<OwnedSemaphorePermit>,
+    _permit: Option<ReadPermit>,
 }
 
 impl GitStream for TokioGitStream {

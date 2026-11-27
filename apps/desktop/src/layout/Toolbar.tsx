@@ -14,7 +14,7 @@ import { hasModifier, useRovingToolbar } from '../components/roving';
 import { TabListMenu, tabNavigationIndex, useRevealActiveTab } from '../components/tab-navigation';
 import { useCommandTitle } from '../components/use-command-shortcut';
 import { useBatchReport } from '../features/folder/batch-report';
-import { useFolderBatchFlows } from '../features/folder/FolderBatchBar';
+import { useBatchScope, useFolderBatchFlows } from '../features/folder/FolderBatchBar';
 import { RemotesDialog } from '../features/remote/RemotesDialog';
 import { useActiveTab, useAppStore, useFolder, useIsRepoTab, useSession } from '../store';
 import { GROUP_GLYPH, isGroupKey } from '../store/root-space';
@@ -266,11 +266,13 @@ function FolderSyncButtons() {
     pullMode: st.settings?.pullMode ?? 'ffOnly',
   }));
   const flows = useFolderBatchFlows(useBatchReport());
+  // 단추 이름에 대상 수("선택 N개")가 들어가므로 이 칸만 트리 선택을 구독한다
+  const target = useBatchScope();
   if (!f) {
     return null;
   }
   const t = S.folder.batch;
-  const label = (op: string) => t.withScope(op, flows.scope);
+  const label = (op: string) => t.withScope(op, target.scope);
   return (
     <ActionGroup label={S.dock.git}>
       <Button

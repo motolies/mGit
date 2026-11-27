@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type DiffActions, DiffView } from '../DiffView';
+import diffCss from '../DiffView.module.css?raw';
 
 /** 기존 행 단위 계약을 명시적으로 선택한 상태에서 검증한다. */
 function renderLines(ui: ReactElement) {
@@ -137,28 +138,50 @@ describe('DiffView 비 UTF-8', () => {
 });
 
 describe('DiffView 키보드 본문', () => {
-  it('본문 진입점 하나에서 방향키·Space·Shift 범위 선택을 제공한다', async () => {
-    const a = actions();
-    renderLines(<DiffView diff={diff('a')} path="a.txt" mode="unified" actions={a} />);
-    await flush();
-    const grid = screen.getByTestId('diff-scroller');
-    expect(grid.tabIndex).toBe(0);
-    expect(
-      [...grid.querySelectorAll<HTMLElement>('button, input, [tabindex]')].filter(
-        (el) => el.tabIndex === 0,
-      ),
-    ).toHaveLength(0);
-    fireEvent.keyDown(grid, { key: 'ArrowDown' });
-    expect(selectedCount()).toBe(0);
-    fireEvent.keyDown(grid, { key: ' ' });
-    expect(selectedCount()).toBe(2);
-    fireEvent.keyDown(grid, { key: 'ArrowDown', shiftKey: true });
-    expect(selectedCount()).toBe(2);
-    expect(a.onApplyHunk).not.toHaveBeenCalled();
-    expect(a.onApplyLines).not.toHaveBeenCalled();
-  });
+  it.each(['unified', 'split'] as const)(
+    '%s: 본문이 Tab 진입점 하나이고 이동·Space·Enter·좌우 키를 가로채지 않으며 줄을 고르거나 되돌리지 않는다 (J)',
+    async (mode) => {
+      const a = actions();
+      renderLines(<DiffView diff={diff('a')} path="a.txt" mode={mode} actions={a} />);
+      await flush();
+      const grid = screen.getByTestId('diff-scroller');
+      expect(grid.tabIndex).toBe(0);
+      expect(
+        [...grid.querySelectorAll<HTMLElement>('button, input, [tabindex]')].filter(
+          (el) => el.tabIndex === 0,
+        ),
+      ).toHaveLength(0);
+      grid.focus();
+      for (const key of [
+        'ArrowDown',
+        'ArrowUp',
+        'ArrowLeft',
+        'ArrowRight',
+        'Home',
+        'End',
+        'PageDown',
+        'PageUp',
+        ' ',
+        'Enter',
+      ]) {
+        // 기본 동작(브라우저 스크롤)을 막지 않는다
+        expect(fireEvent.keyDown(grid, { key })).toBe(true);
+        expect(fireEvent.keyDown(grid, { key, shiftKey: true })).toBe(true);
+      }
+      await flush();
+      expect(selectedCount()).toBe(0);
+      expect(a.onApplyLines).not.toHaveBeenCalled();
+      expect(a.onDiscardLines).not.toHaveBeenCalled();
+      expect(a.onApplyHunk).not.toHaveBeenCalled();
+      // 커서 줄이 없다: 표시·알림 속성도, 포커스를 받는 줄도 없다
+      expect(grid.querySelector('[data-cursor]')).toBeNull();
+      expect(grid.hasAttribute('aria-activedescendant')).toBe(false);
+      expect(grid.querySelectorAll('[role="row"][tabindex]')).toHaveLength(0);
+      expect(document.activeElement).toBe(grid);
+    },
+  );
 
-  it('구간 이동은 끝에서 멈추고 선택·stage 없이 이동한다', async () => {
+  it('다음 변경은 끝에서 멈추고 선택·stage 를 하지 않는다', async () => {
     const a = actions();
     let navigation: import('../DiffView').DiffNavigation | undefined;
     const release = vi.fn();
@@ -166,24 +189,27 @@ describe('DiffView 키보드 본문', () => {
       navigation = controller;
       return release;
     };
+    // 구간 셋, 구간마다 변경 하나
     const value = { ...diff('a'), hunks: [hunk('a'), hunk('b'), hunk('c')] } as FileDiff;
     const { unmount } = renderLines(
       <DiffView diff={value} path="a.txt" mode="unified" actions={a} onNavigationReady={ready} />,
     );
     await flush();
     const grid = screen.getByTestId('diff-scroller');
-    const cursor = () =>
-      document
-        .getElementById(grid.getAttribute('aria-activedescendant') ?? '')
-        ?.getAttribute('data-index');
+    expect(navigation?.total).toBe(3);
+    expect(navigation?.current).toBe(1);
     act(() => navigation?.moveHunk(1));
-    expect(cursor()).toBe('3');
+    expect(navigation?.current).toBe(2);
     act(() => navigation?.moveHunk(1));
-    expect(cursor()).toBe('6');
-    act(() => navigation?.moveHunk(1));
-    expect(cursor()).toBe('6');
+    expect(navigation?.current).toBe(3);
+    let moved: boolean | undefined;
+    act(() => {
+      moved = navigation?.moveHunk(1);
+    });
+    expect(moved).toBe(false);
+    expect(navigation?.current).toBe(3);
     act(() => navigation?.moveHunk(-1));
-    expect(cursor()).toBe('3');
+    expect(navigation?.current).toBe(2);
     expect(document.activeElement).toBe(grid);
     expect(selectedCount()).toBe(0);
     expect(a.onApplyHunk).not.toHaveBeenCalled();
@@ -208,7 +234,6 @@ describe('DiffView 키보드 본문', () => {
     await flush();
     const grid = screen.getByTestId('diff-scroller');
     grid.focus();
-    fireEvent.keyDown(grid, { key: 'ArrowDown' });
     expect(navigation?.current).toBe(1);
     expect(navigation?.canMove(-1)).toBe(false);
     let moved: boolean | undefined;
@@ -249,20 +274,6 @@ describe('DiffView 키보드 본문', () => {
     await flush();
     expect(document.activeElement).toBe(input);
     expect(navigation?.current).toBe(3);
-  });
-
-  it('split 좌우 선택과 IME 보호를 제공한다', async () => {
-    renderLines(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
-    await flush();
-    const grid = screen.getByTestId('diff-scroller');
-    fireEvent.keyDown(grid, { key: 'ArrowDown' });
-    fireEvent.keyDown(grid, { key: ' ' });
-    expect(document.querySelector('[data-kind="add"][data-selected="true"]')).not.toBeNull();
-    fireEvent.keyDown(grid, { key: 'ArrowLeft' });
-    fireEvent.keyDown(grid, { key: ' ', isComposing: true });
-    expect(selectedCount()).toBe(2);
-    fireEvent.keyDown(grid, { key: ' ' });
-    expect(selectedCount()).toBe(0);
   });
 });
 
@@ -509,13 +520,11 @@ describe('작업 트리 변경 행 동작', () => {
     expect(screen.getByText(S.diff.selectedChanges(1))).toBeTruthy();
   });
 
-  it('Enter는 빈 오른쪽 삭제 행도 복원 대상으로 전달한다', async () => {
+  it('되돌리기 단추는 빈 오른쪽 삭제 행도 복원 대상으로 전달한다', async () => {
     const a = actions();
     renderLines(<DiffView diff={mixedDiff()} path="f.txt" mode="split" actions={a} />);
     await flush();
-    const grid = screen.getByTestId('diff-scroller');
-    for (let i = 0; i < 3; i++) fireEvent.keyDown(grid, { key: 'ArrowDown' });
-    fireEvent.keyDown(grid, { key: 'Enter' });
+    fireEvent.click(screen.getAllByRole('button', { name: S.diff.restoreChange })[2] as Element);
     await flush();
     expect(a.onDiscardLines).toHaveBeenCalledWith([{ hunk: 0, lines: [2] }]);
   });
@@ -649,18 +658,18 @@ describe('기본 변경 블록 선택', () => {
     expect(a.onApplyLines).toHaveBeenCalledWith([{ hunk: 0, lines: [0, 1, 2, 3, 4, 6, 7] }]);
   });
 
-  it('블록 내부 행에서도 Space와 Enter는 블록 전체를 대상으로 한다', async () => {
+  it('블록 선택에서도 Space·Enter 는 보이지 않는 줄의 블록을 고르거나 되돌리지 않는다 (J)', async () => {
     const a = actions({ onDiscardLines: vi.fn(async () => false) });
     render(<DiffView diff={mixedDiff()} path="f.txt" mode="split" actions={a} />);
     await flush();
     const grid = screen.getByTestId('diff-scroller');
     fireEvent.keyDown(grid, { key: 'ArrowDown' });
     fireEvent.keyDown(grid, { key: 'ArrowDown' });
-    fireEvent.keyDown(grid, { key: ' ' });
-    expect(screen.getByText(S.diff.selectedChanges(1))).toBeTruthy();
-    fireEvent.keyDown(grid, { key: 'Enter' });
+    expect(fireEvent.keyDown(grid, { key: ' ' })).toBe(true);
+    expect(fireEvent.keyDown(grid, { key: 'Enter' })).toBe(true);
     await flush();
-    expect(a.onDiscardLines).toHaveBeenCalledWith([{ hunk: 0, lines: [0, 1, 2, 3, 4] }]);
+    expect(screen.getByText(S.diff.selectedChanges(0))).toBeTruthy();
+    expect(a.onDiscardLines).not.toHaveBeenCalled();
   });
 
   it('행 단위 전환 시 선택을 초기화하고 이전의 수정 쌍 선택을 사용할 수 있다', async () => {
@@ -893,12 +902,17 @@ describe('Diff 본문 전체 선택', () => {
       expect(selectedCount()).toBe(0);
     },
   );
-  it('키보드로 고른 쪽과 통합 보기의 표시 코드 전체를 복사한다', async () => {
+  it('누른 쪽과 통합 보기의 표시 코드 전체를 복사하고, 좌우 키는 쪽을 바꾸지 않는다 (J)', async () => {
     const view = render(<DiffView diff={diff('a')} path="a.txt" mode="split" />);
     await flush();
     const grid = screen.getByTestId('diff-scroller');
     grid.focus();
     fireEvent.keyDown(grid, { key: 'ArrowLeft' });
+    selectAllCode(grid);
+    expect(copiedCode(grid)).toHaveBeenCalledWith('text/plain', 'new-a');
+    const left = document.querySelector('[data-side="left"]');
+    if (!left) throw new Error('No code');
+    fireEvent.pointerDown(left);
     selectAllCode(grid);
     expect(copiedCode(grid)).toHaveBeenCalledWith('text/plain', 'old-a');
     view.rerender(<DiffView diff={diff('a')} path="a.txt" mode="unified" />);
@@ -963,5 +977,20 @@ describe('Diff 본문 전체 선택', () => {
     fireEvent.keyDown(grid, { key: 'a', metaKey: isMac(), ctrlKey: !isMac(), isComposing: true });
     fireEvent.keyDown(grid, { key: 'a', metaKey: isMac(), ctrlKey: !isMac(), altKey: true });
     expect(grid.hasAttribute('data-text-selected')).toBe(false);
+  });
+});
+
+describe('커서 줄과 줄 단위 포커스 테두리 없음 (J)', () => {
+  it('줄을 눌러도 포커스가 갈 곳은 본문 하나이고, 스타일에 커서 줄·줄 단위 포커스 규칙이 없다', async () => {
+    render(<DiffView diff={diff('a')} path="a.txt" mode="split" actions={actions()} />);
+    await flush();
+    const grid = screen.getByTestId('diff-scroller');
+    expect(grid.querySelector('[data-cursor]')).toBeNull();
+    expect(grid.hasAttribute('aria-activedescendant')).toBe(false);
+    expect(grid.querySelectorAll('[role="row"][tabindex]')).toHaveLength(0);
+    const code = grid.querySelector<HTMLElement>('[data-side="right"]');
+    expect(code?.closest('[tabindex]')).toBe(grid);
+    expect(diffCss).not.toContain('data-cursor');
+    expect(diffCss).not.toMatch(/\.(rowWrap|line|half)[^{]*:focus/);
   });
 });

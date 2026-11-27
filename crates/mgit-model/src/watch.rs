@@ -53,6 +53,9 @@ pub enum ChangeKind {
     Index,
     /// `HEAD`, `ORIG_HEAD`
     Head,
+    /// `FETCH_HEAD`. fetch 는 받은 것이 없어도 다시 쓴다. 실제로 ref 가 바뀌었으면 `Refs`·`PackedRefs`(reftable 이면
+    /// `reftable/` → `Refs`)가 함께 오므로 이것만으로는 ref 를 다시 읽지 않는다 (G6)
+    FetchHead,
     /// `refs/**`, `logs/**` 제외
     Refs,
     /// `packed-refs`

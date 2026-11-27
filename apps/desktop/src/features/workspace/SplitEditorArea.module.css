@@ -1,8 +1,9 @@
-/* 편집기 공간 (R3): 그룹 하나 또는 경계로 나눈 두 그룹 */
+/* 편집기 공간 (R3): 그룹 하나 또는 경계로 나눈 두 그룹. 편집기 영역(세로 flex)의 높이를 flex 로 채우고, 자신은 분할
+   묶음(Group, 라이브러리가 인라인 height:100% 를 넣는다) 하나만 담으므로 block 이다 — 세로 flex 안의 height:100% 는
+   WebKit 이 겹마다 하위 트리를 다시 배치한다 (bench/README.md "WebKit 배치 실험실") */
 .root {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
+  display: block;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
 }

@@ -40,11 +40,12 @@ vi.mock('../store', () => {
   return {
     useAppStore: (selector: (state: unknown) => unknown) => selector(state),
     getFolderStore: () => folder,
+    useFolder: (selector: (state: unknown) => unknown) => selector(folder.getState()),
     getSessionStore: () => undefined,
     getWorkspaceStore: () => ({ getState: () => ({ openDoc: fixture.doc }) }),
   };
 });
-vi.mock('../store/editor-drafts', () => ({ editorDrafts: () => [] }));
+vi.mock('../store/editor-drafts', () => ({ editorDrafts: () => [], editorDraftStamp: () => '' }));
 vi.mock('../store/file-editor-store', () => ({
   fileEditors: {
     subscribe: () => () => {},

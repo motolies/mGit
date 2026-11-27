@@ -18,6 +18,7 @@ import { str, useDialogs } from '../../components/use-dialogs';
 import { isLogEnter } from '../../layout/GitLogSplit';
 import {
   getSessionCache,
+  getSessionStore,
   headBranchOf,
   isDefaultGraphQuery,
   type LoadState,
@@ -72,6 +73,15 @@ export function isGraphEmpty(g: {
   return (
     g.totalRows === 0 && g.loadState === 'complete' && !g.hasChanges && isDefaultGraphQuery(g.query)
   );
+}
+
+/**
+ * 쓰기 동작이 도는지(busy)만 구독해 그 값으로 그린다 (D-3). 단추 비활성 같은 작은 조각만 다시 그리고, 그것을 품은 그래프 칸은
+ * 바쁨이 바뀌어도 다시 그리지 않는다
+ */
+function WhenBusy({ children }: { children: (busy: boolean) => ReactNode }) {
+  const busy = useSession((st) => st.busy);
+  return <>{children(busy)}</>;
 }
 
 /**
@@ -144,10 +154,17 @@ export function GraphPane() {
     dimOffHead: st.graphView.dimOffHead,
     avatars: st.avatars,
     requestAvatars: st.requestAvatars,
-    busy: st.busy,
+    // 쓰기 동작이 도는지(busy)는 구독하지 않는다 — 시작·끝마다 그래프 전체가 다시 그려졌다 (D-3). 메뉴·명령·흐름은 쓰는
+    // 그때 `busyNow()` 로 읽고, 화면에 보이는 비활성(필터 지우기)은 `WhenBusy` 가 따로 구독한다
     op: st.op,
     headBranch: headBranchOf(st.refs),
   }));
+  const sessionId = s.id;
+  /** 지금 쓰기 동작이 도는지 (그 세션 스토어에서 바로 읽는다) */
+  const busyNow = useCallback(
+    () => getSessionStore(sessionId)?.getState().busy ?? false,
+    [sessionId],
+  );
   const dialogs = useDialogs();
   const paneRef = useRef<HTMLDivElement>(null);
   const rewordLoading = useRef(false);
@@ -247,7 +264,7 @@ export function GraphPane() {
       useAppStore.getState().activeSessionId === selected.id &&
       rewordState.current.s.selectedCommit === oid &&
       !rewordState.current.s.range &&
-      !rewordState.current.s.busy &&
+      !busyNow() &&
       !rewordState.current.s.op &&
       rewordState.current.s.headBranch === selected.headBranch;
     try {
@@ -260,7 +277,7 @@ export function GraphPane() {
       await cache.ensureRange(index, index + 1);
       if (!active()) return;
       const row = cache.slice(index, index + 1).rows[0];
-      const reason = rewordDisabledReason(row, rewordState.current.s);
+      const reason = rewordDisabledReason(row, { ...rewordState.current.s, busy: busyNow() });
       if (reason) {
         useAppStore.getState().notice({ kind: 'info', title: reason });
         return;
@@ -272,20 +289,23 @@ export function GraphPane() {
     } finally {
       rewordLoading.current = false;
     }
-  }, [cache]);
+  }, [cache, busyNow]);
   useEffect(() => {
     const element = paneRef.current;
     if (!element) return;
     const single = () => !s.wipSelected && !s.range && s.selectedCommit !== null;
     const reason = () =>
       single()
-        ? rewordDisabledReason(rowsByOid.current.get(s.selectedCommit ?? ''), s)
+        ? rewordDisabledReason(rowsByOid.current.get(s.selectedCommit ?? ''), {
+            ...s,
+            busy: busyNow(),
+          })
         : S.shortcuts.rewordSelection;
     const unregister = [
       registerCommand('log.reword', element, {
         enabled: () =>
           single() &&
-          !s.busy &&
+          !busyNow() &&
           !s.op &&
           s.headBranch !== null &&
           rowsByOid.current.get(s.selectedCommit ?? '')?.inHead !== false &&
@@ -312,7 +332,7 @@ export function GraphPane() {
     return () => {
       for (const remove of unregister) remove();
     };
-  }, [s, editSelectedMessage]);
+  }, [s, editSelectedMessage, busyNow]);
   const wantAvatars = s.graphColumns.avatar ?? false;
   const onRowsRendered = useCallback(
     (rows: readonly (GraphRow | undefined)[]) => {
@@ -439,9 +459,13 @@ export function GraphPane() {
       <div className={styles.state}>
         <span>{S.folder.timeline.noMatch}</span>
         <span className={styles.conditions}>{conditions()}</span>
-        <Button disabled={s.busy} onClick={clearFilters}>
-          {S.folder.timeline.clearFilters}
-        </Button>
+        <WhenBusy>
+          {(busy) => (
+            <Button disabled={busy} onClick={clearFilters}>
+              {S.folder.timeline.clearFilters}
+            </Button>
+          )}
+        </WhenBusy>
       </div>
     );
   } else if (noMatch) {
@@ -456,14 +480,18 @@ export function GraphPane() {
           <span className={styles.noticeText} title={conditions()}>
             {S.folder.timeline.noMatch} · {conditions()}
           </span>
-          <button
-            type="button"
-            className={styles.noticeAction}
-            disabled={s.busy}
-            onClick={clearFilters}
-          >
-            {S.folder.timeline.clearFilters}
-          </button>
+          <WhenBusy>
+            {(busy) => (
+              <button
+                type="button"
+                className={styles.noticeAction}
+                disabled={busy}
+                onClick={clearFilters}
+              >
+                {S.folder.timeline.clearFilters}
+              </button>
+            )}
+          </WhenBusy>
         </div>
       ) : null;
     body = (
@@ -476,7 +504,7 @@ export function GraphPane() {
             const oid = el?.getAttribute('data-oid');
             return oid ? (rowsByOid.current.get(oid) ?? null) : null;
           }}
-          items={(row) => graphMenuItems(row, { ...s, remoteNames }, dialogs)}
+          items={(row) => graphMenuItems(row, { ...s, remoteNames, busy: busyNow() }, dialogs)}
         >
           <GraphView
             key={`${s.id}:${mountEpoch}`}

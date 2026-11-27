@@ -56,6 +56,45 @@ export const ko = {
     withLocal: '현재 로컬 내용과 비교',
     twoCommits: '선택한 커밋과 비교',
     file: '다른 브랜치/커밋과 이 파일 비교',
+    // 비교 화면 기준·대상 칸의 ref 선택 칸 (F4)
+    refPicker: {
+      search: (label: string) => `${label} 검색`,
+      placeholder: '브랜치·태그 검색 또는 커밋·식 입력',
+      typedValue: (text: string) => `입력한 값 사용: ${text}`,
+      typedAside: '커밋·식',
+      typedTitle: (text: string) => `직접 입력: ${text}`,
+      checking: '확인 중…',
+      notFound: (text: string) => `찾을 수 없는 ref입니다: ${text}`,
+      noMatch: '일치하는 ref가 없습니다. Enter로 입력한 값을 그대로 사용합니다.',
+      noRefs: 'ref가 없습니다. 커밋 해시나 식을 입력하세요.',
+      more: (n: number) => `외 ${n}개 — 검색어를 더 입력하세요`,
+      ambiguous: (fullName: string) =>
+        `같은 이름의 브랜치와 태그가 있습니다. Git은 ${fullName}을(를) 사용합니다.`,
+      headTitle: (detail: string) => `HEAD · ${detail}`,
+      current: '현재',
+      // 칸의 접근성 이름: "기준 (A): 로컬 브랜치 main" (종류가 없으면 이름만)
+      trigger: (label: string, kind: string, name: string) =>
+        kind ? `${label}: ${kind} ${name}` : `${label}: ${name}`,
+      // 목록 항목의 접근성 이름: "main, 로컬 브랜치, 현재 브랜치, 고른 값"
+      option: (name: string, kind: string, current: boolean, chosen: boolean) =>
+        [name, kind, current ? '현재 브랜치' : '', chosen ? '고른 값' : '']
+          .filter(Boolean)
+          .join(', '),
+      kind: {
+        local: '로컬 브랜치',
+        remote: '원격 브랜치',
+        tag: '태그',
+        head: 'HEAD',
+        commit: '커밋',
+        expression: '직접 입력',
+        workingTree: '',
+      },
+      sections: {
+        local: '로컬 브랜치',
+        remote: '원격 브랜치',
+        tags: '태그',
+      },
+    },
   },
 
   workspaceSearch: {
@@ -2126,8 +2165,9 @@ export const ko = {
     searchNext: '다음 검색 결과',
     searchPrevious: '이전 검색 결과',
     showDiff: '파일 변경 내용 열기',
-    nextHunk: '다음 변경 내용 구간',
-    previousHunk: '이전 변경 내용 구간',
+    // diff 의 다음/이전 변경 덩어리 (J — `@@` 구간이 아니라 빨강·초록 줄 묶음 단위, 동작 id 는 옛 이름 그대로)
+    nextHunk: '다음 변경',
+    previousHunk: '이전 변경',
     commitPrepare: '커밋 준비',
     commitExecute: '커밋 실행',
     stage: '스테이징',
@@ -2201,6 +2241,8 @@ export const ko = {
     profiles: '작성자 프로필…',
     sshKeys: 'SSH 키…',
     browseRemote: '원격 저장소 탐색…',
+    // 개발·테스트 프로필에서만 팔레트에 보이는 그리기 자가 진단 (반응성 G)
+    perfSelftest: '성능 자가 진단 실행 (개발용)',
   },
   credential: {
     title: {
@@ -2627,6 +2669,13 @@ export const ko = {
     lfsUnlock: '해제',
     lfsUnlockForce: '강제 해제',
     lfsLocksError: (e: string) => `잠금 조회 실패: ${e}`,
+  },
+  // 그리기 자가 진단의 화면 구석 표시와 팔레트 안내 (반응성 G, 개발·테스트 프로필만)
+  perfSelftest: {
+    waiting: '성능 자가 진단 — 앱이 잠잠해지길 기다리는 중',
+    running: '성능 자가 진단 중 — 창을 가리거나 조작하지 마세요',
+    done: '성능 자가 진단 끝남',
+    unavailable: '성능 기록기가 꺼져 있습니다',
   },
   shortcuts: {
     change: '변경',

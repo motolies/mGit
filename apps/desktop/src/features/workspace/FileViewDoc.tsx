@@ -1,8 +1,10 @@
 import type { FsEncoding, FsLineEnding, SessionId } from '@mgit/ipc';
 import { S } from '@mgit/ui';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState } from 'react';
 import { describeError, useActiveTab, useAppStore, useFileTree } from '../../store';
+import { useExplicitRefresh } from '../../store/explicit-refresh';
 import { type EditorOpenResult, encodingOf, fileEditors } from '../../store/file-editor-store';
+import type { FileTreeStore } from '../../store/file-tree';
 import {
   getFolderStore,
   getSessionStore,
@@ -10,6 +12,7 @@ import {
   refreshEditedFile,
 } from '../../store/session-registry';
 import { tabSpace } from '../../store/session-space';
+import { useEditorSelect } from '../../store/use-file-editors';
 import type { FileViewTarget } from '../../store/workspace-store';
 import { EncodingMenu, encodingName } from './EncodingMenu';
 import { type ExternalOpenAction, ExternalOpenBar, externalOpenActions } from './ExternalOpenBar';
@@ -19,16 +22,65 @@ import { type MixedLineEndingsFile, MixedLineEndingsView } from './MixedLineEndi
 
 export type { FileViewRepoTools } from './FileView';
 
-/** 저장 뒤 같은 파일을 보는 화면과 저장소·폴더의 상태·파일 트리를 다시 읽는다 (편집 저장·줄 끝 통일 공용) */
-function afterSave(session: SessionId, path: string): void {
+/**
+ * 저장 뒤 파일 감시가 Git 상태를 다시 읽기까지 기다리는 시간 (G1). 감시는 알림 감시가 안 되면 2초 폴링으로 바꾸므로 그 주기
+ * 와 묶음·status 읽기의 여유를 더했다. 이 안에 상태가 바뀌지 않으면 감시가 죽은 것으로 보고 전체 새로고침을 한다
+ */
+export const WATCH_GRACE_MS = 3000;
+
+/**
+ * 감시가 살아 있으면 저장 뒤 Git 상태는 감시가 다시 읽는다 — ref 를 다시 읽는 전체 새로고침은 하지 않는다 (G1). 감시가 죽은
+ * 경우의 대체 경로: 저장 전에 깨끗하던 파일(상태 목록에 없음)은 저장으로 상태가 바뀌어야 하므로, 정한 시간 안에 상태가 바뀌지
+ * 않으면 그때만 전체 새로고침을 한다. 이미 바뀐 파일은 다시 저장해도 상태가 그대로일 수 있어(코어는 바뀔 때만 알린다)
+ * 기다리지 않는다
+ */
+export function confirmSavedStatus(
+  store: NonNullable<ReturnType<typeof getSessionStore>>,
+  path: string,
+): void {
+  const before = store.getState().status;
+  if (before.entries.some((entry) => entry.path === path)) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const off = store.subscribe((now) => {
+    if (now.status === before) return;
+    off();
+    clearTimeout(timer);
+  });
+  timer = setTimeout(() => {
+    off();
+    void store.getState().refresh();
+  }, WATCH_GRACE_MS);
+}
+
+/** 그 파일이 든 디렉터리를 이미 나열해 두었으면 그 디렉터리 하나만 다시 읽는다 (크기·수정 시각, 트리 epoch 는 그대로) */
+function reloadParentDir(tree: FileTreeStore, path: string): void {
+  const slash = path.lastIndexOf('/');
+  const dir = slash < 0 ? '' : path.slice(0, slash);
+  const state = tree.getState();
+  if (state.dirs[dir]?.load.state === 'listed') state.retry(dir);
+}
+
+/**
+ * 저장 뒤 갱신 (G1). 같은 파일을 보는 diff 화면을 다시 읽고, 파일 트리는 그 파일의 디렉터리 하나만 다시 읽으며, Git 상태는
+ * 감시에 맡긴다(대체 경로는 `confirmSavedStatus`). 내용만 바뀐 저장은 목록이 바뀌지 않으므로 트리 전체를 다시 읽지 않는다 —
+ * 그래서 편집기의 Blame·HEAD 원문 재조회도 일어나지 않는다. `full` 이면(줄 끝 통일) 예전처럼 상태·트리 전체를 다시 읽는다
+ */
+function afterSave(session: SessionId, path: string, { full = false } = {}): void {
   void refreshEditedFile(session, path);
-  const repo = getSessionStore(session)?.getState();
-  if (repo) {
-    void repo.refresh();
-    void repo.reloadFiles();
-  }
+  const repoStore = getSessionStore(session);
+  const repo = repoStore?.getState();
   const folder = getFolderStore(session)?.getState();
-  if (folder) void folder.fileTree.getState().reload();
+  if (full) {
+    if (repo) {
+      void repo.refresh();
+      void repo.reloadFiles();
+    }
+    if (folder) void folder.fileTree.getState().reload();
+    return;
+  }
+  if (repoStore) confirmSavedStatus(repoStore, path);
+  const tree = repo?.fileTree ?? folder?.fileTree;
+  if (tree) reloadParentDir(tree, path);
 }
 
 /** 일반 파일을 공유 문서로 열고 첫 수정 시 고정한다. 저장 결과는 기존 파일·Git 갱신 경로로 전달한다. */
@@ -47,10 +99,24 @@ export function FileViewDoc({
   );
   const openExternal = useAppStore((s) => s.openExternal);
   const epoch = useFileTree((tree) => tree.epoch) ?? 0;
+  // 편집기의 Blame·HEAD 원문 재조회와 미리보기 그림 캐시 교체는 명시적 새로고침에만 한다. 트리 epoch(창 포커스·ref 변경 등)는
+  // 이 문서를 다시 여는 신호로만 쓴다 (G1)
+  const explicitRefresh = useExplicitRefresh(session);
   const [result, setResult] = useState<EditorOpenResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
+  // 별칭이 가리키는 문서(이동·덮어쓰기로 합쳐지면 바뀐다)와 고른 인코딩이 바뀔 때만 다시 그린다. 문서 안의 변화는 편집기가
+  // 그 문서만 구독해 받는다 (F1)
+  const aliased = useEditorSelect(() =>
+    session === undefined ? undefined : fileEditors.get(session, doc.path),
+  );
+  const chosen = useEditorSelect(
+    () => session !== undefined && fileEditors.encodingChoice(session, doc.path) !== null,
+  );
+  // 이동(remap)은 같은 문서 객체의 디스크 식별자를 바꾼다 — 그때 편집기를 새로 붙이도록(key) 식별자도 본다
+  useEditorSelect(() =>
+    session === undefined ? undefined : fileEditors.get(session, doc.path)?.fileKey,
+  );
 
   // 화면을 벗어나도 타이머와 문서는 저장소에 남는다. 닫기 처리가 끝난 뒤에만 별칭을 해제한다.
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt와 epoch는 요청 실패와 디스크 변경 뒤 재조회 신호다.
@@ -95,7 +161,8 @@ export function FileViewDoc({
           : await client.fsNormalizeLineEndings(session, doc.path, file.revision, target, encoding);
       if (saved.kind === 'saved') {
         getWorkspaceStore(session)?.getState().pinDoc(doc.id);
-        afterSave(session, doc.path);
+        // 줄 끝 통일은 다시 읽어 편집기로 여는 큰 바꿈이라 예전처럼 상태·트리 전체를 다시 읽는다
+        afterSave(session, doc.path, { full: true });
       }
       if (saved.kind !== 'failed') setAttempt((value) => value + 1);
       if (saved.kind === 'saved') return null;
@@ -114,14 +181,13 @@ export function FileViewDoc({
     setResult(null);
     setAttempt((value) => value + 1);
   };
-  const chosen = session !== undefined && fileEditors.encodingChoice(session, doc.path) !== null;
   /** 편집기로 열지 못한 텍스트 파일의 머리줄 인코딩 단추 */
   const encodingMenu = (encoding: FsEncoding | null, guessed: boolean) => (
     <EncodingMenu encoding={encoding} guessed={guessed} chosen={chosen} onChoose={chooseEncoding} />
   );
 
   // 이동·덮어쓰기에서 공유 별칭이 합쳐지면 이미 열린 대상 탭도 최신 문서를 사용한다.
-  const current = session === undefined ? result : (fileEditors.get(session, doc.path) ?? result);
+  const current = session === undefined ? result : (aliased ?? result);
   if (current && 'fileKey' in current)
     return session === undefined ? null : (
       <FileEditor
@@ -130,7 +196,7 @@ export function FileViewDoc({
         repoTools={repoTools}
         repoPath={doc.repoPath}
         source={{ client, session, path: doc.path }}
-        refreshEpoch={epoch}
+        refreshEpoch={explicitRefresh}
         onEncoding={chooseEncoding}
       />
     );

@@ -729,9 +729,16 @@
         (q(`[data-panel="${detail}"]`)?.textContent ?? '').includes(oid.slice(0, 7)),
     });
 
-  /** 툴바 탭 막대에서 경로가 `path` 인 탭이 활성인지 (탭 감싸개의 CSS 모듈 클래스 이름에 `tabActive` 가 든다) */
-  const tabActive = (path) =>
-    (sessionTab(path)?.parentElement?.className ?? '').includes('tabActive');
+  /**
+   * 툴바 탭 막대에서 경로가 `path` 인 탭이 활성인지. W29 의 틀은 탭 감싸개의 CSS 모듈 클래스 이름에 `tabActive` 가 들고,
+   * 지금 틀(`[role="tablist"]` 의 단추, 2026-11-27 확인)은 `aria-selected`
+   */
+  const tabActive = (path) => {
+    const tab = sessionTab(path);
+    if (!tab) return false;
+    if (tab.hasAttribute('aria-selected')) return tab.getAttribute('aria-selected') === 'true';
+    return (tab.parentElement?.className ?? '').includes('tabActive');
+  };
 
   /**
    * 지금 로그 칸의 첫 그래프 행을 잡아 두고, 그 행이 DOM 에서 빠졌는지 묻는 함수를 준다. W21 뒤 폴더·저장소 탭이 같은
@@ -760,7 +767,11 @@
    * 때까지. `back` 탭과 번갈아 `n` 번씩 잰다. 끝 조건은 `switchedTo`(W29), `strict: false` 면 W18 ② 처럼 `ready()` 만
    */
   async function tabSwitch({ to, toReady, back, backReady, n = 5, strict = true }) {
-    const tab = (path) => need(`nav[aria-label="repositories"] button[title="${path}"]`);
+    const tab = (path) => {
+      const el = sessionTab(path);
+      if (!el) throw new Error(`탭 없음: ${path}`);
+      return el;
+    };
     const go = [];
     const ret = [];
     for (let i = 0; i < n; i += 1) {
@@ -781,8 +792,19 @@
   const folderTabReady = () =>
     q('[data-panel="project"] [role="treeitem"]') &&
     q('[data-panel="git-log"] [data-testid="graph-scroller"] [data-oid]');
-  /** 툴바 탭 막대에서 경로가 `path` 인 탭 */
-  const sessionTab = (path) => q(`nav[aria-label="repositories"] button[title="${path}"]`);
+  /**
+   * 툴바 탭 막대에서 경로가 `path` 인 탭. W29 의 틀은 `nav[aria-label="repositories"]` 의 `title` 이 경로, 지금 틀은
+   * `[role="tablist"]` 단추의 `title` 이 "폴더: <경로>"·"Git 저장소: <경로>" 꼴이다 (2026-11-27 확인)
+   */
+  function sessionTab(path) {
+    return (
+      q(`nav[aria-label="repositories"] button[title="${path}"]`) ??
+      qa('[role="tablist"] button[title]').find((b) =>
+        (b.getAttribute('title') ?? '').endsWith(`: ${path}`),
+      ) ??
+      null
+    );
+  }
 
   /**
    * 폴더 탭에서 저장소 탭 열기 (첫 표시): 프로젝트 트리의 저장소 행 우클릭 → "저장소 탭으로 열기" 를 눌러 저장소 탭의
@@ -993,7 +1015,949 @@
     return out;
   }
 
+  // ── 반응성 기준선 (2026-11-27, 계획 `plan/perf-responsiveness.md` M3) ─────────────────────────────────────
+  // IPC 수는 앱의 성능 기록기(M1, 목 빌드에서는 메모리 모드 `window.__mgitPerf`)의 `ipc` 줄로 센다 — 목 메서드 하나가 한 줄이다.
+  // 편집기 저장소 알림 수는 같은 기록기의 `stores` 줄(`fileEditors`)이다. 화면 문구로 요소를 찾으므로 `mgit.language = 'ko'` 로 잰다.
+
+  /**
+   * 구간의 IPC·저장소 알림·코어 이벤트를 센다: 만들 때 기록기의 메모리를 비우고, `stop()` 이 구간을 닫아 명령별 수(`ipc`),
+   * 합계(`total`), 순서(`order` — 구간 시작부터 ms·이름·소요 ms), 저장소 알림(`stores`), 이벤트(`events`)를 준다. 기록기가
+   * 없으면(`mgit.perf = '0'`) 목 계수기 `__mgitMockCalls`(일부 메서드만)의 차이를 `ipc` 로 준다
+   */
+  function ipcWindow() {
+    const P = window.__mgitPerf;
+    const mock0 = { ...(globalThis.__mgitMockCalls ?? {}) };
+    P?.clear();
+    const t0 = performance.now();
+    return {
+      stop() {
+        if (!P) {
+          const ipc = {};
+          for (const [name, n] of Object.entries(globalThis.__mgitMockCalls ?? {})) {
+            if (n - (mock0[name] ?? 0) > 0) ipc[name] = n - (mock0[name] ?? 0);
+          }
+          return {
+            source: '__mgitMockCalls',
+            ipc,
+            total: Object.values(ipc).reduce((s, n) => s + n, 0),
+          };
+        }
+        P.cut();
+        const entries = P.entries();
+        const ipc = {};
+        const stores = {};
+        const events = {};
+        const order = [];
+        for (const e of [...entries].sort((a, b) => a.t - b.t)) {
+          if (e.kind === 'ipc') {
+            ipc[e.name] = (ipc[e.name] ?? 0) + 1;
+            order.push([round(e.t - t0), e.name, e.ms]);
+          } else if (e.kind === 'stores' || e.kind === 'events') {
+            const into = e.kind === 'stores' ? stores : events;
+            for (const [key, n] of Object.entries(e.counts)) into[key] = (into[key] ?? 0) + n;
+          }
+        }
+        return { source: '__mgitPerf', ipc, total: order.length, order, stores, events };
+      },
+    };
+  }
+
+  /**
+   * canvas 글자 폭 측정 호출 수: `measureText`(글자 하나하나)와 `getContext`(트리 폭 계산 효과가 한 번 돌 때마다 캔버스를
+   * 하나 만든다)를 원형에서 감싸 센다. 어느 트리의 것인지는 캔버스마다 처음 잰 글자(그 트리의 첫 행)로 묶는다(`byTree`:
+   * 표본 → 측정 수·캔버스 수). `stop()` 이 되돌리고 수를 준다
+   */
+  function canvasCounter() {
+    const protos = [
+      globalThis.CanvasRenderingContext2D?.prototype,
+      globalThis.OffscreenCanvasRenderingContext2D?.prototype,
+    ].filter(Boolean);
+    const canvas = globalThis.HTMLCanvasElement?.prototype;
+    const savedMeasure = protos.map((p) => p.measureText);
+    const savedContext = canvas?.getContext;
+    const out = { measureText: 0, getContext: 0 };
+    const perCanvas = new Map();
+    protos.forEach((p, i) => {
+      p.measureText = function (...args) {
+        out.measureText += 1;
+        const at = perCanvas.get(this) ?? { n: 0, sample: String(args[0]).slice(0, 40) };
+        at.n += 1;
+        perCanvas.set(this, at);
+        return savedMeasure[i].apply(this, args);
+      };
+    });
+    if (canvas) {
+      canvas.getContext = function (...args) {
+        out.getContext += 1;
+        return savedContext.apply(this, args);
+      };
+    }
+    return {
+      stop() {
+        protos.forEach((p, i) => {
+          p.measureText = savedMeasure[i];
+        });
+        if (canvas) canvas.getContext = savedContext;
+        // 같은 트리는 효과가 돌 때마다 새 캔버스를 쓰지만 처음 재는 글자(첫 행)가 같다 — 표본으로 묶는다
+        const byTree = {};
+        for (const { n, sample } of perCanvas.values()) {
+          byTree[sample] ??= { measureText: 0, canvases: 0 };
+          byTree[sample].measureText += n;
+          byTree[sample].canvases += 1;
+        }
+        return { ...out, byTree };
+      },
+    };
+  }
+
+  /**
+   * 동작 하나의 비용: 시간(`time()`), IPC(`ipcWindow`), canvas 측정 수, (렌더 계수기를 걸었으면) 영역별 렌더. `settle` ms 를 더
+   * 기다려 동작 뒤에 따라붙는 호출까지 센다 (시간은 끝 조건까지만)
+   */
+  async function cost(action, { until, timeout, settle = 0 } = {}) {
+    const w = ipcWindow();
+    const c = canvasCounter();
+    if (renders.installed) renders.start();
+    const timing = await time(action, until, timeout);
+    if (settle > 0) await pause(settle);
+    await afterPaint();
+    const out = { ...timing, ...c.stop(), ipc: w.stop() };
+    if (renders.installed) out.renders = renders.stop();
+    return out;
+  }
+
+  /** 렌더 결과를 영역 → 컴포넌트 수로 줄인다 (표에 적기 좋게) */
+  const regionComponents = (r) =>
+    r
+      ? Object.fromEntries(
+          Object.entries(r.regions)
+            .map(([k, v]) => [k, v.components])
+            .filter(([, n]) => n > 0)
+            .sort((a, b) => b[1] - a[1]),
+        )
+      : null;
+
+  /**
+   * 프로젝트 트리에서 폴더 기준 상대 경로가 그것인 행 (화면에 그려진 행 중에서). 이름 칸 `span[title]` 의 첫 줄이 경로다(둘째
+   * 줄부터는 "안에 변경된 파일이 있습니다." 같은 안내)
+   */
+  const projectPath = (path) =>
+    qa('[data-panel="project"] [role="treeitem"]').find((r) =>
+      qa('span[title]', r).some((s) => (s.getAttribute('title') ?? '').split('\n')[0] === path),
+    );
+
+  /** 경로의 조상 디렉터리(첫 칸은 저장소 행)를 차례로 펼쳐 그 파일 행이 보이게 한다 */
+  async function revealProjectFile(path) {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length && !projectPath(path); i += 1) {
+      const dir = parts.slice(0, i).join('/');
+      const row = await waitFor(() => (i === 1 ? projectRow(dir) : projectPath(dir)));
+      if (row.getAttribute('aria-expanded') !== 'true') click(row);
+      await waitFor(() => {
+        const at = i === 1 ? projectRow(dir) : projectPath(dir);
+        return at?.getAttribute('aria-expanded') === 'true';
+      });
+      await afterPaint();
+    }
+    const row = await waitFor(() => projectPath(path));
+    row.scrollIntoView({ block: 'center' });
+    await afterPaint();
+    return projectPath(path);
+  }
+
+  /** 편집기 본문 (CodeMirror 의 편집 가능한 요소) */
+  const editorContent = () => q('[data-panel="editor"] [data-testid="file-editor"] .cm-content');
+
+  /** 프로젝트 트리에서 파일을 눌러 편집기로 연다. 열린 뒤 `settle` ms(첫 주기 검사·주석 조회가 지나가도록) 기다린다 */
+  async function openEditorFile(path, { settle = 2500 } = {}) {
+    click(await revealProjectFile(path));
+    await waitFor(editorContent, 30_000);
+    await pause(settle);
+    return editorContent();
+  }
+
+  /** 편집기에 글자를 넣는다 (포커스한 편집 영역에 `insertText` — 실제 입력처럼 beforeinput·input 을 거친다) */
+  function insertText(text) {
+    const content = editorContent();
+    content.focus();
+    document.execCommand('insertText', false, text);
+  }
+
+  /** 행의 우클릭 메뉴를 열어 그 글자의 항목을 준다 */
+  async function contextItem(row, label) {
+    const box = row.getBoundingClientRect();
+    row.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: box.x + 20,
+        clientY: box.y + 5,
+      }),
+    );
+    const item = await waitFor(() =>
+      qa('[role="menuitem"]').find((m) => m.textContent.trim().startsWith(label)),
+    );
+    await afterPaint();
+    return item;
+  }
+
+  /**
+   * 비교 화면(편집기 고정 탭)의 뿌리. 머리의 기준 칸이 옛 입력칸(`input[aria-label="기준 (A)"]`)이거나 ref 선택 칸(F4 — 접근성
+   * 이름이 "기준 (A): …" 인 단추)이다
+   */
+  const comparisonRoot = () =>
+    (
+      q('input[aria-label="기준 (A)"]') ??
+      qa('button[aria-haspopup="dialog"]').find((b) =>
+        (b.getAttribute('aria-label') ?? '').startsWith('기준 (A):'),
+      )
+    )?.closest('section') ?? null;
+  /** 요소 아래에 그 글자가 화면에 보이게 있는지 (접힌 `<details>` 안처럼 그려지지 않은 글자는 뺀다) */
+  function visibleText(root, text) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const el = node.parentElement;
+      // 접힌 <details> 의 내용은 Chromium 에서 사각형은 있지만 보이지 않는다 — checkVisibility 로 가린다
+      if (
+        node.nodeValue.includes(text) &&
+        el?.getClientRects().length &&
+        (el.checkVisibility?.({ contentVisibilityAuto: true }) ?? true)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 비교 화면에 파일 목록과 diff 칸이 그려졌는지: 파일 트리 행이 있고, diff 칸(`diff-scroller`)이 붙었고, 보이는
+   * "불러오는 중…" 이 없다 (diff 칸의 행은 가상 스크롤이라 칸이 낮으면 그려지지 않을 수 있어 보지 않는다)
+   */
+  const comparisonShown = () => {
+    const root = comparisonRoot();
+    return (
+      root &&
+      q('[role="tree"] [role="treeitem"]', root) &&
+      q('[data-testid="diff-scroller"]', root) &&
+      !visibleText(root, '불러오는 중…')
+    );
+  };
+
+  /**
+   * 요소 아래의 DOM 변화를 센다: `busy()` 가 거짓 → 참으로 바뀐 횟수(로딩 표시가 켜진 횟수)와 변화 기록 수(노드 추가·삭제,
+   * 속성 이름별 변경, 글자 변경 `#text` — 다시 그려 깜빡였는지). `stop()` 이 수를 준다
+   */
+  function domWatch(root, busy) {
+    let was = Boolean(busy());
+    const out = { loadingShown: 0, mutations: 0, addedNodes: 0, removedNodes: 0, attributes: {} };
+    const observer = new MutationObserver((records) => {
+      out.mutations += records.length;
+      for (const rec of records) {
+        out.addedNodes += rec.addedNodes.length;
+        out.removedNodes += rec.removedNodes.length;
+        if (rec.type === 'attributes')
+          out.attributes[rec.attributeName] = (out.attributes[rec.attributeName] ?? 0) + 1;
+        else if (rec.type === 'characterData')
+          out.attributes['#text'] = (out.attributes['#text'] ?? 0) + 1;
+      }
+      const now = Boolean(busy());
+      if (now && !was) out.loadingShown += 1;
+      was = now;
+    });
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+    });
+    return {
+      stop() {
+        observer.disconnect();
+        return { ...out };
+      },
+    };
+  }
+
+  /** 구간 동안 아무것도 하지 않고 기다린다 (IPC·canvas·렌더·DOM 변화를 센다) */
+  async function idle(ms, { watchRoot, busy } = {}) {
+    const dom = watchRoot ? domWatch(watchRoot, busy ?? (() => false)) : null;
+    const out = await cost(() => pause(ms));
+    if (dom) out.dom = dom.stop();
+    delete out.longTasks;
+    delete out.longest;
+    return out;
+  }
+
+  /** Project 트리의 최상위 디렉터리들을 펼친다 (이미 펼쳤으면 그대로). 펼친 뒤 0.5초 쉰다 */
+  async function expandProjectDirs(dirs) {
+    for (const dir of dirs) {
+      const row = projectRow(dir);
+      if (row && row.getAttribute('aria-expanded') !== 'true') {
+        click(row);
+        await waitFor(() => projectRow(dir)?.getAttribute('aria-expanded') === 'true');
+        await afterPaint();
+      }
+    }
+    if (dirs.length > 0) await pause(500);
+  }
+
+  /**
+   * 편집기에 파일 하나를 연 채 `wait` ms 대기 (R1: 2초 주기 검사가 전역 버전을 올려 다시 그리는지). `expand` 의 최상위
+   * 디렉터리를 먼저 펼친다
+   */
+  async function editorIdle({ file = 'api-gateway/README.md', wait = 6000, expand = [] } = {}) {
+    await expandProjectDirs(expand);
+    await openEditorFile(file);
+    const out = await idle(wait);
+    out.renderRegions = regionComponents(out.renders);
+    return out;
+  }
+
+  /**
+   * 편집기에 글자 하나씩 `n` 번 (R1·R4): 입력 → 다음 그리기, 입력마다 영역별 렌더·canvas 측정·IPC. 입력 사이에 `gap` ms
+   * 쉰다 (자동 저장은 마지막 입력 1초 뒤라 구간에 들지 않는다). `expand` 의 최상위 디렉터리를 먼저 펼친다(Project 트리 행 늘리기)
+   */
+  async function editorType({
+    file = 'api-gateway/README.md',
+    n = 10,
+    char = 'x',
+    gap = 100,
+    expand = [],
+  } = {}) {
+    await expandProjectDirs(expand);
+    await openEditorFile(file);
+    const runs = [];
+    for (let i = 0; i < n; i += 1) {
+      runs.push(await cost(() => insertText(char)));
+      await pause(gap);
+    }
+    const sum = (pick) => runs.reduce((s, r) => s + pick(r), 0);
+    const regions = {};
+    for (const r of runs) {
+      for (const [k, v] of Object.entries(regionComponents(r.renders) ?? {})) {
+        regions[k] = (regions[k] ?? 0) + v;
+      }
+    }
+    const ipc = {};
+    for (const r of runs) {
+      for (const [k, v] of Object.entries(r.ipc.ipc)) ipc[k] = (ipc[k] ?? 0) + v;
+    }
+    return {
+      ...summarizeRuns(runs),
+      measureTextPerInput: stats(runs.map((r) => r.measureText)),
+      getContextPerInput: stats(runs.map((r) => r.getContext)),
+      byTreeLast: runs.at(-1)?.byTree,
+      commitsPerInput: renders.installed ? stats(runs.map((r) => r.renders.commits)) : null,
+      renderRegionsTotal: renders.installed ? regions : null,
+      ipcTotal: ipc,
+      ipcPerInput: stats(runs.map((r) => r.ipc.total ?? 0)),
+      measureTextTotal: sum((r) => r.measureText),
+    };
+  }
+
+  /**
+   * 글자 하나 입력 → 자동 저장이 끝날 때까지 (R6): 저장(`fsSaveFile`) 뒤 `quiet` ms 동안 새 IPC 가 없으면 끝. 저장 한 번에
+   * 따라붙는 IPC 수·종류·순서, 렌더, canvas 측정
+   */
+  async function editorSave({ file = 'api-gateway/README.md', char = 'x', quiet = 800 } = {}) {
+    await openEditorFile(file);
+    const P = window.__mgitPerf;
+    if (!P) throw new Error('성능 기록기(__mgitPerf)가 없다 — mgit.perf 를 지웠는지 본다');
+    const lastIpc = () =>
+      P.entries().reduce((t, e) => (e.kind === 'ipc' ? Math.max(t, e.t + e.ms) : t), 0);
+    const saved = () => P.entries().some((e) => e.kind === 'ipc' && e.name === 'fsSaveFile');
+    const t0 = performance.now();
+    const out = await cost(() => insertText(char), {
+      until: () => saved() && performance.now() - Math.max(lastIpc(), t0) > quiet,
+      timeout: 15_000,
+    });
+    out.untilQuietMs = out.ms;
+    out.renderRegions = regionComponents(out.renders);
+    return out;
+  }
+
+  /**
+   * 파일의 "다른 브랜치/커밋과 이 파일 비교"(HEAD ↔ 로컬 내용)로 비교 창을 연 채 `wait` ms (R2). `withEditor` 면 먼저 그 파일을
+   * 편집기에 연다(편집기 메뉴로 비교를 여는 실제 흐름 — 편집기 저장소의 주기 알림이 비교의 재조회 신호다). 열기 시간·IPC 와
+   * 대기 구간의 IPC(`compareLocalFiles`·`compareLocalDocument`)·렌더·로딩 표시 횟수·DOM 변화. 기본 파일은 목 장면에서 작업
+   * 트리 변경이 있는 파일이다. 목은 그 원문을 HEAD 와 같게 두므로 파일 하나만 비교하는 화면(F2 뒤)은 "차이 없음"이 된다 —
+   * `edit` 면 먼저 한 글자 고쳐 자동 저장까지 기다려 내용 차이를 만든다(`withEditor` 가 아니면 그 뒤 편집기 탭을 닫는다)
+   */
+  async function compareLocalIdle({
+    file = 'auth-service/src/main/resources/config/rate-limit.yaml',
+    wait = 6000,
+    withEditor = true,
+    edit = false,
+    settle = 2500,
+  } = {}) {
+    if (withEditor || edit) await openEditorFile(file);
+    if (edit) {
+      // 목은 작업 트리 변경의 원문을 HEAD 와 같게 두므로, 내용 차이를 만들려면 한 글자 고쳐 저장한다
+      const t0 = performance.now();
+      insertText('x');
+      await waitSaved(t0);
+      if (!withEditor) {
+        const name = file.split('/').pop();
+        click(need(`button[aria-label="${name} 닫기"]`));
+        await waitFor(() => !editorContent());
+        await afterPaint();
+      }
+    }
+    if (!withEditor) await revealProjectFile(file);
+    const item = await contextItem(projectPath(file), '다른 브랜치/커밋과 이 파일 비교');
+    const open = await cost(() => click(item), { until: comparisonShown, timeout: 30_000 });
+    await pause(settle);
+    const root = comparisonRoot();
+    const out = await idle(wait, {
+      watchRoot: root,
+      busy: () => visibleText(root, '불러오는 중…'),
+    });
+    out.renderRegions = regionComponents(out.renders);
+    return {
+      withEditor,
+      edit,
+      open: { ms: open.ms, longTasks: open.longTasks, ipc: open.ipc },
+      idle: out,
+    };
+  }
+
+  /**
+   * 시각 `t0` 뒤 자동 저장(`fsSaveFile`)이 나가고 `quiet` ms 동안 새 IPC 가 없을 때까지 기다린다 (성능 기록기 필요)
+   */
+  async function waitSaved(t0, { quiet = 800, timeout = 15_000 } = {}) {
+    const P = window.__mgitPerf;
+    if (!P) throw new Error('성능 기록기(__mgitPerf)가 없다 — mgit.perf 를 지웠는지 본다');
+    const ipc = () => P.entries().filter((e) => e.kind === 'ipc' && e.t >= t0 - 1);
+    await waitFor(() => {
+      const calls = ipc();
+      if (!calls.some((e) => e.name === 'fsSaveFile')) return false;
+      const last = calls.reduce((t, e) => Math.max(t, e.t + e.ms), 0);
+      return performance.now() - last > quiet;
+    }, timeout);
+  }
+
+  /**
+   * 브랜치 ↔ 브랜치 비교 열기 (R7): 폴더 장면이면 프로젝트 트리의 저장소 행에서 저장소 탭을 열고, 브랜치 트리의 `branch` 잎
+   * 우클릭 → "현재 브랜치와 … 비교…" → 파일 목록과 첫 diff 가 그려질 때까지. 시간, IPC 수·순서, 렌더
+   */
+  async function compareOpen({ repo = 'api-gateway', path, branch = 'main' } = {}) {
+    const at = path ?? `/mock/acme-platform/${repo}`;
+    if (!tabActive(at)) {
+      if (!sessionTab(at)) {
+        const item = await contextItem(projectRow(repo), '저장소 탭으로 열기');
+        click(item);
+      } else {
+        click(sessionTab(at));
+      }
+      await waitFor(() => tabActive(at) && repoTabReady()(), 60_000);
+      await waitFor(() => qa('[data-panel="git-branches"] [role="treeitem"]').length > 2);
+      await pause(1500);
+    }
+    const leaves = qa('[data-panel="git-branches"] [role="treeitem"]').filter((r) =>
+      (r.getAttribute('data-node-id') ?? '').startsWith('ref:refs/heads/'),
+    );
+    const leaf =
+      (branch &&
+        leaves.find((r) => r.getAttribute('data-node-id') === `ref:refs/heads/${branch}`)) ??
+      leaves.find(
+        (r) => !r.querySelector('[aria-label*="HEAD"]') && !r.textContent.includes('HEAD'),
+      ) ??
+      leaves[1];
+    if (!leaf) throw new Error('비교할 로컬 브랜치 잎이 없다');
+    const item = await contextItem(leaf, '현재 브랜치와');
+    const label = item.textContent.trim();
+    const out = await cost(() => click(item), {
+      until: comparisonShown,
+      timeout: 30_000,
+      settle: 500,
+    });
+    out.menu = label;
+    out.files = qa('[role="tree"] [role="treeitem"]', comparisonRoot()).length;
+    out.renderRegions = regionComponents(out.renders);
+    return out;
+  }
+
+  /**
+   * Project 트리 폭 측정 (R4): `dirs` 를 펼쳐(기본 `logs` — 항목 `dirEntries`) 행을 늘린 뒤, 트리 밖 동작마다 canvas
+   * 측정 수를 센다 — 로그 행 고르기 `n` 번, 창 포커스(전체 갱신) 한 번, (`file` 을 주면) 편집기 글자 하나. 행 수는 가상
+   * 스크롤 높이 / 행 높이로 어림한다
+   */
+  async function projectTreeWidth({ n = 5, dirs = ['logs', 'api-gateway', 'docs'], file } = {}) {
+    await expandProjectDirs(dirs);
+    const tree = need('[data-panel="project"] [role="tree"]');
+    const rowHeight =
+      q('[data-panel="project"] [role="treeitem"]')?.getBoundingClientRect().height || 22;
+    const out = { rows: Math.round(tree.scrollHeight / rowHeight), rowHeight: round(rowHeight) };
+    const logRows = () => qa('[data-panel="git-log"] [data-oid]');
+    const selects = [];
+    for (let i = 0; i < n; i += 1) {
+      const row = logRows()[2 + i];
+      const oid = row.getAttribute('data-oid');
+      selects.push(await cost(() => click(row), { until: () => detailShows(oid), settle: 300 }));
+    }
+    out.logSelect = {
+      ...summarizeRuns(selects),
+      measureText: stats(selects.map((r) => r.measureText)),
+      getContext: stats(selects.map((r) => r.getContext)),
+      byTreeLast: selects.at(-1)?.byTree,
+      projectRenders: renders.installed
+        ? stats(selects.map((r) => r.renders.regions.project?.components ?? 0))
+        : null,
+    };
+    const focus = await cost(() => window.dispatchEvent(new Event('focus')), { settle: 1000 });
+    out.windowFocus = {
+      ms: focus.ms,
+      measureText: focus.measureText,
+      getContext: focus.getContext,
+      byTree: focus.byTree,
+      ipc: focus.ipc.ipc,
+      renderRegions: regionComponents(focus.renders),
+    };
+    if (file) {
+      await openEditorFile(file);
+      const typed = await cost(() => insertText('x'));
+      out.editorChar = {
+        ms: typed.ms,
+        measureText: typed.measureText,
+        getContext: typed.getContext,
+        byTree: typed.byTree,
+        renderRegions: regionComponents(typed.renders),
+      };
+    }
+    return out;
+  }
+
+  /**
+   * Project 트리에서 ↓ 로 최상위 행을 옮기며 저장소 행을 지날 때 (범위 세션이 바뀐다): 루트에서 시작해 `n` 번, 키마다 시간·
+   * 렌더·IPC·canvas 측정. 고른 행 이름을 함께 준다
+   */
+  async function projectRepoArrow({ n = 8, settle = 300 } = {}) {
+    const tree = need('[data-panel="project"] [role="tree"]');
+    tree.focus();
+    key(tree, 'Home');
+    await afterPaint();
+    await pause(300);
+    const selected = () =>
+      q('[data-panel="project"] [role="treeitem"][aria-selected="true"] span[title]')
+        ?.textContent ?? null;
+    const runs = [];
+    for (let i = 0; i < n; i += 1) {
+      const r = await cost(() => key(tree, 'ArrowDown'), { settle });
+      runs.push({
+        to: selected(),
+        ms: r.ms,
+        longTasks: r.longTasks,
+        measureText: r.measureText,
+        ipc: r.ipc.total,
+        ipcNames: r.ipc.ipc,
+        renderRegions: regionComponents(r.renders),
+      });
+    }
+    return runs;
+  }
+
+  /**
+   * 상단 탭 전환 비용 (워크스페이스가 다시 붙는다): `to` ↔ `back` 을 `n` 번씩, 전환마다 시간·렌더·IPC·canvas 측정. 끝 조건은
+   * `tabSwitch` 와 같은 `switchedTo`
+   */
+  async function tabSwitchCost({ to, toReady, back, backReady, n = 3, settle = 500 }) {
+    const tab = (path) => {
+      const el = sessionTab(path);
+      if (!el) throw new Error(`탭 없음: ${path}`);
+      return el;
+    };
+    const runs = { to: [], back: [] };
+    for (let i = 0; i < n; i += 1) {
+      for (const [dir, path, ready] of [
+        ['to', to, toReady],
+        ['back', back, backReady],
+      ]) {
+        const r = await cost(() => click(tab(path)), { until: switchedTo(path, ready), settle });
+        runs[dir].push({
+          ms: r.ms,
+          longTasks: r.longTasks,
+          measureText: r.measureText,
+          ipc: r.ipc.ipc,
+          renderRegions: regionComponents(r.renders),
+        });
+      }
+    }
+    return runs;
+  }
+
+  // ── 2라운드 재측정 (2026-11-27, G1·G2·G5) ─────────────────────────────────────────────────────────────
+
+  /** 왼쪽 띠의 도구 창 단추 (접근성 이름이 그것인 첫 단추 — 프로젝트·커밋·Git·터미널) */
+  const toolButton = (name) =>
+    qa('button').find(
+      (b) => b.getAttribute('aria-label') === name && b.getBoundingClientRect().left < 40,
+    );
+
+  /** 아래 Git 도구 창 닫기·열기 (`n` 번): 띠의 Git 단추로 토글하며 각각 시간·렌더·IPC */
+  async function dockToggle({ n = 3, settle = 300 } = {}) {
+    const runs = { close: [], open: [] };
+    const shown = () => q('[data-panel="git-log"]');
+    for (let i = 0; i < n; i += 1) {
+      for (const [dir, until] of [
+        ['close', () => !shown()],
+        ['open', () => shown()],
+      ]) {
+        const r = await cost(() => click(toolButton('Git')), { until, settle });
+        runs[dir].push({
+          ms: r.ms,
+          commits: r.renders?.commits,
+          renderRegions: regionComponents(r.renders),
+          ipc: r.ipc.ipc,
+        });
+      }
+    }
+    return runs;
+  }
+
+  /**
+   * 비교 탭 → 다른 탭 → 비교 탭 복귀 (`n` 번, G5): 지금 활성인 비교 탭을 기준으로 편집기 탭 막대의 다른 탭을 눌렀다가
+   * 돌아온다. 복귀의 시간·IPC·렌더 (고정 OID 비교는 복귀 때 다시 묻지 않는 것이 기대)
+   */
+  async function compareTabReturn({ n = 3, settle = 500 } = {}) {
+    const tabs = () => qa('[data-panel="editor"] [role="tab"]');
+    const compareTab = tabs().find((t) => t.getAttribute('aria-selected') === 'true');
+    if (!compareTab || !comparisonRoot()) throw new Error('활성 비교 탭이 없다');
+    const title = compareTab.textContent.trim();
+    const other = tabs().find((t) => t !== compareTab);
+    if (!other) throw new Error('돌아갈 다른 탭이 없다');
+    const otherTitle = other.textContent.trim();
+    const byTitle = (text) => tabs().find((t) => t.textContent.trim() === text);
+    const runs = [];
+    for (let i = 0; i < n; i += 1) {
+      click(byTitle(otherTitle));
+      await waitFor(() => !comparisonRoot());
+      await pause(settle);
+      const r = await cost(() => click(byTitle(title)), { until: comparisonShown, settle });
+      runs.push({
+        ms: r.ms,
+        ipc: r.ipc.ipc,
+        total: r.ipc.total,
+        commits: r.renders?.commits,
+        renderRegions: regionComponents(r.renders),
+      });
+    }
+    return { title, other: otherTitle, runs };
+  }
+
+  /**
+   * 저장소 탭의 쓰기 동작 한 번 (G2 다음 후보의 근거): Commit 도구 창의 "변경" 칸에서 파일 `path`(없으면 첫 파일) 하나를 골라 "스테이징" 을
+   * 누른다. 누름부터 `settle` ms 까지의 렌더 커밋 수·영역별 수와 IPC, 커밋별 영역 (busy 시작·끝으로 전체가 두 번 그려지는지 본다)
+   */
+  async function repoStage({ path, settle = 1500 } = {}) {
+    if (!q('[data-panel="commit"] section[data-area="unstaged"]')) {
+      click(toolButton('커밋'));
+      await waitFor(
+        () => q('[data-panel="commit"] section[data-area="unstaged"] [data-path]'),
+        20_000,
+      );
+      await pause(800);
+    }
+    const area = need('[data-panel="commit"] section[data-area="unstaged"]');
+    const row = path ? q(`[data-path="${CSS.escape(path)}"]`, area) : q('li[data-path]', area);
+    if (!row) throw new Error('stage 할 파일 행이 없다');
+    const staged = row.dataset.path;
+    // 행을 눌러 고른다 (체크칸 없이 `data-selected`)
+    click(row);
+    await waitFor(() => row.dataset.selected === 'true');
+    await pause(300);
+    const button = qa('button', area).find((b) => b.textContent.trim() === '스테이징');
+    if (!button || button.disabled) throw new Error('"스테이징" 단추를 누를 수 없다');
+    const r = await cost(() => click(button), { settle });
+    return {
+      path: staged,
+      ms: r.ms,
+      commits: r.renders?.commits,
+      renderRegions: regionComponents(r.renders),
+      ipc: r.ipc.ipc,
+      perCommit: renders.installed
+        ? M.commits.map((c) => regionComponents({ regions: c.regions }))
+        : null,
+    };
+  }
+
+  /**
+   * 폴더 탭의 주기 요약 갱신 (G2): 폴더 설정의 자동 갱신 간격을 `secs` 초로 바꿔 저장한 뒤 `wait` ms 동안 렌더·IPC 를 센다.
+   * 개요 탭이 열려 있어야 "폴더 설정…" 단추가 있다
+   */
+  async function folderAutoRefresh({ secs = 2, wait = 6000 } = {}) {
+    const open = qa('button').find((b) => b.textContent.trim().startsWith('폴더 설정'));
+    if (!open) throw new Error('"폴더 설정…" 단추가 없다 (개요 탭)');
+    click(open);
+    const input = await waitFor(() =>
+      qa('input[type="number"]').find((i) => i.closest('label')?.textContent.includes('자동 갱신')),
+    );
+    // 저장·닫기 단추는 입력 칸을 품은 가장 가까운 상자에서 찾는다 (다른 화면의 "닫기" 와 섞이지 않게)
+    let box = input.parentElement;
+    while (box && !qa('button', box).some((b) => b.textContent.trim() === '저장')) {
+      box = box.parentElement;
+    }
+    if (!box) throw new Error('"저장" 단추가 없다');
+    type(input, String(secs));
+    await afterPaint();
+    click(qa('button', box).find((b) => b.textContent.trim() === '저장'));
+    await waitFor(() =>
+      qa('*', box).some((e) => e.childElementCount === 0 && e.textContent.trim() === '저장됨'),
+    );
+    const close = qa('button', box).find((b) => b.textContent.trim() === '닫기');
+    if (close) click(close);
+    await pause(secs * 1000 + 500);
+    const out = await idle(wait);
+    out.renderRegions = regionComponents(out.renders);
+    return out;
+  }
+
+  // ── 3라운드 E: diff 화면 그리기 (2026-11-27) ──────────────────────────────────────────────────────────────
+
+  /** rAF 간격을 모은다. 돌려준 함수를 부르면 멈추고 간격 목록(ms)을 준다 */
+  function frameGaps() {
+    const gaps = [];
+    let last = 0;
+    let on = true;
+    const tick = (t) => {
+      if (last) gaps.push(t - last);
+      last = t;
+      if (on) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return () => {
+      on = false;
+      return gaps;
+    };
+  }
+
+  /** 비교 화면의 diff 머리(옛·새 쪽 이름)의 글자 — 새 문서가 도착하면 바뀐다 */
+  const diffLabels = (root) =>
+    q('[class*="sideLabels"]', root ?? comparisonRoot() ?? document)?.textContent ?? '';
+
+  /** 보이는 diff 행에 구문 강조 조각이 있는지 (`tok-*`) */
+  const highlighted = (root) =>
+    !!q('[data-testid="diff-scroller"] [class*="tok-"]', root ?? document);
+
+  /**
+   * 폴더 탭 Git 로그에서 `repo` 의 커밋 행 우클릭 → "현재 로컬 내용과 비교" (실제 앱 기록의 동작, E-1). 비교 화면에 첫 파일의
+   * diff 가 그려질 때까지의 시간·50ms 넘는 프레임·렌더·IPC. 큰 문서는 조절값 `mgit.mock.diffLines` 로 켠다
+   */
+  async function compareOpenBig({ repo = 'auth-service', settle = 1500 } = {}) {
+    // 저장소 이름은 그 저장소 묶음의 첫 행에만 보인다: 보일 때까지 로그를 내린다
+    const found = () =>
+      qa('[data-panel="git-log"] [data-oid]').find((r) => r.textContent.includes(repo));
+    const logScroller = scrollerOf(need('[data-panel="git-log"] [data-oid]'));
+    for (let i = 0; i < 200 && !found() && logScroller; i += 1) {
+      logScroller.scrollTop += 400;
+      await afterPaint();
+    }
+    const row = await waitFor(found, 20_000);
+    row.scrollIntoView({ block: 'center' });
+    await afterPaint();
+    const item = await contextItem(row, '현재 로컬 내용과 비교');
+    const stopGaps = frameGaps();
+    const r = await cost(() => click(item), {
+      until: () => comparisonShown() && diffLabels() !== '',
+      timeout: 30_000,
+      settle,
+    });
+    const gaps = stopGaps();
+    return {
+      ms: r.ms,
+      longFrames: gaps.filter((g) => g > 50).map(round),
+      longTasks: r.longTasks,
+      longest: r.longest,
+      commits: r.renders?.commits,
+      renderRegions: regionComponents(r.renders),
+      ipc: r.ipc.ipc,
+      files: qa('[role="tree"] [role="treeitem"]', comparisonRoot()).length,
+    };
+  }
+
+  /**
+   * 비교 화면의 변경 파일 트리에서 파일 → 다음 파일로 ↓ 를 `n` 번 (E-1, 사이의 디렉터리 행은 재지 않고 건넌다): 키마다 입력 → 다음 그리기(`firstPaint`), 입력 → 새 문서가 그려질 때까지
+   * (`ms`), 입력 → 강조가 붙을 때까지(`highlightMs`), 50ms 넘는 프레임(목록), 커밋 수·영역별 렌더·IPC. 열린 비교 화면에서 부른다
+   */
+  async function compareFileStep({ n = 8, settle = 600, timeout = 20_000 } = {}) {
+    const root = comparisonRoot();
+    if (!root) throw new Error('비교 화면이 없다');
+    const tree = need('[role="tree"]', root);
+    tree.focus();
+    const runs = [];
+    const items = () => qa('[role="treeitem"]', tree);
+    for (let i = 0; i < n; i += 1) {
+      // 다음 행이 디렉터리면 재지 않고 먼저 그 행으로 옮긴다 (재는 키는 늘 파일 → 파일)
+      const list = items();
+      const at = list.findIndex((r) => r.getAttribute('aria-selected') === 'true');
+      if (list[at + 1]?.getAttribute('data-kind') === 'dir') {
+        key(tree, 'ArrowDown');
+        await pause(settle);
+      }
+      const before = diffLabels(root);
+      const stopGaps = frameGaps();
+      const t0 = performance.now();
+      let firstPaint = null;
+      void afterPaint().then(() => {
+        firstPaint = round(performance.now() - t0);
+      });
+      let highlightMs = null;
+      const r = await cost(() => key(tree, 'ArrowDown'), {
+        until: () => {
+          const now = diffLabels(root);
+          return now !== '' && now !== before && !visibleText(root, '불러오는 중…');
+        },
+        timeout,
+        settle: 0,
+      });
+      // 강조가 붙을 때까지 (그 뒤 settle 만큼 더 본다)
+      await waitFor(() => highlighted(root), 5_000).catch(() => null);
+      if (highlighted(root)) highlightMs = round(performance.now() - t0);
+      await pause(settle);
+      const gaps = stopGaps();
+      runs.push({
+        ms: r.ms,
+        firstPaint,
+        highlightMs,
+        longFrames: gaps.filter((g) => g > 50).map(round),
+        commits: r.renders?.commits,
+        renderRegions: regionComponents(r.renders),
+        ipc: r.ipc.ipc,
+      });
+    }
+    const pick = (f) => stats(runs.map(f).filter((v) => v !== null));
+    return {
+      ms: pick((r) => r.ms),
+      firstPaint: pick((r) => r.firstPaint),
+      highlightMs: pick((r) => r.highlightMs),
+      longFramesPerKey: stats(runs.map((r) => r.longFrames.length)),
+      runs,
+    };
+  }
+
+  /**
+   * 보이는 diff 본문을 프레임마다 `step` px 씩 `frames` 번 스크롤 (E-1): rAF 간격 p50·p95·최대, 50ms 넘는 프레임, 커밋 수와
+   * 커밋당 diff 본문 안에서 다시 그린 컴포넌트 수 (`M.split` 으로 본문을 가른다)
+   */
+  async function diffScroll({ frames = 60, step = 120, within } = {}) {
+    const scroller = need('[data-testid="diff-scroller"]', within ?? comparisonRoot() ?? document);
+    scroller.scrollTop = 0;
+    await afterPaint();
+    const split = M.split;
+    M.split = ['[data-testid="diff-scroller"]'];
+    if (renders.installed) renders.start();
+    const out = await scroll(scroller, { step, frames });
+    const r = renders.installed ? renders.stop() : null;
+    M.split = split;
+    const inBody = r
+      ? Object.entries(r.regions)
+          .filter(([k]) => k.endsWith('[data-testid="diff-scroller"]'))
+          .reduce((n, [, v]) => n + v.components, 0)
+      : null;
+    return {
+      ...out,
+      commits: r?.commits ?? null,
+      bodyComponentsPerCommit: r?.commits ? round(inBody / r.commits) : null,
+      renderRegions: regionComponents(r),
+    };
+  }
+
+  // ── 3라운드 F: diff 휠 (2026-11-27) ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * diff 본문 휠 측정 시작 (F-1). 휠 입력은 밖(Playwright `page.mouse.wheel` — CDP 의 실제 입력 경로)에서 보낸다 — `scrollTop`
+   * 을 바꾸는 `diffScroll` 과 달리 휠 리스너가 돈다. 프레임 간격, 휠 이벤트 수·가로 성분이 있는 수·기본 동작을 취소한 수,
+   * 이벤트당 처리 시간(창 capture → 창 bubble), 세로·가로 이동 거리를 모은다. 휠을 보낼 화면 좌표를 돌려준다 (`side`: 좌우
+   * 보기의 어느 쪽 코드 위인지)
+   */
+  function diffWheelStart({ within, side = 'right' } = {}) {
+    const scroller = need('[data-testid="diff-scroller"]', within ?? comparisonRoot() ?? document);
+    const view = scroller.closest('[style*="--diff-split"]') ?? scroller.parentElement;
+    const state = {
+      scroller,
+      view,
+      top0: scroller.scrollTop,
+      events: 0,
+      withX: 0,
+      prevented: 0,
+      handle: [],
+      start: 0,
+      longTasks0: M.longTasks.length,
+    };
+    const onCapture = () => {
+      state.start = performance.now();
+    };
+    const onBubble = (event) => {
+      state.events += 1;
+      if (event.deltaX) state.withX += 1;
+      if (event.defaultPrevented) state.prevented += 1;
+      state.handle.push(performance.now() - state.start);
+    };
+    window.addEventListener('wheel', onCapture, { capture: true, passive: true });
+    window.addEventListener('wheel', onBubble, { passive: true });
+    const stopGaps = frameGaps();
+    state.finish = () => {
+      window.removeEventListener('wheel', onCapture, { capture: true });
+      window.removeEventListener('wheel', onBubble);
+      return stopGaps();
+    };
+    M.wheelRun = state;
+    const code = qa(`[data-side="${side}"]`, scroller)[3] ?? scroller;
+    const r = code.getBoundingClientRect();
+    return { x: Math.round(r.left + Math.min(r.width / 2, 200)), y: Math.round(r.top + 4) };
+  }
+
+  /** diff 본문 휠 측정 끝 (F-1): `diffWheelStart` 뒤 모은 값 */
+  async function diffWheelStop() {
+    const state = M.wheelRun;
+    if (!state) throw new Error('diffWheelStart 를 먼저 부른다');
+    await afterPaint();
+    const gaps = state.finish();
+    M.wheelRun = null;
+    const g = stats(gaps);
+    const h = stats(state.handle);
+    const css = (name) => getComputedStyle(state.view).getPropertyValue(name).trim();
+    return {
+      frames: gaps.length,
+      p50: g.median,
+      p95: g.p95,
+      max: g.max,
+      over50: gaps.filter((x) => x > 50).length,
+      events: state.events,
+      withX: state.withX,
+      prevented: state.prevented,
+      handleP50: h.median,
+      handleP95: h.p95,
+      handleMax: h.max,
+      movedY: round(state.scroller.scrollTop - state.top0),
+      leftScroll: css('--diff-left-scroll'),
+      rightScroll: css('--diff-right-scroll'),
+      longTasks: M.longTasks.length - state.longTasks0,
+    };
+  }
+
   M.scenarios = {
+    // 2026-11-27 반응성 기준선 (M3)
+    editorIdle,
+    editorType,
+    editorSave,
+    compareLocalIdle,
+    compareOpen,
+    projectTreeWidth,
+    projectRepoArrow,
+    tabSwitchCost,
+    // 2라운드 재측정 (G1·G2·G5)
+    dockToggle,
+    compareTabReturn,
+    repoStage,
+    folderAutoRefresh,
+    // 3라운드 E (diff 화면 그리기)
+    compareOpenBig,
+    compareFileStep,
+    diffScroll,
+    // 3라운드 F (diff 휠 — 입력은 Playwright 가 보낸다)
+    diffWheelStart,
+    diffWheelStop,
     remountLog,
     branchTree,
     changedFiles,
@@ -1072,6 +2036,23 @@
     switchedTo,
     stripeButton,
     regionSizes,
+    // 2026-11-27 반응성 기준선 (M3)
+    ipcWindow,
+    canvasCounter,
+    cost,
+    idle,
+    domWatch,
+    regionComponents,
+    projectPath,
+    revealProjectFile,
+    expandProjectDirs,
+    openEditorFile,
+    insertText,
+    waitSaved,
+    contextItem,
+    comparisonRoot,
+    comparisonShown,
+    visibleText,
   });
   window.__mgitMeasure = M;
 })();

@@ -15,6 +15,8 @@ mgit-watch.workspace = true
 tokio.workspace = true
 memory-stats.workspace = true
 serde_json.workspace = true
+# 경합 측정이 러너의 "git run" 추적 이벤트(읽기 permit 을 얻은 뒤의 실행 시간)를 받는다
+tracing.workspace = true
 
 [lints]
 workspace = true

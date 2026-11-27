@@ -1,6 +1,6 @@
 import { S } from '@mgit/ui';
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
-import type { Action } from '../../actions';
+import { useCallback, useEffect, useMemo } from 'react';
+import type { CommandSource } from '../../components/command-context';
 import { WorkspaceShell } from '../../layout/WorkspaceShell';
 import {
   type EditorDoc,
@@ -11,10 +11,12 @@ import {
   useShownLeftTool,
   useWorkspace,
 } from '../../store';
+import { markExplicitRefresh } from '../../store/explicit-refresh';
 import { fileEditors } from '../../store/file-editor-store';
 import { parseNoteRowId } from '../../store/file-tree';
 import { baseName, childPath, innermostRepo, relativeTo, rootToRepoIn } from '../../store/fs-path';
 import { dirSpace, type RootSpace } from '../../store/root-space';
+import { useEditorMarks } from '../../store/use-file-editors';
 import { fileViewDoc, focusedEditorDoc } from '../../store/workspace-store';
 import { FolderCommitTool } from '../commit/FolderCommitTool';
 import { useBatchReport } from '../folder/batch-report';
@@ -35,7 +37,6 @@ import { useProjectFilter } from '../project/use-project-filter';
 import { ConflictDoc } from './ConflictDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
 import { EditorEmptyState } from './EditorArea';
-import { editorHints } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, folderTreeMenu, menuTargets } from './folder-tree-menu';
 import { useRepoSessionActions } from './repo-session-actions';
@@ -93,8 +94,11 @@ function docTreePath(doc: EditorDoc | undefined, space: RootSpace): string | nul
 const NO_SPACE = dirSpace('');
 
 export interface FolderWorkspaceProps {
-  /** 동작 목록. 빈 상태의 단축키 안내가 사용자 재지정을 반영한 단축키를 여기서 읽는다 */
-  actions: readonly Action[];
+  /**
+   * 동작 출처 (D-3). 빈 상태의 단축키 안내(사용자 재지정 반영)와 링크를 여기서 읽는다. 동작의 활성 여부가 바뀌어도(쓰기
+   * 동작의 시작·끝) 그대로인 참조라 워크스페이스가 다시 그려지지 않는다
+   */
+  commands: CommandSource;
 }
 
 /**
@@ -107,9 +111,8 @@ export interface FolderWorkspaceProps {
  * 한 상태다. 화면이 떠 있는 동안 요약의 창 포커스·주기 재조회를 켜 둔다 (MR-03) — 개요 탭을 닫아도 요약은
  * 갱신된다. 파일 상태 색을 위해 변경 목록을 한 번 읽어 두면 그 뒤로는 폴더 스토어의 갱신이 함께 다시 읽는다
  */
-export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
+export function FolderWorkspace({ commands }: FolderWorkspaceProps) {
   const editorFileMenu = useEditorFileMenu();
-  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const f = useFolder((st) => ({
     id: st.id,
     path: st.path,
@@ -126,6 +129,8 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     ensureChanges: st.ensureChanges,
     setSettingsOpen: st.setSettingsOpen,
   }));
+  // 탭의 ● 표시가 바뀔 때만 다시 그린다 (편집기 저장소의 다른 변화·바뀐 것 없는 검사에는 깨지 않는다, F1)
+  useEditorMarks(f?.id ?? null);
   const tree = useFileTree((t) => ({
     dirs: t.dirs,
     expanded: t.expanded,
@@ -234,7 +239,7 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     },
     [decorations, statuses, space, lostMembers],
   );
-  const hints = useMemo(() => editorHints(actions), [actions]);
+  const hints = commands.hints;
   // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 그 저장소의 가벼운 세션에 대고, 끝나면 트리를 다시 읽는다
   // (트리는 감시하지 않는다 — 상태 색은 폴더 스토어가 코어의 폴더 변경 알림으로 다시 읽는다)
   const reloadTree = tree?.reload;
@@ -322,8 +327,9 @@ export function FolderWorkspace({ actions }: FolderWorkspaceProps) {
     openDocument(path, mode);
   };
 
-  /** 새로고침: 요약·브랜치·변경과 펼친 디렉터리를 다시 읽는다 */
+  /** 새로고침: 요약·브랜치·변경과 펼친 디렉터리를 다시 읽고, 편집기의 Blame·HEAD 원문도 다시 묻게 한다 (G1) */
   const refresh = () => {
+    markExplicitRefresh(f.id);
     void f.refresh();
     void tree.reload();
   };

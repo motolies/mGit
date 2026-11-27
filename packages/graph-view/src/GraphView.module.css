@@ -1,8 +1,9 @@
+/* 늘 세로 flex(우클릭 메뉴 영역) 안에 놓여 높이를 flex 로 채운다 — 세로 flex 안의 height:100% 는 WebKit 이 겹마다
+   하위 트리를 다시 배치한다 (bench/README.md "WebKit 배치 실험실") */
 .wrapper {
   position: relative;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
-  height: 100%;
   width: 100%;
   overflow: hidden;
   /* 선택 행의 배경 (LG-05): 그래프 안에 포커스가 없으면 회색 */

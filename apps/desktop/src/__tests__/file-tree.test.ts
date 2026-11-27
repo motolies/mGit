@@ -282,8 +282,8 @@ describe('createFileTree (PT-03·08·09)', () => {
     expect(tree.getState().dirs.hidden).toBeUndefined();
     expect(tree.getState().dirs['hidden/sub']).toBeUndefined();
     expect(s.open.length).toBeLessThanOrEqual(LIST_CONCURRENCY);
-    // 그동안 기존 항목을 그대로 보인다
-    expect(tree.getState().dirs['']).toMatchObject({ pending: true, load: { state: 'listed' } });
+    // 그동안 기존 항목을 그대로 보인다. 배경 다시 읽기라 읽는 중 표시도 켜지 않는다 (G4)
+    expect(tree.getState().dirs['']).toMatchObject({ pending: false, load: { state: 'listed' } });
     for (const dir of ['', 'a', 'b', 'c', 'd', 'e']) {
       await s.answer(dir, listing(dir === '' ? top : [entry('sub', 'dir')]));
     }

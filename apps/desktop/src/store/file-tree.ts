@@ -15,7 +15,9 @@
 import type { FsDirListing, FsEntry, FsEntryKind, FsFile } from '@mgit/ipc';
 import { createStore, type StoreApi } from 'zustand';
 import { describeError } from './errors';
+import { focusClock } from './focus-refresh';
 import { ancestorDirs, baseName, childPath, isWithin, parentDir } from './fs-path';
+import { shareValue } from './structural-share';
 
 /** 한 디렉터리에서 볼 수 있는 항목 수 상한 (코어 `FS_LIST_MAX_LIMIT`) */
 export const FS_LIST_MAX = 50_000;
@@ -381,6 +383,11 @@ export interface FileTreeState extends SelectionState {
    */
   reload(): Promise<void>;
   /**
+   * 마지막으로 다시 읽기(`reload`)를 시작한 시각 (`focusClock()` 기준). 아직 없으면 null. 창 포커스 갱신이 최근에 읽은
+   * 트리를 건너뛸 때 본다 (G4)
+   */
+  reloadedAt(): number | null;
+  /**
    * 그 경로의 조상을 차례로 펼치고 그 행을 고른다 (트리에서 찾기). 없으면 남아 있는 가장 가까운 조상을 고른다.
    * `keepSelection` 이면 선택은 건드리지 않고 펼치고 스크롤만 한다 (보기 거르기를 끈 뒤 고른 행으로 돌아갈 때)
    */
@@ -410,6 +417,7 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
   const waiting: (() => void)[] = [];
   let reloading: Promise<void> | null = null;
   let reloadAgain = false;
+  let reloadStarted: number | null = null;
   let scroll = 0;
   let disposed = false;
 
@@ -435,12 +443,17 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
   return createStore<FileTreeState>()((set, get) => {
     /**
      * 디렉터리 하나의 결과를 싣고, 사라진 디렉터리를 정리하고, 선택을 맞춘다. 더 보기로 늘린 뒤에 "… 더 보기"
-     * 줄을 고르고 있었으면 새로 보인 첫 항목을 고른다 (그 줄이 있던 자리)
+     * 줄을 고르고 있었으면 새로 보인 첫 항목을 고른다 (그 줄이 있던 자리). `base` 는 요청 직전의 항목이다: 다시 읽은
+     * 결과가 그것과 같으면 그 참조로 되돌리고, 다르면 같은 부분(항목 줄)만 옛 참조로 둔다 (G3)
      */
-    const settle = (dir: string, state: DirState) => {
+    const settle = (dir: string, read: DirState, base: DirState | undefined) => {
       const prev = get();
       const before = prev.dirs[dir]?.load;
-      const pruned = pruneVanished({ ...prev.dirs, [dir]: state }, prev.expanded);
+      const last = base ?? prev.dirs[dir];
+      const state = last === undefined ? read : shareValue(last, read);
+      // 항목이 지금 것과 같은 참조면(배경 다시 읽기의 결과가 그대로) 나열 묶음도 그대로 둔다 (G4)
+      const merged = state === prev.dirs[dir] ? prev.dirs : { ...prev.dirs, [dir]: state };
+      const pruned = pruneVanished(merged, prev.expanded);
       for (const path of pruned.removed) {
         seqs.set(path, (seqs.get(path) ?? 0) + 1);
       }
@@ -462,44 +475,59 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
         }
       }
       const kept = survivingSelectionState(pruned.dirs, picked);
-      set({
-        dirs: pruned.dirs,
-        expanded: pruned.expanded,
-        selection: kept.selection,
-        selected: kept.selected,
-        anchor: kept.anchor,
-      });
+      const changed =
+        pruned.dirs !== prev.dirs ||
+        pruned.expanded !== prev.expanded ||
+        kept.selection !== prev.selection ||
+        kept.selected !== prev.selected ||
+        kept.anchor !== prev.anchor;
+      if (changed) {
+        set({
+          dirs: pruned.dirs,
+          expanded: pruned.expanded,
+          selection: kept.selection,
+          selected: kept.selected,
+          anchor: kept.anchor,
+        });
+      }
       // 이 결과로 보이게 된 펼친 하위 디렉터리(펼침을 기억해 둔 것)를 읽는다
       loadMissing();
     };
 
-    /** 그 디렉터리를 읽는다. 그사이 차례가 지났으면 요청을 건너뛰거나 응답을 버린다 */
-    const request = (dir: string, limit: number | null): Promise<void> => {
+    /**
+     * 그 디렉터리를 읽는다. 그사이 차례가 지났으면 요청을 건너뛰거나 응답을 버린다. `quiet` 는 배경 다시 읽기다: 이미 읽어
+     * 둔 디렉터리면 읽는 중 표시(`pending`)를 켜지 않는다 — 결과가 같으면 나열 묶음이 한 번도 바뀌지 않는다 (G4). 사용자가 누른
+     * "더 보기"·다시 시도와 처음 읽기는 표시를 켠다
+     */
+    const request = (dir: string, limit: number | null, quiet = false): Promise<void> => {
       if (disposed) {
         return Promise.resolve();
       }
       const seq = (seqs.get(dir) ?? 0) + 1;
       seqs.set(dir, seq);
       const prev = get().dirs[dir];
-      set({
-        dirs: { ...get().dirs, [dir]: { load: prev?.load ?? LOADING, limit, pending: true } },
-      });
+      const shown = prev !== undefined && prev.load.state !== 'loading';
+      if (!(quiet && shown && prev.limit === limit && !prev.pending)) {
+        set({
+          dirs: { ...get().dirs, [dir]: { load: prev?.load ?? LOADING, limit, pending: true } },
+        });
+      }
       const current = () => !disposed && seqs.get(dir) === seq;
       const done = limited(() =>
         current() ? source.list(dir, limit) : Promise.resolve(null),
       ).then(
         (listing) => {
           if (listing !== null && current()) {
-            settle(dir, { load: listingLoad(listing), limit, pending: false });
+            settle(dir, { load: listingLoad(listing), limit, pending: false }, prev);
           }
         },
         (error: unknown) => {
           if (current()) {
-            settle(dir, {
-              load: { state: 'error', error: describeError(error) },
-              limit,
-              pending: false,
-            });
+            settle(
+              dir,
+              { load: { state: 'error', error: describeError(error) }, limit, pending: false },
+              prev,
+            );
           }
         },
       );
@@ -520,6 +548,7 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
     /** 한 번 다시 읽는다: 숨은 디렉터리의 결과는 버리고 보이는 펼친 디렉터리를 모두 다시 나열한다 */
     const reloadOnce = async () => {
       const { dirs, expanded, epoch } = get();
+      reloadStarted = focusClock();
       const visible = visibleExpandedDirs(dirs, expanded);
       const shown = new Set(visible);
       for (const path of Object.keys(dirs)) {
@@ -527,11 +556,13 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
           seqs.set(path, (seqs.get(path) ?? 0) + 1);
         }
       }
+      const kept = Object.entries(dirs).filter(([path]) => shown.has(path));
       set({
         epoch: epoch + 1,
-        dirs: Object.fromEntries(Object.entries(dirs).filter(([path]) => shown.has(path))),
+        // 버릴 디렉터리가 없으면 나열 묶음을 그대로 둔다
+        dirs: kept.length === Object.keys(dirs).length ? dirs : Object.fromEntries(kept),
       });
-      await Promise.all(visible.map((dir) => request(dir, get().dirs[dir]?.limit ?? null)));
+      await Promise.all(visible.map((dir) => request(dir, get().dirs[dir]?.limit ?? null, true)));
       if (!disposed) {
         loadMissing();
       }
@@ -652,6 +683,10 @@ export function createFileTree(source: FileTreeSource): FileTreeStore {
 
       retry(dir) {
         void request(dir, get().dirs[dir]?.limit ?? null);
+      },
+
+      reloadedAt() {
+        return reloadStarted;
       },
 
       reload() {

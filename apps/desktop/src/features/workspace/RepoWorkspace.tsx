@@ -1,6 +1,7 @@
 import type { RepoChanges, RepoKind, RepoSummary } from '@mgit/ipc';
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
-import { type Action, LEFT_TOOL_PANEL } from '../../actions';
+import { useCallback, useEffect, useMemo } from 'react';
+import { LEFT_TOOL_PANEL } from '../../actions';
+import type { CommandSource } from '../../components/command-context';
 import { WorkspaceShell } from '../../layout/WorkspaceShell';
 import {
   type EditorDoc,
@@ -13,8 +14,11 @@ import {
   useShownLeftTool,
   useWorkspace,
 } from '../../store';
+import { markExplicitRefresh } from '../../store/explicit-refresh';
 import { fileEditors } from '../../store/file-editor-store';
+import { FocusTier, onFocusRefresh } from '../../store/focus-refresh';
 import { baseName, innermostRepo, joinRoot, relativeTo, rootToRepo } from '../../store/fs-path';
+import { useEditorMarks } from '../../store/use-file-editors';
 import { fileViewDoc, focusedEditorDoc } from '../../store/workspace-store';
 import { ChangesPanel } from '../changes/ChangesPanel';
 import { RepoCommitTool } from '../commit/RepoCommitTool';
@@ -36,7 +40,6 @@ import { useProjectFilter } from '../project/use-project-filter';
 import { TagsDoc } from '../tags/TagsDoc';
 import { docDetail, docTitle, docTooltip } from './doc-labels';
 import { EditorEmptyState } from './EditorArea';
-import { editorHints, tagsDocLink } from './editor-hints';
 import { FileViewDoc, type FileViewRepoTools } from './FileViewDoc';
 import { type FileMenuSource, menuTargets } from './folder-tree-menu';
 import styles from './RepoWorkspace.module.css';
@@ -116,8 +119,11 @@ function rootDecoration(s: {
 }
 
 export interface RepoWorkspaceProps {
-  /** 동작 목록. 빈 상태의 단축키 안내가 사용자 재지정을 반영한 단축키를 여기서 읽는다 */
-  actions: readonly Action[];
+  /**
+   * 동작 출처 (D-3). 빈 상태의 단축키 안내(사용자 재지정 반영)와 링크를 여기서 읽는다. 동작의 활성 여부가 바뀌어도(쓰기
+   * 동작의 시작·끝) 그대로인 참조라 워크스페이스가 다시 그려지지 않는다
+   */
+  commands: CommandSource;
 }
 
 /**
@@ -135,10 +141,11 @@ export interface RepoWorkspaceProps {
  *   머리의 메뉴 단추(접힌 곳에 있어도 닿게), 트리 위 띠(상위 저장소 링크·모듈 범위). 디렉터리의 더블클릭·Enter 는 다른
  *   디렉터리처럼 펼침이고, 저장소 탭으로 열기는 행 메뉴에 있다 (폴더 탭 W11 과 같은 규칙)
  */
-export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
+export function RepoWorkspace({ commands }: RepoWorkspaceProps) {
   const editorFileMenu = useEditorFileMenu();
-  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const tabId = useActiveTab()?.id ?? null;
+  // 탭의 ● 표시가 바뀔 때만 다시 그린다 (편집기 저장소의 다른 변화·바뀐 것 없는 검사에는 깨지 않는다, F1)
+  useEditorMarks(tabId);
   const s = useSession(pickRepo);
   const tree = useFileTree((t) => ({
     dirs: t.dirs,
@@ -154,6 +161,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     loadMore: t.loadMore,
     retry: t.retry,
     reload: t.reload,
+    reloadedAt: t.reloadedAt,
     reveal: t.reveal,
     rememberScroll: t.rememberScroll,
     scrollTop: t.scrollTop,
@@ -177,13 +185,20 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
   // 트리가 처음 보일 때 루트(와 펼쳐 둔 디렉터리 중 안 읽은 것)를 읽는다
   const openTree = tree?.open;
   useEffect(() => openTree?.(), [openTree]);
-  // 창 포커스: 펼친 디렉터리를 다시 읽는다 (폴더 탭과 같은 규칙 — 파일 트리는 감시하지 않는다)
+  // 창 포커스: 펼친 디렉터리를 다시 읽는다 (폴더 탭과 같은 규칙 — 파일 트리는 감시하지 않는다). 포커스 갱신 조율기가 보이는
+  // 탭의 상태 단계로 돌리고, ref 변경·새로고침으로 막 읽었으면 건너뛴다 (G4)
   const reloadFiles = s.reloadFiles;
-  useEffect(() => {
-    const onFocus = () => void reloadFiles();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [reloadFiles]);
+  const reloadedAt = tree?.reloadedAt;
+  useEffect(
+    () =>
+      onFocusRefresh({
+        name: `repo:${s.path}:files`,
+        tier: FocusTier.tab,
+        run: () => reloadFiles(),
+        lastRefreshedAt: () => reloadedAt?.() ?? null,
+      }),
+    [reloadFiles, reloadedAt, s.path],
+  );
 
   const root = s.path;
   const dirs = tree?.dirs;
@@ -241,8 +256,8 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     },
     [statuses, rootDeco, structureDecorations],
   );
-  const hints = useMemo(() => editorHints(actions), [actions]);
-  const emptyAction = useMemo(() => tagsDocLink(actions), [actions]);
+  const hints = commands.hints;
+  const emptyAction = commands.tagsDoc;
   // 파일 메뉴 동작 (Finder·터미널·변경 되돌리기·ignore): 쓰기는 이 탭의 세션, 끝나면 트리를 다시 읽는다 (트리는 감시하지
   // 않는다 — 상태 색은 세션의 상태 이벤트로 바뀐다)
   const reloadTree = tree?.reload;
@@ -286,8 +301,9 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
     openDocument(path, mode);
   };
 
-  /** 새로고침: 세션 상태와 펼친 디렉터리를 다시 읽는다 */
+  /** 새로고침: 세션 상태와 펼친 디렉터리를 다시 읽고, 편집기의 Blame·HEAD 원문도 다시 묻게 한다 (G1) */
   const refresh = () => {
+    if (tabId !== null) markExplicitRefresh(tabId);
     void s.refresh();
     void tree.reload();
   };
@@ -339,7 +355,7 @@ export function RepoWorkspace({ actions }: RepoWorkspaceProps) {
         roles: structure.roles,
         superproject: structure.superproject,
         scope: structure.scope,
-        busy: structure.busy,
+        busy: structure.busyNow(),
       },
       {
         refresh,

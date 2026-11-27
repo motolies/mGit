@@ -2,9 +2,9 @@
 #![allow(dead_code, clippy::unwrap_used)]
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use mgit_core::{Core, CoreConfig, CoreEvent, EventSink, SessionId};
+use mgit_core::{CommandLogRecord, Core, CoreConfig, CoreEvent, EventSink, SessionId};
 use mgit_git::{RunnerConfig, TokioGitRunner};
 use mgit_model::MemoryStore;
 use mgit_watch::NotifyWatcher;
@@ -20,6 +20,11 @@ pub async fn core_with(cfg: CoreConfig) -> Core {
     let cfg = isolated_config(cfg);
     let runner = TokioGitRunner::new(RunnerConfig::default()).await.unwrap();
     Core::new(Arc::new(runner), cfg)
+}
+
+/// 주어진 러너로 코어를 만든다 (감시 없음 — 러너를 감싸 명령을 지켜보는 테스트)
+pub fn core_on(runner: Arc<dyn mgit_model::GitRunner>) -> Core {
+    Core::new(runner, isolated_config(CoreConfig::default()))
 }
 
 /// notify 감시자를 단 코어 (외부 변경 반영 테스트)
@@ -127,4 +132,43 @@ pub async fn wait_for(
     .await;
     assert!(res.is_ok(), "이벤트 시간 초과. 받은 이벤트: {events:#?}");
     events
+}
+
+/// 명령 로그 한 줄의 하위 명령 이름. 전역 인자(`-c k=v`, `--literal-pathspecs` 등)는 건너뛴다
+pub fn subcommand(record: &CommandLogRecord) -> String {
+    let mut it = record.args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "-c" || arg == "-C" {
+            it.next();
+        } else if !arg.starts_with('-') {
+            return arg.clone();
+        }
+    }
+    "?".into()
+}
+
+/// 명령 로그의 앞에서 `before` 개 뒤에 쌓인 명령의 하위 명령 이름 (실행 순서)
+pub fn ran_since(core: &Core, before: usize) -> Vec<String> {
+    let mut all = core.command_log_recent(usize::MAX);
+    all.truncate(all.len().saturating_sub(before));
+    all.iter().rev().map(subcommand).collect()
+}
+
+/// 명령 로그가 `quiet` 동안 늘지 않을 때까지 기다리고 그때의 명령 수를 돌려준다 (`max` 를 넘기면 panic).
+/// 감시가 늦게 띄우는 status 처럼 이벤트 없이 끝나는 명령까지 모으려고 쓴다 (status 가 같으면 이벤트가 없다)
+pub async fn wait_commands_quiet(core: &Core, quiet: Duration, max: Duration) -> usize {
+    let started = Instant::now();
+    let mut last = core.command_log_recent(usize::MAX).len();
+    let mut since = Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let now = core.command_log_recent(usize::MAX).len();
+        if now != last {
+            last = now;
+            since = Instant::now();
+        } else if since.elapsed() >= quiet {
+            return now;
+        }
+        assert!(started.elapsed() < max, "명령이 잦아들지 않음 ({last}개)");
+    }
 }

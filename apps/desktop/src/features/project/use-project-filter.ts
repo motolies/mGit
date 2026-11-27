@@ -66,7 +66,6 @@ export function useProjectFilter({
   const tree = useFileTree((t) => ({
     filter: t.filter,
     setFilter: t.setFilter,
-    epoch: t.epoch,
     selected: t.selected,
     reveal: t.reveal,
   }));
@@ -77,7 +76,9 @@ export function useProjectFilter({
   const tokens = useMemo(() => filterTokens(query), [query]);
   const active = tokens.length > 0 || filter.changedOnly;
   const needList = session !== null && tokens.length > 0 && !filter.changedOnly;
-  const epoch = tree?.epoch ?? 0;
+  // 트리를 다시 읽은 신호(epoch)는 이름 필터가 파일 목록을 쓰는 동안에만 구독한다 — 필터가 꺼져 있어도 구독하면 창 포커스의
+  // 배경 다시 읽기마다 이 훅을 쓰는 워크스페이스(Project 트리·편집기 공간)가 통째로 다시 그려졌다 (D-4)
+  const epoch = useFileTree((t) => (needList ? t.epoch : 0)) ?? 0;
   const [listState, setListState] = useState<ListState>(NO_LIST);
 
   // 이름 필터가 켜져 있는 동안 파일 목록을 받아 둔다. 표지가 같으면 캐시를 그대로 쓴다

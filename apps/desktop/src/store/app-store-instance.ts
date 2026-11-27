@@ -2,6 +2,7 @@ import {
   createMockClient,
   createTauriClient,
   type MockSceneName,
+  observeMethods,
   parseMockScene,
   pickDirectory,
 } from '@mgit/ipc';
@@ -69,7 +70,10 @@ const mockRows = mockRowCount();
 export const useAppStore = createAppStore(
   mockRows > 0
     ? {
-        client: createMockClient({ rows: mockRows, scene: mockScene() }),
+        // 목 메서드도 실제 명령처럼 성능 기록기(메모리 모드)가 호출·이벤트를 셀 수 있게 감싼다 (기록기가 없으면 그대로 부른다)
+        client: observeMethods(createMockClient({ rows: mockRows, scene: mockScene() }), {
+          events: true,
+        }),
         pickDirectory: async () => `/mock/repo-${mockRows}`,
       }
     : {

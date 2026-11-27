@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use mgit_git::bulk_reads;
 use mgit_git::cmd::{discover, list_remotes};
 use mgit_l10n::pick;
 use serde::Serialize;
@@ -107,10 +108,11 @@ impl CoreInner {
             let inner = Arc::clone(self);
             let tabs = Arc::clone(&tabs);
             let sem = Arc::clone(&sem);
-            set.spawn(async move {
+            // 묶음 읽기로 센다: 저장소 수만큼 퍼지는 배경 읽기가 사용자가 누른 읽기의 칸까지 차지하지 않게 (반응성 12)
+            set.spawn(bulk_reads(async move {
                 let _permit = sem.acquire().await;
                 inner.auto_fetch_repo(path, &tabs).await
-            });
+            }));
         }
         let mut out = Vec::new();
         while let Some(joined) = set.join_next().await {

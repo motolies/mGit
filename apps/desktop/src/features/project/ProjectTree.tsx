@@ -4,6 +4,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -235,10 +236,12 @@ export function ProjectTree({
   const baseId = useId();
   const toolsRoving = useRovingToolbar<HTMLElement>('horizontal');
   const treeRef = useRef<HTMLDivElement>(null);
+  // 행이 그대로면 같은 함수를 넘겨 virtualizer 가 행 위치를 다시 계산하지 않게 한다
+  const keyOf = useCallback((index: number) => rows[index]?.id ?? index, [rows]);
   const { virtualizer, rowHeight, scrollToRow } = useVirtualTree({
     scrollRef: treeRef,
     count: rows.length,
-    keyOf: (index) => rows[index]?.id ?? index,
+    keyOf,
   });
   const widthRows = useMemo<TreeWidthRow[]>(
     () =>

@@ -118,6 +118,31 @@ export function buildSplitRows(diff: FileDiff): DiffRow[] {
   return rows;
 }
 
+/** 문맥이 아닌 행인지 — 통합 보기는 추가·삭제 줄, 좌우 보기는 어느 한쪽이라도 추가·삭제인 행. 구간 머리 줄은 아니다 */
+export function isChangeRow(row: DiffRow): boolean {
+  if (row.kind === 'hunk') return false;
+  if (row.kind === 'line') return row.ref.line.kind !== 'context';
+  return (
+    (!!row.left && row.left.line.kind !== 'context') ||
+    (!!row.right && row.right.line.kind !== 'context')
+  );
+}
+
+/**
+ * 변경 덩어리마다 첫 행 번호 (반응성 J). 덩어리는 문맥이 아닌 행(`isChangeRow`)이 이어진 한 묶음이고, 문맥 줄과 구간 머리 줄이
+ * 덩어리를 끊는다 — 한 구간 안에 떨어진 변경이 둘이면 덩어리도 둘이다. 다음/이전 변경·"n / 전체"·변경 위치 띠의 단위다
+ */
+export function changeStarts(rows: readonly DiffRow[]): number[] {
+  const starts: number[] = [];
+  let inside = false;
+  rows.forEach((row, index) => {
+    const change = isChangeRow(row);
+    if (change && !inside) starts.push(index);
+    inside = change;
+  });
+  return starts;
+}
+
 /** 모드에 따라 행 목록을 만든다 */
 export function buildRows(diff: FileDiff, mode: 'unified' | 'split'): DiffRow[] {
   return mode === 'split' ? buildSplitRows(diff) : buildUnifiedRows(diff);

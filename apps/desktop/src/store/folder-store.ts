@@ -38,8 +38,10 @@ import { commandFailed, type FolderLogEntry, prependCapped } from './command-log
 import { type ContainingEntry, createContainingLoader } from './containing-loader';
 import { describeError } from './errors';
 import { createFileTree, type FileTreeStore, type SelectionSet } from './file-tree';
+import { FocusTier, focusClock, onFocusRefresh, windowVisible } from './focus-refresh';
 import { notifyHub } from './notify';
 import { dirSpace, groupSpace, type RootSpace } from './root-space';
+import { shareRows } from './structural-share';
 
 /**
  * 대시보드 필터 (하나만 고른다): 전체 / 변경 있음 / 뒤처짐(받을 것) / 보낼 것 있음 / 업스트림 없음(branch 는 있는데
@@ -467,13 +469,15 @@ export interface FolderState {
    */
   refresh(): Promise<void>;
   /**
-   * 그 저장소들의 요약·브랜치·변경을 감시 이벤트와 같은 디바운스·부분 갱신으로 다시 읽는다 (W13). 폴더가 쓰는
-   * 저장소 세션의 상태가 바뀌었을 때 — 작업 트리만 바꾸는 쓰기는 `folderChanged` 가 오지 않는다
+   * 그 저장소들의 요약·변경을 감시 이벤트와 같은 디바운스·부분 갱신으로 다시 읽는다 (W13). 폴더가 쓰는 저장소 세션의
+   * 상태가 바뀌었을 때 — 작업 트리만 바꾸는 쓰기는 `folderChanged` 가 오지 않는다. ref 는 그대로라 브랜치 목록은 읽지
+   * 않는다 (G1)
    */
   refreshRepos(paths: readonly string[]): void;
   /**
    * 창 포커스·주기 재조회를 켠다 (MR-03). 돌려준 함수로 끈다. 간격은 폴더 설정을 따르고 설정이 바뀌면
-   * 다시 맞춘다. 폴더 화면이 떠 있는 동안 화면 쪽에서 켜 둔다 (어느 문서를 보고 있든 요약이 갱신된다)
+   * 다시 맞춘다. 폴더 화면이 떠 있는 동안 화면 쪽에서 켜 둔다 (어느 문서를 보고 있든 요약이 갱신된다). 화면은 활성 탭만
+   * 그리므로 뒤 탭은 갱신하지 않고, 켤 때(탭을 다시 열 때) 마지막 전부 읽기가 간격보다 오래됐으면 곧바로 한 번 읽는다 (G4)
    */
   startAutoRefresh(): () => void;
   rescan(): Promise<void>;
@@ -725,9 +729,35 @@ export function mergeByRepo<T extends { path: string }>(
   asked: readonly string[],
 ): T[] {
   const replaced = new Set([...asked, ...next.map((row) => row.path)]);
-  return [...prev.filter((row) => !replaced.has(row.path)), ...next].sort((a, b) =>
+  const merged = [...prev.filter((row) => !replaced.has(row.path)), ...next].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
+  // 다시 읽은 줄이 그대로면 옛 줄을, 모두 그대로면 옛 배열을 준다 — 구독한 화면을 깨우지 않는다 (G1·G3)
+  return shareRows(prev, merged, repoKey);
+}
+
+/** 저장소 줄(요약·변경)의 열쇠 */
+function repoKey(row: { path: string }): string {
+  return row.path;
+}
+
+/** 브랜치의 열쇠 (로컬·원격은 같은 이름이어도 다른 줄이다) */
+function branchKey(branch: FolderBranch): string {
+  return `${branch.remote ? 'r' : 'l'}:${branch.name}`;
+}
+
+/**
+ * 다시 읽은 브랜치 목록을 지금 목록과 구조 공유한다 (G3): 저장소 줄·브랜치 줄마다 같으면 옛 참조를 쓰고, 둘 다 그대로면 옛
+ * 목록 자체를 준다 — 브랜치 트리(`FolderTimeline`)가 바뀐 것 없이 트리 모델을 다시 만들지 않게
+ */
+export function shareFolderBranches(
+  prev: FolderBranches | null,
+  next: FolderBranches,
+): FolderBranches {
+  if (prev === null) return next;
+  const repos = shareRows(prev.repos, next.repos, repoKey);
+  const branches = shareRows(prev.branches, next.branches, branchKey);
+  return repos === prev.repos && branches === prev.branches ? prev : { repos, branches };
 }
 
 /** 브랜치 정렬: 로컬 먼저, 이름순 (코어의 순서와 같다) */
@@ -753,7 +783,7 @@ export function mergeFolderBranches(
     ...part.repos.filter((repo) => !prev.repos.some((old) => old.path === repo.path)),
   ];
   const order = new Map(repos.map((repo, index) => [repo.path, index]));
-  const key = (branch: FolderBranch) => `${branch.remote ? 'r' : 'l'}:${branch.name}`;
+  const key = branchKey;
   const merged = new Map<string, FolderBranch>();
   for (const branch of prev.branches) {
     merged.set(key(branch), {
@@ -838,9 +868,17 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
   let disposed = false;
   // 감시 이벤트가 디바운스 동안 모아 둔 대상, 읽기를 기다리는 대상, 지금 읽는 대상
   let debounced: RefreshTarget | null = null;
+  // ref 가 바뀌어 브랜치 목록도 다시 읽을 저장소 (G1). 작업 트리만 바뀐 저장소(저장·stage 감시)는 요약·변경만 읽는다
+  let branchTargets: RefreshTarget | null = null;
   let queued: RefreshTarget | null = null;
   let inflight: RefreshTarget | null = null;
   let draining: Promise<void> | null = null;
+  // 사용자가 고른 전부 읽기로 바쁨 표시(`loading`)를 켰는지 (기다리던 읽기가 모두 끝나면 끈다)
+  let busyShown = false;
+  // 마지막 전부 읽기를 시작한 시각 (`focusClock()`). 어떤 계기든(첫 읽기·포커스·주기·사용자 새로고침·재스캔·감시) 센다 (G4)
+  let fullReadAt: number | null = null;
+  // 주기 재조회가 켜져 있으면 다음 차례를 다시 거는 함수 (전부 읽기가 끝날 때마다 부른다)
+  let rearmAuto: (() => void) | null = null;
   // 변경 목록을 한 번이라도 읽었는지. 읽은 적이 없으면 부분 갱신으로 반쪽 목록을 만들지 않는다
   let changesLoaded = false;
   // 로그의 스크롤 기준. 화면을 다시 그릴 값이 아니라서 스토어 상태에 넣지 않는다
@@ -892,9 +930,17 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       if (partial && asked.length === 0) {
         return;
       }
+      // 브랜치 목록은 ref 가 바뀐 저장소만 다시 읽는다 (전부 읽기는 늘 읽는다). 이번에 읽는 저장소는 표시에서 뺀다
+      const wanted = branchTargets;
+      const branchAsked = partial
+        ? asked.filter((path) => wanted === 'all' || wanted?.has(path) === true)
+        : [];
+      if (!partial || wanted === 'all') branchTargets = null;
+      else if (wanted) branchTargets = new Set([...wanted].filter((path) => !asked.includes(path)));
+      const readBranches = !partial || branchAsked.length > 0;
       const [summaries, branches, changes] = await Promise.allSettled([
         client.folderSummaries(id, asked),
-        client.folderBranches(id, asked),
+        readBranches ? client.folderBranches(id, branchAsked) : Promise.resolve(null),
         changesLoaded ? client.folderChanges(id, asked) : Promise.resolve(null),
       ]);
       if (disposed) {
@@ -907,22 +953,30 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
       }
       const patch: Partial<FolderState> = {};
       if (summaries.status === 'fulfilled') {
-        patch.summaries = partial
+        // 전부 읽기도 같은 저장소의 줄이 그대로면 옛 참조를 쓴다 (G3 — 창 포커스·주기 갱신에 바뀐 것이 없으면 화면이 깨지 않게)
+        const next = partial
           ? mergeByRepo(get().summaries, summaries.value, asked)
-          : summaries.value;
+          : shareRows(get().summaries, summaries.value, repoKey);
+        if (next !== get().summaries) patch.summaries = next;
         patch.refreshedAt = Date.now();
         patch.error = null;
       } else {
         patch.error = describeError(summaries.reason);
       }
       if (branches.status === 'fulfilled') {
-        patch.branches = partial
-          ? mergeFolderBranches(get().branches, branches.value)
-          : branches.value;
+        const listed = branches.value;
+        // null 이면 작업 트리만 바뀐 부분 갱신이라 브랜치 목록은 그대로 둔다
+        if (listed !== null) {
+          const next = shareFolderBranches(
+            get().branches,
+            partial ? mergeFolderBranches(get().branches, listed) : listed,
+          );
+          if (next !== get().branches) patch.branches = next;
+        }
         // 전체 갱신(포커스·주기·수동)에서 브랜치 상태가 달라진 저장소는 포함 branch 를 다시 읽는다. 부분 갱신은
         // 그 앞의 `folderChanged` 가 이미 무효화했다
-        if (!partial) {
-          const changed = new Set(changedBranchRepos(get().branches, branches.value));
+        if (!partial && listed !== null) {
+          const changed = new Set(changedBranchRepos(get().branches, listed));
           if (changed.size > 0) {
             containing.invalidate((key) => changed.has(key.repoPath));
           }
@@ -932,7 +986,10 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         patch.error = describeError(branches.reason);
       }
       if (changes.status === 'fulfilled' && changes.value !== null) {
-        patch.changes = partial ? mergeByRepo(get().changes, changes.value, asked) : changes.value;
+        const next = partial
+          ? mergeByRepo(get().changes, changes.value, asked)
+          : shareRows(get().changes, changes.value, repoKey);
+        if (next !== get().changes) patch.changes = next;
         patch.changesError = null;
       } else if (changes.status === 'rejected') {
         patch.changesError = describeError(changes.reason);
@@ -949,14 +1006,19 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         return Promise.resolve();
       }
       draining ??= (async () => {
-        set({ loading: true });
         while (queued !== null && !disposed) {
           inflight = queued;
           queued = null;
+          const full = inflight === 'all';
+          if (full) fullReadAt = focusClock();
           await reload(inflight);
+          // 주기 재조회는 마지막 전부 읽기에서 간격만큼 뒤에 돈다 (포커스로 막 읽었으면 그만큼 미룬다)
+          if (full) rearmAuto?.();
         }
         inflight = null;
-        if (!disposed) {
+        // 사용자가 고른 전부 읽기가 켠 바쁨 표시는 기다리던 읽기가 모두 끝난 뒤 끈다
+        if (!disposed && busyShown) {
+          busyShown = false;
           set({ loading: false });
         }
       })().finally(() => {
@@ -966,11 +1028,28 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
     };
 
     /**
+     * 전부 읽기를 차례에 넣는다. 바쁨 표시(`loading`)는 사용자가 고른 전부 읽기(새로고침 단추·⌘R·재스캔·일괄 작업 뒤 등
+     * `refresh()`)에만 켠다 — 창 포커스·주기 재조회 같은 배경 전부 읽기와 저장소별 부분 갱신은 표시를 켰다 끄며 화면을 다시
+     * 그리지 않는다 (G1·G3). 이미 전부 읽는 중이면 한 번 더 읽지 않고 그 읽기를 기다린다 (재스캔의 이벤트와 응답이 겹칠 때)
+     */
+    const refreshAll = (showBusy: boolean): Promise<void> => {
+      if (showBusy && !busyShown && !disposed) {
+        busyShown = true;
+        set({ loading: true });
+      }
+      if (inflight !== 'all') {
+        queued = 'all';
+      }
+      return drain();
+    };
+
+    /**
      * 대상을 디바운스 뒤 읽도록 모은다 (PF-02). 짧은 시간에 여러 저장소가 바뀌면 모아서 한 번에 읽고, 전부가 섞이면
      * 전부 읽는다. 감시 이벤트와 저장소 세션의 상태 변경(`refreshRepos`)이 같은 길을 쓴다
      */
-    const scheduleReload = (target: RefreshTarget | readonly string[]) => {
+    const scheduleReload = (target: RefreshTarget | readonly string[], refs = true) => {
       debounced = mergeTargets(debounced, target);
+      if (refs) branchTargets = mergeTargets(branchTargets, target);
       if (timer) {
         clearTimeout(timer);
       }
@@ -994,6 +1073,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
         timer = null;
       }
       queued = mergeTargets(mergeTargets(queued, debounced ?? []), paths);
+      // 쓰기 뒤 확정(stage·commit 등)은 ref 가 바뀌었을 수 있어 브랜치까지 읽는다
+      branchTargets = mergeTargets(branchTargets, paths);
       debounced = null;
       return drain();
     };
@@ -1244,7 +1325,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           containing.invalidate();
           invalidateAuthors();
           set({ repos: event.repos });
-          void get().refresh();
+          // 폴더 루트 감시가 알린 배경 재스캔이다 (바쁨 표시를 켜지 않는다)
+          void refreshAll(false);
           reloadFiles();
           return;
         }
@@ -1312,7 +1394,8 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
           // 바뀐 저장소만 다시 읽는다 (PF-02). 짧은 시간에 여러 저장소가 바뀌면 모아서 한 번에 읽고,
           // 어느 저장소인지 모르는 이벤트가 섞이면 전부 읽는다
           const repo = event.repo ?? null;
-          scheduleReload(repo === null ? 'all' : [repo]);
+          // ref 가 바뀐 저장소만 브랜치 목록까지 다시 읽는다 (작업 트리만 바뀌면 요약·변경만, G1)
+          scheduleReload(repo === null ? 'all' : [repo], event.refs);
           // ref 가 바뀌면 그 저장소(모르면 전부)의 포함 branch 가 낡는다 (CD-03). 새 커밋이 들어왔을 수 있으므로
           // 작성자 후보도 다음에 열 때 다시 읽는다
           if (event.refs) {
@@ -1352,48 +1435,68 @@ export function createFolderStore(opened: FolderOpened, client: IpcClient): Fold
 
       refreshRepos(paths) {
         if (!disposed && paths.length > 0) {
-          scheduleReload(paths);
+          // 저장소 세션의 작업 트리 상태가 바뀐 것이다 — 브랜치 목록은 다시 읽지 않는다 (G1)
+          scheduleReload(paths, false);
         }
       },
 
       refresh() {
-        // 이미 전부 읽는 중이면 한 번 더 읽지 않고 그 읽기를 기다린다 (재스캔의 이벤트와 응답이 겹칠 때)
-        if (inflight !== 'all') {
-          queued = 'all';
-        }
-        return drain();
+        return refreshAll(true);
       },
 
       startAutoRefresh() {
-        const tick = () => void get().refresh();
-        // 창 포커스는 요약과 함께 파일 트리도 다시 읽는다. 주기 재조회는 요약만 읽는다 (파일 트리는 감시하지 않는다)
-        const onFocus = () => {
-          tick();
-          reloadFiles();
-        };
-        let interval: ReturnType<typeof setInterval> | null = null;
+        // 창 포커스·다시 보임은 조율기가 묶어 돌린다 (G4): 요약·브랜치·변경과 펼친 파일 트리를 보이는 탭의 상태 단계로
+        // 다시 읽고, 스스로(주기·사용자 새로고침·재스캔·감시) 읽은 지 간격 안이면 건너뛴다. 배경 전부 읽기라 바쁨 표시는 켜지
+        // 않는다. 파일 트리는 감시하지 않으므로 포커스가 그것을 다시 볼 유일한 계기다 — 주기 재조회는 요약만 읽는다
+        const offSummaries = onFocusRefresh({
+          name: `folder:${id}:summaries`,
+          tier: FocusTier.tab,
+          run: () => refreshAll(false),
+          lastRefreshedAt: () => fullReadAt,
+        });
+        const offFiles = onFocusRefresh({
+          name: `folder:${id}:files`,
+          tier: FocusTier.tab,
+          run: () => fileTree.getState().reload(),
+          lastRefreshedAt: () => fileTree.getState().reloadedAt(),
+        });
+        let timer: ReturnType<typeof setTimeout> | null = null;
         let armedMs: number | null = null;
-        /** 설정의 간격으로 타이머를 건다. 간격이 그대로면 건드리지 않는다 */
+        /**
+         * 주기 재조회의 다음 차례를 건다: 마지막 전부 읽기에서 설정 간격이 지난 때. 이미 지났으면(오래 비활성이던 탭을 연
+         * 경우) 곧바로 읽는다. 창이 보이지 않으면 읽지 않고 간격 뒤에 다시 본다 — 보이게 되면 조율기가 한 번 읽는다
+         */
         const arm = () => {
+          if (timer) clearTimeout(timer);
+          timer = null;
           const ms = autoRefreshMs(get().settings);
-          if (ms === armedMs) {
+          armedMs = ms;
+          if (ms <= 0 || disposed) return;
+          const elapsed = fullReadAt === null ? ms : focusClock() - fullReadAt;
+          timer = setTimeout(fire, Math.max(0, ms - elapsed));
+        };
+        /** 주기 차례: 보이지 않으면 미루고, 전부 읽기가 이미 차례에 있으면 그것이 끝난 뒤 다시 건다 */
+        const fire = () => {
+          timer = null;
+          if (!windowVisible()) {
+            timer = setTimeout(fire, armedMs ?? DEFAULT_AUTO_REFRESH_MS);
             return;
           }
-          armedMs = ms;
-          if (interval) {
-            clearInterval(interval);
-          }
-          interval = ms > 0 ? setInterval(tick, ms) : null;
+          if (inflight === 'all' || queued === 'all') return;
+          void refreshAll(false);
         };
+        rearmAuto = arm;
         arm();
-        window.addEventListener('focus', onFocus);
-        const unsubscribe = store.subscribe(arm);
+        // 간격 설정이 바뀌면 다시 건다
+        const unsubscribe = store.subscribe(() => {
+          if (autoRefreshMs(get().settings) !== armedMs) arm();
+        });
         return () => {
-          window.removeEventListener('focus', onFocus);
+          offSummaries();
+          offFiles();
           unsubscribe();
-          if (interval) {
-            clearInterval(interval);
-          }
+          if (rearmAuto === arm) rearmAuto = null;
+          if (timer) clearTimeout(timer);
         };
       },
 

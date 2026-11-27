@@ -1,6 +1,13 @@
 import type { FileDiff } from '@mgit/ipc';
 import { describe, expect, it } from 'vitest';
-import { buildSplitRows, buildUnifiedRows, hunkHeader, pairChanges } from '../rows';
+import {
+  buildDocumentRows,
+  buildSplitRows,
+  buildUnifiedRows,
+  changeStarts,
+  hunkHeader,
+  pairChanges,
+} from '../rows';
 import {
   changeLineIndices,
   changeRangeKeys,
@@ -81,6 +88,74 @@ describe('rows', () => {
       [1, 3],
       [3, 1],
     ]);
+  });
+});
+
+describe('변경 덩어리 (J)', () => {
+  /** 줄 하나 */
+  const line = (
+    kind: 'context' | 'add' | 'del',
+    oldNo: number | null,
+    newNo: number | null,
+    noNewline = false,
+  ) => ({
+    kind,
+    text: `${kind} ${oldNo ?? ''}/${newNo ?? ''}`,
+    oldNo,
+    newNo,
+    noNewline,
+  });
+  /** 구간 둘: 첫 구간 안에 덩어리 둘(삭제 하나 / 삭제 둘 + 추가 하나), 둘째 구간은 끝 줄이 "개행 없음" 인 추가 */
+  const value = {
+    oldPath: 'a.txt',
+    newPath: 'a.txt',
+    change: { kind: 'modified' },
+    binary: null,
+    truncated: false,
+    totalLines: 20,
+    nonUtf8: false,
+    hunks: [
+      {
+        oldStart: 1,
+        oldLines: 6,
+        newStart: 1,
+        newLines: 4,
+        section: '',
+        lines: [
+          line('context', 1, 1),
+          line('del', 2, null),
+          line('context', 3, 2),
+          line('del', 4, null),
+          line('del', 5, null),
+          line('add', null, 3),
+          line('context', 6, 4),
+        ],
+      },
+      {
+        oldStart: 10,
+        oldLines: 1,
+        newStart: 8,
+        newLines: 2,
+        section: '',
+        lines: [line('context', 10, 8), line('add', null, 9, true)],
+      },
+    ],
+  } as unknown as FileDiff;
+
+  it('문맥 줄과 구간 머리 줄이 덩어리를 끊고, 한 구간 안의 떨어진 변경은 덩어리가 둘이다', () => {
+    // 통합: 0 머리 · 1 문맥 · 2 삭제 · 3 문맥 · 4·5 삭제 · 6 추가 · 7 문맥 · 8 머리 · 9 문맥 · 10 추가(개행 없음)
+    expect(changeStarts(buildUnifiedRows(value))).toEqual([2, 4, 10]);
+    // 좌우: 0 머리 · 1 문맥 · 2 삭제|빈칸 · 3 문맥 · 4 삭제|추가 · 5 삭제|빈칸 · 6 문맥 · 7 머리 · 8 문맥 · 9 빈칸|추가
+    expect(changeStarts(buildSplitRows(value))).toEqual([2, 4, 9]);
+  });
+
+  it('전체 파일 보기도 같은 덩어리를 같은 차례로 갖는다', () => {
+    const old = Array.from({ length: 12 }, (_, i) => `del ${i + 1}/`).join('\n');
+    const next = Array.from({ length: 10 }, (_, i) => `add /${i + 1}`).join('\n');
+    for (const mode of ['unified', 'split'] as const) {
+      const starts = changeStarts(buildDocumentRows(value, `${old}\n`, next, mode));
+      expect(starts).toHaveLength(3);
+    }
   });
 });
 

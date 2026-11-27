@@ -32,12 +32,14 @@ vi.mock('../store', () => {
   return {
     useAppStore: (selector: (s: unknown) => unknown) => selector(state),
     getFolderStore: () => folder,
+    useFolder: (selector: (state: unknown) => unknown) => selector(folder.getState()),
     getSessionStore: () => undefined,
     getWorkspaceStore: () => undefined,
   };
 });
 vi.mock('../store/editor-drafts', () => ({
   editorDrafts: () => fixture.drafts.map((path) => ({ path, text: '' })),
+  editorDraftStamp: () => fixture.drafts.join('\u0001'),
 }));
 vi.mock('../store/file-editor-store', () => ({
   fileEditors: {

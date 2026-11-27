@@ -1,7 +1,7 @@
 //! 전체 파일 원문·비교 기준·부분 작업 revision 통합 검증.
 #![allow(clippy::unwrap_used)]
 mod common;
-use common::{collector, core, wait_finished};
+use common::{collector, core, subcommand, wait_finished};
 use mgit_core::{DiffOptions, LineSelection};
 use mgit_testkit::{Scenario, build};
 
@@ -569,4 +569,89 @@ async fn comparison_paths_are_literal_in_sources_and_draft_lookup() {
         .unwrap();
     let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, [":(glob)*.txt", "a[1].txt"]);
+}
+
+/// `compare_local_files` 한 번이 띄운 git 하위 명령 (이름 순)
+async fn local_comparison_commands(
+    core: &mgit_core::Core,
+    session: mgit_core::SessionId,
+    drafts: &[(String, String)],
+) -> (usize, Vec<String>) {
+    let before = core.command_log_recent(usize::MAX).len();
+    let (_, files) = core
+        .compare_local_files(session, "HEAD", drafts)
+        .await
+        .unwrap();
+    let mut all = core.command_log_recent(usize::MAX);
+    all.truncate(all.len() - before);
+    let mut ran: Vec<String> = all.iter().map(subcommand).collect();
+    ran.sort();
+    (files.len(), ran)
+}
+
+/// 바뀐 경로가 수백 개여도 로컬 비교 목록의 git 명령 수는 일정하다 (경로마다 `ls-tree`·`cat-file` 을 띄우지 않는다).
+/// 크기가 같은 수정·다른 수정·삭제·미추적이 섞이고, 초안은 아는 경로면 `ls-files` 하나로 함께 확인한다
+#[tokio::test]
+async fn local_comparison_git_commands_do_not_grow_with_paths() {
+    let core = core().await;
+    let mut counts = Vec::new();
+    for n in [30usize, 300] {
+        let mut repo = build(Scenario::Linear(1));
+        for i in 0..n {
+            repo.write_file(
+                &format!("d{}/f{i:04}.txt", i % 7),
+                &format!("base {i:04}\n"),
+            );
+        }
+        repo.commit("many");
+        for i in 0..n {
+            let path = format!("d{}/f{i:04}.txt", i % 7);
+            match i % 4 {
+                0 => repo.write_file(&path, &format!("BASE {i:04}\n")),
+                1 => repo.write_file(&path, &format!("grown {i:04}\n")),
+                2 => repo.remove_file(&path),
+                _ => repo.write_file(&format!("new/u{i:04}.txt"), "untracked\n"),
+            }
+        }
+        let (sink, mut rx) = collector();
+        let opened = core.open_repo(repo.path(), sink).await.unwrap();
+        wait_finished(&mut rx, opened.session).await;
+        let (files, ran) = local_comparison_commands(&core, opened.session, &[]).await;
+        assert_eq!(files, n, "수정·크기 다른 수정·삭제·미추적 {n}");
+        assert_eq!(
+            ran,
+            [
+                "cat-file",
+                "cat-file",
+                "diff",
+                "diff",
+                "ls-files",
+                "ls-tree",
+                "rev-parse"
+            ],
+            "경로 {n}개"
+        );
+        let drafts = vec![
+            ("d0/f0000.txt".to_string(), "draft\n".to_string()),
+            ("f1.txt".to_string(), "draft\n".to_string()),
+        ];
+        let (_, with_drafts) = local_comparison_commands(&core, opened.session, &drafts).await;
+        assert_eq!(
+            with_drafts,
+            [
+                "cat-file",
+                "cat-file",
+                "diff",
+                "diff",
+                "ls-files",
+                "ls-files",
+                "ls-tree",
+                "rev-parse"
+            ],
+            "아는 경로의 초안 두 개는 ls-files 하나로 확인한다"
+        );
+        counts.push(ran.len());
+        core.close_repo(opened.session).unwrap();
+    }
+    assert_eq!(counts[0], counts[1]);
 }

@@ -6,6 +6,7 @@ import {
   type RepoSummary,
 } from '@mgit/ipc';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FOCUS_REFRESH_GAP_MS } from '../store/focus-refresh';
 import { createFolderStore } from '../store/folder-store';
 
 /** 항목 하나 */
@@ -78,6 +79,8 @@ describe('폴더 스토어의 파일 트리 다시 읽기 (PT-08)', () => {
   it('창 포커스는 요약을 한 번, 파일 트리는 보이는 펼친 디렉터리만 다시 읽는다', async () => {
     const { store, tree, fsListDir, folderSummaries } = await setup();
     const stop = store.getState().startAutoRefresh();
+    // 열 때 막 읽었으므로 포커스 갱신 간격(G4)이 지난 뒤의 포커스다
+    await vi.advanceTimersByTimeAsync(FOCUS_REFRESH_GAP_MS);
     window.dispatchEvent(new Event('focus'));
     await vi.advanceTimersByTimeAsync(0);
     expect(folderSummaries).toHaveBeenCalledTimes(1);

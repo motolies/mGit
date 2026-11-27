@@ -56,6 +56,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands_runtime::runtime_profile,
             commands_runtime::ui_settings_snapshot,
             commands_runtime::ui_settings_set,
+            commands_runtime::perf_append,
             commands::git_version,
             commands::open_repo,
             commands::graph_window,
@@ -420,6 +421,10 @@ pub fn run() {
                 std::fs::create_dir_all(&file_data_dir)?;
             }
             app.manage(commands_runtime::UiSettings::new(file_data_dir.clone()));
+            app.manage(commands_runtime::PerfLog::new(
+                &profile,
+                file_data_dir.clone(),
+            ));
             let app_state =
                 tauri::async_runtime::block_on(state::AppState::build_profile(data_dir, &profile));
             app.manage(commands_fs_operations::FileOperationsState::new(

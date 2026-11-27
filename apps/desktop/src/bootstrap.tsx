@@ -7,6 +7,7 @@ import { dropBlocked, highlightProjectDrop, projectDropTarget } from './project-
 import { Root } from './Root';
 import { isNativeRuntime } from './runtime';
 import { mockRowCount, useAppStore } from './store';
+import { fileEditors } from './store/file-editor-store';
 import { applyTheme, resolveTheme, watchSystemTheme } from './store/theme';
 
 /**
@@ -38,6 +39,12 @@ export async function bootstrap(): Promise<void> {
       applyTheme(resolveTheme('system', dark));
     }
   });
+  // 성능 기록기가 켜져 있으면(개발·테스트·목) 편집기 저장소의 알림 수를 주제별로 센다 (F1): `fileEditors` = 어느 문서든
+  // 실제로 바뀐 알림(전체 주제), `fileEditors.marks` = 탭 표시가 바뀐 알림, `fileEditors.image` = 그림 재확인 신호(검사마다)
+  const perf = window.__mgitPerf;
+  perf?.watchStore('fileEditors', fileEditors.subscribe);
+  perf?.watchStore('fileEditors.marks', fileEditors.subscribeMarks);
+  perf?.watchStore('fileEditors.image', fileEditors.subscribeImages);
   void useAppStore.getState().bootstrap();
   await installFileEditorLifecycle(isNativeRuntime());
   // 폴더·파일 드래그앤드롭으로 열기 (REPO-01). 목 모드는 Tauri API 가 없다

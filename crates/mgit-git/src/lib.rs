@@ -12,4 +12,4 @@ pub mod patch;
 mod runner;
 
 pub use locate::{LocateConfig, locate_git};
-pub use runner::{RunnerConfig, TokioGitRunner, run_shell_command};
+pub use runner::{RunnerConfig, TokioGitRunner, bulk_reads, in_bulk_reads, run_shell_command};

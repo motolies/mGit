@@ -100,7 +100,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 /// 저장소를 열고 그래프 로드가 끝날 때까지 기다린다. 그 뒤 이벤트는 버린다 (보내기 실패는 무시된다)
-async fn open(core: &Core, repo: &Path) -> Result<SessionId, String> {
+pub(crate) async fn open(core: &Core, repo: &Path) -> Result<SessionId, String> {
     let (tx, mut rx) = mpsc::unbounded_channel::<CoreEvent>();
     let sink: Arc<dyn EventSink> = Arc::new(move |e: CoreEvent| {
         let _ = tx.send(e);

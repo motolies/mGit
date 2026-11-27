@@ -40,8 +40,10 @@ export async function refreshEditedFile(id: SessionId, path: string): Promise<vo
 export function registerSession(id: SessionId, resources: SessionResources): void {
   registry.set(id, resources);
   editorWatches.get(id)?.();
+  // status·ref 묶음은 바뀐 것이 있을 때만 새 참조다 (G3 구조 공유). 진행 중 작업만 바뀐 status 이벤트도 예전처럼 편집기를 다시 본다
   const offState = resources.store.subscribe((now, before) => {
-    if (now.status !== before.status || now.refs !== before.refs) refreshEditors();
+    if (now.status !== before.status || now.op !== before.op || now.refs !== before.refs)
+      refreshEditors();
   });
   const offTree = resources.store.getState().fileTree.subscribe((now, before) => {
     if (now.epoch !== before.epoch) void fileEditors.refreshSession(id);

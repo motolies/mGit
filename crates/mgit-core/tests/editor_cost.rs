@@ -1,4 +1,4 @@
-//! 편집기 부가 기능의 비용 측정 (셋째 묶음 N6). 기본 실행에서 빠진다 (`#[ignore]`). 돌리는 법:
+//! 편집기 부가 기능의 비용 측정 (셋째 묶음 N6). 측정은 기본 실행에서 빠진다 (`#[ignore]`). 돌리는 법:
 //! `cargo test --release -p mgit-core --test editor_cost -- --ignored --nocapture --test-threads=1`
 //!
 //! - 인라인 Blame: 편집기가 입력이 0.5초 멈출 때마다 부르는 `blame_contents`(`git blame --line-porcelain --contents -`)
@@ -6,6 +6,8 @@
 //! - 2초 검사: 열린 파일마다 `fs_read_editable_file` (원문 전체 읽기 + SHA-256 여러 번) 과 메타데이터 표지만 보는 경우
 //!   (`fs_file_stamps`)
 //! - git 프로세스 하나의 생성 비용
+//! - 편집기 저장 한 번 뒤 코어가 띄우는 git 명령 (반응성 개선 M4). 이것만은 기본 실행에 들어가는 기준선 테스트다
+//!   (`editor_save_once_git_commands`)
 //!
 //! 합성 저장소는 `git fast-import` 로 한 파일을 여러 commit 에 걸쳐 고친 이력을 만든다 (commit 마다 5줄을 바꾼다).
 //! 결과는 표로 stderr 에 찍는다 (p50·p95, 밀리초)
@@ -18,8 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{collector, core, wait_finished};
-use mgit_core::{Core, SessionId};
+use common::{collector, core, core_watching, ran_since, wait_commands_quiet, wait_finished};
+use mgit_core::{Core, FsEditableFile, FsSaveResult, SessionId};
 use mgit_git::{RunnerConfig, TokioGitRunner};
 use mgit_model::{GitRequest, GitRunner};
 use mgit_testkit::TestRepo;
@@ -278,4 +280,100 @@ async fn read_all(core: &Arc<Core>, session: SessionId, paths: &[String]) -> Vec
         }
     }
     texts
+}
+
+/// 편집기 저장 한 번 뒤 코어가 띄우는 git 명령 (반응성 개선 M4 기준선 → G1 뒤의 값).
+/// 화면의 저장 흐름(`FileViewDoc.tsx` `afterSave`)을 코어 호출로 옮겨 단계마다 센다:
+///
+/// 1. `fs_save_file`: 저장 + 그 안의 저장소 판별과 status 갱신(`refresh_after_writes`, 배경 읽기)
+/// 2. 감시: 같은 저장(작업 파일)과 1의 status 가 고친 `.git/index` 를 보고 status 를 다시 읽는 것
+///
+/// G1 전에는 화면이 저장마다 전체 범위 갱신(`refresh`)을 한 번 더 불러 ref 읽기 7개가 붙었다(저장 2 + 새로고침 7 + 감시 1~2).
+/// 파일 저장은 ref 를 바꾸지 않으므로 G1 이 그 호출을 뺐고, 저장 한 번은 이제 저장 2 + 감시 1~2 다. 화면은 저장 전에 깨끗하던
+/// 파일의 status 가 3초 안에 바뀌지 않을 때만(감시도 1의 status 갱신도 닿지 않은 경우) 대체 경로로 전체 갱신을 부른다 —
+/// 그 구성은 아래 3에서 따로 고정한다(명시적 새로고침과 같은 호출이다).
+///
+/// 3. `refresh`: 대체 경로·사용자 새로고침의 전체 범위 갱신(`refresh_repo`, interactive 읽기)
+///
+/// 파일 트리 다시 읽기(`fs_list_dir`)는 git 을 띄우지 않아 뺐다. 화면이 조건에 따라 더 부르는 diff 조회(선택한 파일이 같을 때)도
+/// 넣지 않았다.
+///
+/// 1·3 은 결정적이라 명령 구성을 그대로 고정한다. 2 는 감시 이벤트가 debounce 창 안에서 하나로 묶이느냐에 따라 1번 또는
+/// 2번(작업 파일 변경, index 다시 쓰기) 돈다 — 그래서 "status 만, 1~2번"으로 고정한다
+#[tokio::test]
+async fn editor_save_once_git_commands() {
+    let core = core_watching().await;
+    let mut repo = TestRepo::init();
+    repo.write_file("note.txt", "before\n");
+    repo.commit("base");
+    let (sink, mut rx) = collector();
+    let opened = core.open_repo(repo.path(), sink).await.unwrap();
+    wait_finished(&mut rx, opened.session).await;
+    // 여는 동안 띄운 명령과 그 감시 이벤트가 끝날 때까지 기다린다
+    wait_commands_quiet(&core, Duration::from_millis(800), Duration::from_secs(20)).await;
+    let FsEditableFile::Text { revision, .. } = core
+        .fs_read_editable_file(opened.session, "note.txt")
+        .await
+        .unwrap()
+    else {
+        panic!("편집할 수 있는 텍스트가 아님");
+    };
+
+    let start = core.command_log_recent(usize::MAX).len();
+    let saved = core
+        .fs_save_file(opened.session, "note.txt", &revision, "after\n")
+        .await
+        .unwrap();
+    assert!(matches!(saved, FsSaveResult::Saved { .. }), "{saved:?}");
+    let save = ran_since(&core, start);
+    let after_save = start + save.len();
+    // 감시가 띄운 status 가 하나라도 나올 때까지(최대 10초) 기다린 뒤 잦아들 때까지 모은다
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ran_since(&core, after_save).iter().any(|c| c == "status") {
+        assert!(Instant::now() < deadline, "감시가 status 를 다시 읽지 않음");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let end = wait_commands_quiet(&core, Duration::from_millis(800), Duration::from_secs(20)).await;
+    let watch = ran_since(&core, after_save);
+    eprintln!(
+        "저장 한 번: 저장 {save:?} / 감시 {watch:?} → 합계 {}",
+        end - start
+    );
+
+    assert_eq!(
+        save,
+        ["rev-parse", "status"],
+        "저장(저장소 판별) + status 갱신"
+    );
+    assert!(
+        (1..=2).contains(&watch.len()) && watch.iter().all(|c| c == "status"),
+        "감시는 status 만 1~2번: {watch:?}"
+    );
+    assert!(
+        (3..=4).contains(&(end - start)),
+        "저장 한 번은 저장 2 + 감시 1~2 다 (G1 전에는 전체 갱신 7개가 더 붙었다): {}",
+        end - start
+    );
+
+    // 대체 경로·사용자 새로고침의 전체 범위 갱신. 이어지는 감시의 status(전체 갱신이 고친 index)는 세지 않는다
+    core.refresh(opened.session).await.unwrap();
+    let refresh = ran_since(&core, end);
+    eprintln!("전체 갱신(대체 경로·새로고침): {refresh:?}");
+    // ref 읽기의 네 갈래(라벨·stash·worktree·remote)는 동시에 돌아 로그 순서가 바뀔 수 있어 정렬해 견준다
+    let mut refresh_sorted = refresh.clone();
+    refresh_sorted.sort();
+    assert_eq!(
+        refresh_sorted,
+        [
+            "for-each-ref",
+            "remote",
+            "rev-parse",
+            "stash",
+            "status",
+            "symbolic-ref",
+            "worktree"
+        ],
+        "전체 범위 갱신(HEAD·ref·status): {refresh:?}"
+    );
+    core.close_repo(opened.session).unwrap();
 }

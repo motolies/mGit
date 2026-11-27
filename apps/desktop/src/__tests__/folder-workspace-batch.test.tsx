@@ -14,6 +14,7 @@ import { formatTime, S } from '@mgit/ui';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppBody } from '../App';
+import { commandSourceOf } from '../features/workspace/editor-hints';
 import { Toolbar } from '../layout/Toolbar';
 import { getFolderStore, getWorkspaceStore, useAppStore } from '../store';
 import { DEFAULT_DOCK, type SessionMeta } from '../store/app-store';
@@ -181,7 +182,7 @@ async function mount(overrides: Partial<IpcClient> = {}) {
   render(
     <>
       <Toolbar />
-      <AppBody actions={[]} />
+      <AppBody commands={commandSourceOf(() => [])} />
     </>,
   );
   await tick();

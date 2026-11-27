@@ -1,31 +1,10 @@
 import { remoteBranchName } from '@mgit/ipc';
 import { isImeKey, S } from '@mgit/ui';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { rankMatches } from '../../components/fuzzy-match';
 import { useModal } from '../../components/use-modal';
 import { useSession } from '../../store';
 import styles from './BranchQuickSwitch.module.css';
-
-/** 단순 부분 일치 (대소문자 무시, 입력 글자 순서대로 포함) */
-export function fuzzyMatch(query: string, text: string): boolean {
-  const q = query.toLowerCase();
-  const t = text.toLowerCase();
-  if (q === '') {
-    return true;
-  }
-  if (t.includes(q)) {
-    return true;
-  }
-  let i = 0;
-  for (const ch of t) {
-    if (ch === q[i]) {
-      i++;
-      if (i === q.length) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 /** 빠른 브랜치 전환 (BR-07, ⌘B): 입력으로 거르고 Enter 로 checkout */
 export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
@@ -45,9 +24,7 @@ export function BranchQuickSwitch({ onClose }: { onClose: () => void }) {
 
   const candidates = useMemo(() => {
     const branches = s.labels.filter((l) => l.kind.kind !== 'tag' && !l.isCurrent);
-    const exact = branches.filter((l) => l.shortName.toLowerCase().includes(query.toLowerCase()));
-    const fuzzy = branches.filter((l) => !exact.includes(l) && fuzzyMatch(query, l.shortName));
-    return [...exact, ...fuzzy].slice(0, 50);
+    return rankMatches(branches, query, (l) => l.shortName).slice(0, 50);
   }, [s.labels, query]);
 
   useEffect(() => {

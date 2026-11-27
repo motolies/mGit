@@ -264,7 +264,7 @@ describe('브랜치 목록은 타임라인과 따로 읽는다 (PF-03, BT-06)', 
 });
 
 describe('folderChanged 의 부분 갱신 (PF-02)', () => {
-  it('저장소가 실려 오면 그 저장소의 요약·브랜치만 다시 읽어 기존 목록에 합친다', async () => {
+  it('ref 가 바뀐 저장소가 실려 오면 그 저장소의 요약·브랜치만 다시 읽어 기존 목록에 합친다', async () => {
     const { store, folderSummaries, folderBranches, folderChanges } = await opened();
     folderSummaries.mockImplementation(async () => [summary('b', 5)]);
     folderBranches.mockImplementation(async () => ({
@@ -272,7 +272,7 @@ describe('folderChanged 의 부분 갱신 (PF-02)', () => {
       branches: [branch('feature', at('b', { current: true })), branch('main', at('b'))],
     }));
 
-    store.getState().applyEvent(changed('b'));
+    store.getState().applyEvent(changed('b', true));
     await vi.advanceTimersByTimeAsync(400);
 
     expect(folderSummaries).toHaveBeenLastCalledWith(ID, [pathOf('b')]);
@@ -293,11 +293,11 @@ describe('folderChanged 의 부분 갱신 (PF-02)', () => {
     expect(store.getState().loading).toBe(false);
   });
 
-  it('여러 저장소가 짧은 시간에 바뀌면 디바운스 안에서 모아 한 번에 읽는다', async () => {
+  it('여러 저장소가 짧은 시간에 바뀌면 디바운스 안에서 모아 한 번에 읽고, 브랜치는 ref 가 바뀐 저장소만 읽는다', async () => {
     const { store, folderSummaries, folderBranches } = await opened();
     store.getState().applyEvent(changed('a'));
     await vi.advanceTimersByTimeAsync(200);
-    store.getState().applyEvent(changed('c'));
+    store.getState().applyEvent(changed('c', true));
     await vi.advanceTimersByTimeAsync(200);
     store.getState().applyEvent(changed('a'));
     // 마지막 이벤트 뒤 디바운스가 지나기 전에는 읽지 않는다
@@ -306,7 +306,27 @@ describe('folderChanged 의 부분 갱신 (PF-02)', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(folderSummaries).toHaveBeenCalledTimes(2);
     expect(folderSummaries).toHaveBeenLastCalledWith(ID, [pathOf('a'), pathOf('c')]);
-    expect(folderBranches).toHaveBeenLastCalledWith(ID, [pathOf('a'), pathOf('c')]);
+    expect(folderBranches).toHaveBeenLastCalledWith(ID, [pathOf('c')]);
+  });
+
+  it('작업 트리만 바뀐 저장소(저장·감시의 status)는 요약만 다시 읽고 브랜치 목록·바쁨 표시는 그대로 둔다 (G1)', async () => {
+    const { store, folderSummaries, folderBranches } = await opened();
+    const branches = store.getState().branches;
+    const summaries = store.getState().summaries;
+    const loading: boolean[] = [];
+    const off = store.subscribe((now, before) => {
+      if (now.loading !== before.loading) loading.push(now.loading);
+    });
+    store.getState().applyEvent(changed('b'));
+    store.getState().refreshRepos([pathOf('a')]);
+    await vi.advanceTimersByTimeAsync(400);
+    off();
+    expect(folderSummaries).toHaveBeenLastCalledWith(ID, [pathOf('b'), pathOf('a')]);
+    expect(folderBranches).toHaveBeenCalledTimes(1);
+    expect(store.getState().branches).toBe(branches);
+    // 다시 읽은 요약이 그대로면 옛 배열을 그대로 둔다 (구독한 화면을 깨우지 않는다)
+    expect(store.getState().summaries).toBe(summaries);
+    expect(loading).toEqual([]);
   });
 
   it('어느 저장소인지 모르는 이벤트가 섞이면 전부 다시 읽는다', async () => {

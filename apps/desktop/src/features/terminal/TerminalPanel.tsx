@@ -136,7 +136,8 @@ export function TerminalTabs() {
  * 명령이 죽고, 다시 열 때 초기 입력이 또 실행되므로 탭이 있는 동안은 마운트해 둔다
  */
 export function TerminalPanel() {
-  const actions = useContext(CommandContext);
+  // 동작 목록은 키를 누른 그때 읽는다 (출처는 활성 여부가 바뀌어도 그대로라 터미널이 다시 그려지지 않는다, D-3)
+  const commands = useContext(CommandContext);
   const client = useAppStore((st) => st.client);
   const terminals = useAppStore((st) => st.terminals);
   const active = useAppStore((st) => st.activeTerminal);
@@ -181,7 +182,7 @@ export function TerminalPanel() {
           <TerminalView
             cwd={term.cwd}
             io={io}
-            passKey={(e) => terminalPassKey(e, actions)}
+            passKey={(e) => terminalPassKey(e, commands.current())}
             initialInput={term.initialInput}
             onInitialInputSent={() => clearInput(term.id)}
             active={visible && term.id === active}

@@ -101,6 +101,7 @@ import {
   squashRangeDraft,
   squashRangeOnto,
 } from './squash-range';
+import { shareValue } from './structural-share';
 import {
   type DivergedAsk,
   isMissingRemoteRef,
@@ -1222,6 +1223,19 @@ export function createSessionStore(
     }
   };
   const store = createStore<SessionState>()((set, get) => {
+    /**
+     * 다시 읽은 값을 넣는다 (G3). 지금 값과 모든 필드가 같으면 넣지 않고(구독한 화면을 깨우지 않는다), 다르면 같은 부분은 옛
+     * 참조를 살려 넣는다 (`shareValue` — 바뀐 항목만 새 참조). 넣은 값(같으면 지금 값)을 돌려준다
+     */
+    const setShared = <K extends keyof SessionState>(
+      key: K,
+      value: SessionState[K],
+    ): SessionState[K] => {
+      const prev = get()[key];
+      const next = shareValue(prev, value);
+      if (next !== prev) set({ [key]: next } as Pick<SessionState, K>);
+      return next;
+    };
     /** 장시간 명령 상태를 부분 갱신한다 */
     const patchOp = (opId: number, patch: Partial<OperationState>) => {
       const current = get().operations[opId];
@@ -1371,19 +1385,30 @@ export function createSessionStore(
     let rewordSeq = 0;
     let diffSeq = 0;
     let compareSeq = 0;
-    let compareFilesSeq = 0;
     let compareFull = false;
     let diffFull = false;
 
-    /** 요청 순번으로 오래된 성공·오류를 버리고 재조회 동안 이전 선택의 쓰기를 막는다. */
-    const loadDiff = async (target: FileTarget, full: boolean, keepVisible = false) => {
+    /**
+     * 요청 순번으로 오래된 성공·오류를 버리고 재조회 동안 이전 선택의 쓰기를 막는다.
+     * `quiet` 는 다른 파일의 status 이벤트처럼 "바뀌었을 수도 있어 다시 보는" 재조회다 (D-5): 보던 diff 와 읽는 중 표시를
+     * 그대로 두고, 받은 문서가 지금 것과 같으면(내용 그대로) 상태를 바꾸지 않아 diff 화면을 다시 그리지 않는다. 쓰기를 막지
+     * 않아도 되는 까닭: 부분 stage·되돌리기는 확인한 문서의 revision 을 코어에 넘겨 코어가 낡은 문서를 거른다
+     */
+    const loadDiff = async (
+      target: FileTarget,
+      full: boolean,
+      keepVisible = false,
+      quiet = false,
+    ) => {
       const seq = ++diffSeq;
       diffFull = full;
-      set({
-        ...(keepVisible ? {} : { diff: null, diffDocument: null }),
-        diffLoading: true,
-        diffError: null,
-      });
+      if (!quiet) {
+        set({
+          ...(keepVisible ? {} : { diff: null, diffDocument: null }),
+          diffLoading: true,
+          diffError: null,
+        });
+      }
       try {
         const { ignoreWhitespace, context } = get().diffOptions;
         const opts = { ignoreWhitespace, context };
@@ -1413,7 +1438,13 @@ export function createSessionStore(
           document = await client.workTreeDiffDocument(id, target.path, target.staged, full, opts);
         }
         if (seq === diffSeq && get().selectedFile === target) {
-          set({ diff: document.diff, diffDocument: document, diffLoading: false });
+          const now = get();
+          const shared = now.diffDocument ? shareValue(now.diffDocument, document) : document;
+          // 조용한 재조회의 결과가 보던 문서와 같으면 아무것도 바꾸지 않는다
+          if (quiet && shared === now.diffDocument && !now.diffLoading && now.diffError === null) {
+            return;
+          }
+          set({ diff: shared.diff, diffDocument: shared, diffLoading: false, diffError: null });
         }
       } catch (e) {
         if (seq === diffSeq && get().selectedFile === target) {
@@ -1931,7 +1962,11 @@ export function createSessionStore(
             });
             return;
           case 'statusChanged': {
-            set({ status: event.status, op: event.op ?? null });
+            // 코어는 바뀌었을 때만 보낸다. 그래도 바뀌지 않은 줄·묶음은 옛 참조로 둔다 (G3 — 행 단위 메모가 살게)
+            set({
+              status: shareValue(s.status, event.status),
+              op: shareValue(s.op, event.op ?? null),
+            });
             // 충돌 수가 바뀌면 이름 변경 묶음·rerere·보관 해결을 다시 읽는다 (D2)
             const conflictedNow = event.status.summary.conflicted;
             if (conflictedNow !== s.status.summary.conflicted) {
@@ -1970,12 +2005,16 @@ export function createSessionStore(
                     (entry) => !entry.conflict && entryInArea(entry, target.staged),
                   ),
                 );
+                // 파일 목록이 그대로면 고른 대상의 참조도 그대로 둔다 (G3)
                 const nextTarget =
                   target.origin?.kind === 'worktree'
-                    ? { ...target, origin: { ...target.origin, files } }
+                    ? shareValue(target, { ...target, origin: { ...target.origin, files } })
                     : target;
                 if (nextTarget !== target) set({ selectedFile: nextTarget });
-                void loadDiff(nextTarget, diffFull, s.busy);
+                // 보던 파일의 status 항목이 그대로여도(다른 파일의 변경) 내용은 바뀌었을 수 있어 다시 보되, 같으면 다시 그리지
+                // 않는다 (D-5). 내용만 바뀌고 status 가 그대로면 코어가 이 이벤트를 보내지 않으므로 이 재조회가 그 변경을 잡는
+                // 몇 안 되는 길이다 — 묻기 자체는 남긴다
+                void loadDiff(nextTarget, diffFull, true, true);
               } else {
                 const files = orderedDiffFiles(
                   event.status.entries.filter(
@@ -1999,7 +2038,8 @@ export function createSessionStore(
             return;
           }
           case 'refsChanged':
-            set({ refs: event.refs });
+            // 바뀌지 않은 라벨·stash·워크트리 목록은 옛 참조로 둔다 (G3)
+            set({ refs: shareValue(s.refs, event.refs) });
             // 포함 branch 는 ref 가 바뀌면 낡는다 (CD-03). 작성자 후보(이력 전체)도 새 커밋·fetch 로 바뀔 수 있다 (W26)
             containing.invalidate();
             invalidateAuthors();
@@ -2675,7 +2715,8 @@ export function createSessionStore(
       },
 
       async openCompare(a, b, threeDot) {
-        const seq = ++compareFilesSeq;
+        // 요청만 싣는다. 비교 탭(`ComparisonLauncher` → `ComparisonDoc`)이 곧바로 이 값을 가져가고 닫은 뒤 스스로 조회하므로,
+        // 여기서 파일 목록을 미리 받으면 버려진다 (G5)
         compareFull = false;
         ++compareSeq;
         set({
@@ -2687,18 +2728,10 @@ export function createSessionStore(
             path: null,
             diff: null,
             diffDocument: null,
-            loading: true,
+            loading: false,
             diffLoading: false,
           },
         });
-        try {
-          if (b === '@LOCAL') return;
-          const files = await client.compareRefs(id, a, b, threeDot);
-          const c = get().compare;
-          if (seq === compareFilesSeq && c) set({ compare: { ...c, files, loading: false } });
-        } catch (e) {
-          if (seq === compareFilesSeq) set({ compare: null, actionError: describeError(e) });
-        }
       },
 
       async compareSelectFile(path, full) {
@@ -2736,7 +2769,6 @@ export function createSessionStore(
 
       closeCompare() {
         ++compareSeq;
-        ++compareFilesSeq;
         set({ compare: null });
       },
 
@@ -3418,13 +3450,12 @@ export function createSessionStore(
 
       async loadStashes() {
         try {
-          const stashes = await client.listStashes(id);
-          set({ stashes });
+          const stashes = setShared('stashes', await client.listStashes(id));
           const view = get().stashView;
           if (view) {
-            // 보고 있는 stash 의 번호도 함께 갱신한다 (번호는 위치라서 목록이 바뀌면 달라진다)
+            // 보고 있는 stash 의 번호도 함께 갱신한다 (번호는 위치라서 목록이 바뀌면 달라진다). 같으면 그대로 둔다
             const fresh = stashes.find((s) => s.info.oid === view.entry.info.oid);
-            set({ stashView: fresh ? { ...view, entry: fresh } : null });
+            if (fresh !== view.entry) set({ stashView: fresh ? { ...view, entry: fresh } : null });
           }
         } catch {
           // 목록을 못 읽어도 refs.stashes 로 표시는 된다
@@ -3511,8 +3542,7 @@ export function createSessionStore(
 
       async loadSubmodules() {
         try {
-          const submodules = await client.submodules(id);
-          set({ submodules });
+          setShared('submodules', await client.submodules(id));
         } catch {
           // 서브모듈 없는 저장소면 빈 목록
         }
@@ -3720,8 +3750,7 @@ export function createSessionStore(
 
       async loadRadar() {
         try {
-          const radar = await client.conflictRadar(id, 12, false);
-          set({ radar });
+          setShared('radar', await client.conflictRadar(id, 12, false));
         } catch {
           // 레이더는 없어도 된다
         }
@@ -3792,7 +3821,7 @@ export function createSessionStore(
 
       async loadRerere() {
         try {
-          set({ rerere: await client.rerereStatus(id) });
+          setShared('rerere', await client.rerereStatus(id));
         } catch {
           // 없어도 된다
         }
@@ -3810,8 +3839,7 @@ export function createSessionStore(
 
       async loadKept() {
         try {
-          const kept = await client.keptResolutions(id);
-          set({ kept });
+          const kept = setShared('kept', await client.keptResolutions(id));
           const current = kept.filter((k) => k.matchesCurrent);
           const key = current[0]?.opKey ?? null;
           const st = get();
@@ -3849,7 +3877,7 @@ export function createSessionStore(
 
       async loadRenameConflicts() {
         try {
-          set({ renameConflicts: await client.renameConflicts(id) });
+          setShared('renameConflicts', await client.renameConflicts(id));
         } catch {
           // 없어도 된다
         }
@@ -4205,7 +4233,7 @@ export function createSessionStore(
 
       async loadUndo() {
         try {
-          set({ undoState: await client.undoState(id) });
+          setShared('undoState', await client.undoState(id));
         } catch {
           // 없어도 된다
         }
@@ -4230,7 +4258,7 @@ export function createSessionStore(
 
       async loadBackups() {
         try {
-          set({ backups: await client.backups(id) });
+          setShared('backups', await client.backups(id));
         } catch {
           // 없어도 된다
         }
@@ -4341,7 +4369,7 @@ export function createSessionStore(
           return;
         }
         try {
-          set({ worktreeWips: await client.worktreeWips(id) });
+          setShared('worktreeWips', await client.worktreeWips(id));
         } catch {
           // 없어도 된다
         }

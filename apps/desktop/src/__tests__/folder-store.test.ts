@@ -1,5 +1,6 @@
 import { createNullClient, type IpcClient, type RepoSummary } from '@mgit/ipc';
 import { describe, expect, it, vi } from 'vitest';
+import { FOCUS_REFRESH_GAP_MS } from '../store/focus-refresh';
 import { autoRefreshMs, createFolderStore, visibleSummaries } from '../store/folder-store';
 
 /** 요약 한 줄 */
@@ -138,6 +139,8 @@ describe('창 포커스·주기 재조회 (MR-03)', () => {
     expect(calls()).toHaveLength(1);
 
     const stop = store.getState().startAutoRefresh();
+    // 열 때 막 읽었으므로 포커스 갱신 간격(G4)이 지난 뒤의 포커스다
+    await vi.advanceTimersByTimeAsync(FOCUS_REFRESH_GAP_MS);
     window.dispatchEvent(new Event('focus'));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls()).toHaveLength(2);

@@ -165,8 +165,11 @@ describe('SessionStore (A3 diff·히스토리·그래프)', () => {
     await store.getState().openFileHistory('f.txt');
     expect(store.getState().fileHistory?.entries[0]?.path).toBe('old.txt');
 
+    // 비교는 편집기 탭이 조회한다. 스토어는 요청만 싣고 목록을 미리 받지 않는다 (G5 — 받아도 버려졌다)
     await store.getState().openCompare('main', 'feat', true);
-    expect(store.getState().compare?.files).toHaveLength(1);
+    expect(store.getState().compare).toMatchObject({ a: 'main', b: 'feat', threeDot: true });
+    expect(store.getState().compare?.loading).toBe(false);
+    expect(c.compareRefs).not.toHaveBeenCalled();
     await store.getState().compareSelectFile('f.txt');
     expect(c.compareFileDiffDocument).toHaveBeenCalledWith(
       1,

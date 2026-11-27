@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { AppBody } from '../App';
 import { focusPanel } from '../actions';
 import { executeCommand } from '../command-registry';
+import { commandSourceOf } from '../features/workspace/editor-hints';
 import { getWorkspaceStore, useAppStore } from '../store';
 import { DEFAULT_DOCK, type SessionMeta } from '../store/app-store';
 import { fileEditors } from '../store/file-editor-store';
@@ -90,7 +91,7 @@ async function mount() {
       leftTool: 'project',
     });
   });
-  render(<AppBody actions={[]} />);
+  render(<AppBody commands={commandSourceOf(() => [])} />);
   await tick();
 }
 

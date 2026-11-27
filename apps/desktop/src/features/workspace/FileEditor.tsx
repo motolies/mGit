@@ -17,7 +17,7 @@ import {
 import { codeHighlighter, loadLanguage } from '@mgit/diff-view';
 import type { FsEncoding, HeadState, SessionId } from '@mgit/ipc';
 import { Button, ConfirmDialog, S } from '@mgit/ui';
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { type ComponentProps, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
 import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
 import { useRovingToolbar } from '../../components/roving';
@@ -25,6 +25,7 @@ import { useAppStore } from '../../store';
 import { getEditorPreferences, useEditorPreferences } from '../../store/editor-preferences';
 import { type EditorFile, fileEditors } from '../../store/file-editor-store';
 import { getFolderStore, getSessionStore } from '../../store/session-registry';
+import { useEditorDoc, useEditorImageEpoch } from '../../store/use-file-editors';
 import { openFileComparison } from '../history/comparison';
 import { EncodingMenu, encodingName } from './EncodingMenu';
 import {
@@ -201,6 +202,18 @@ function extensions(doc: EditorFile, autoCloseBrackets: boolean): Extension {
   ];
 }
 
+/**
+ * 문서의 그림 재확인 신호(`imageEpoch`)를 받아 미리보기에 넘긴다. 검사마다(2초) 오르므로 편집기 전체가 아니라 미리보기만
+ * 다시 그린다 (F1)
+ */
+function DocMarkdownPreview({
+  doc,
+  ...props
+}: { doc: EditorFile } & Omit<ComponentProps<typeof MarkdownPreview>, 'checkKey'>) {
+  const checkKey = useEditorImageEpoch(doc);
+  return <MarkdownPreview {...props} checkKey={checkKey} />;
+}
+
 /** 탭이 사라져도 남는 EditorState를 표시하며 디스크 충돌은 명시적 확인 후 해결한다. */
 export function FileEditor({
   doc,
@@ -221,7 +234,8 @@ export function FileEditor({
   const editTools = useRovingToolbar<HTMLDivElement>('horizontal');
   const viewTools = useRovingToolbar<HTMLDivElement>('horizontal');
   const historyTools = useRovingToolbar<HTMLDivElement>('horizontal');
-  useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
+  // 이 문서가 바뀔 때만 다시 그린다 — 다른 문서의 입력·저장, 바뀐 것 없는 검사에는 깨지 않는다 (F1)
+  useEditorDoc(doc);
   const host = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -241,7 +255,8 @@ export function FileEditor({
   const [headEpoch, setHeadEpoch] = useState(0);
   // 조회가 필요해진 횟수와 마지막으로 결과를 넣은 횟수. 둘이 다르면 입력이 멈춘 뒤 조회한다
   const [queryEpoch, setQueryEpoch] = useState(0);
-  const [loadedEpoch, setLoadedEpoch] = useState(-1);
+  // 처음에는 같은 값이라 조회하지 않는다 — 저장소 세션이 정해져 차례가 오를 때 첫 조회를 한 번 한다
+  const [loadedEpoch, setLoadedEpoch] = useState(0);
   const [changePreview, setChangePreview] = useState<ChangePreview | null>(null);
   const formatBusy = useRef(false);
   const canFormat = formatterParser(source?.path ?? doc.path) !== null;
@@ -363,9 +378,11 @@ export function FileEditor({
   }, [gitSession]);
   const annotating = !!repoTools && (prefs.currentBlame || prefs.allBlame || prefs.changeMarkers);
   // 다시 조회할 때: 저장소 세션이 정해짐, 원문 교체(다시 읽기), HEAD 변경, 새로고침, 주석을 켬. 입력으로는 조회하지 않고
-  // 조회해 둔 blame 을 편집에 맞춰 옮긴다 (`annotations.ts` `mapBlame`)
+  // 조회해 둔 blame 을 편집에 맞춰 옮긴다 (`annotations.ts` `mapBlame`). 저장소 세션이 정해지기 전에는 차례를 올리지 않는다
+  // — 문서가 붙을 때와 세션이 정해질 때 두 번 올라 첫 조회가 한 번 더 도는 일을 막는다 (조회는 세션이 있어야 한다)
   // biome-ignore lint/correctness/useExhaustiveDependencies: 조회가 필요해진 신호만 센다.
   useEffect(() => {
+    if (gitSession === null) return;
     setQueryEpoch((epoch) => epoch + 1);
   }, [
     doc,
@@ -792,13 +809,13 @@ export function FileEditor({
         ) : null}
         {previewVisible ? (
           <div className={styles.preview}>
-            <MarkdownPreview
+            <DocMarkdownPreview
+              doc={doc}
               zoomPercent={zoom.zoomPercent}
               text={previewText}
               source={source}
               viewState={viewState}
               refreshKey={String(refreshEpoch)}
-              checkKey={doc.imageEpoch}
             />
           </div>
         ) : null}

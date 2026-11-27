@@ -9,16 +9,16 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from 'react';
 import { MatchedText } from '../../components/MatchedText';
 import { rovingIndex } from '../../components/roving';
 import { useModal } from '../../components/use-modal';
-import { getFolderStore, getWorkspaceStore, useAppStore } from '../../store';
-import { editorDrafts } from '../../store/editor-drafts';
+import { getWorkspaceStore, useAppStore, useFolder } from '../../store';
+import { editorDraftStamp, editorDrafts } from '../../store/editor-drafts';
 import { fileEditors } from '../../store/file-editor-store';
 import { readRecentFiles } from '../../store/recent-files';
 import { tabSpace } from '../../store/session-space';
+import { useEditorSelect } from '../../store/use-file-editors';
 import { fileViewDoc } from '../../store/workspace-store';
 import { fileListCache, filesStamp } from './file-list';
 import { presentRecent, rankFiles, repoOf } from './fuzzy';
@@ -36,10 +36,16 @@ export function WorkspaceSearch() {
   const resultViewport = useRef<HTMLDivElement>(null);
   const listId = useId();
   const composing = useRef(false);
-  const draftVersion = useSyncExternalStore(fileEditors.subscribe, fileEditors.getVersion);
   const session = useAppStore((s) => s.activeSessionId);
   const client = useAppStore((s) => s.client);
   const root = useAppStore((s) => (session === null ? '' : (s.sessions[session]?.path ?? '')));
+  // 내용 검색일 때만 이 탭 공간의 초안 지문(경로·sequence)을 본다. 바뀐 것 없는 검사·저장 상태 전환·이 공간 밖의 입력에는
+  // 다시 그리지도 재검색하지도 않는다 (F1)
+  const draftStamp = useEditorSelect(() => {
+    if (mode !== 'content' || session === null) return '';
+    const space = tabSpace(session, root);
+    return space ? editorDraftStamp(space) : '';
+  });
   const restoreAfterClose = useRef(true);
   // 빠른 열기 창: 전체 파일(⌘P) 또는 최근 파일만(⌘E)
   const quick = mode === 'files' || mode === 'recent';
@@ -155,10 +161,13 @@ export function WorkspaceSearch() {
     matchCase,
     filter,
     scope,
-    draftVersion,
+    draftStamp,
     searchEpoch,
   ]);
-  const repos = session === null ? [] : (getFolderStore(session)?.getState().repos ?? []);
+  // 폴더 탭의 저장소 목록과 경로 공간(그룹은 별칭)을 구독한다. 패널이 열린 동안 폴더를 다시 훑거나 그룹을 고쳐도 저장소
+  // 범위 선택지가 낡지 않는다 (예전에는 편집기 저장소의 전역 알림이 우연히 다시 그려 주었다)
+  const folderView = useFolder((f) => ({ repos: f.repos, space: f.space }));
+  const repos = folderView?.repos ?? [];
   // 저장소 범위 선택지의 값: 저장소의 탭 공간 경로 (폴더는 폴더 기준, 그룹은 별칭)
   const scopeSpace = session === null ? null : tabSpace(session, root);
   // 경로 10만 개면 한 번 순위 계산에 수십 ms 가 걸리므로, 입력칸은 먼저 그리고 순위는 뒤따라 계산한다

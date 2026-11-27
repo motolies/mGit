@@ -55,15 +55,15 @@ export type ActionApp = Pick<
   | 'setGroupDialog'
 >;
 
-/** 동작이 쓰는 세션 상태 */
+/**
+ * 동작이 쓰는 세션 상태 (G2). 활성 여부·제목을 정하는 값은 원시값으로만 둔다 — `refs`·`status`·`undoState` 가 새 객체로 와도
+ * 이 값들이 같으면 동작 목록이 같은 참조로 남아 앱이 다시 그려지지 않는다. 실행할 것은 세션 스토어의 동작 함수라 부르는
+ * 순간의 상태에 대고 돈다. 만드는 곳은 `actionSessionOf`
+ */
 export type ActionSession = Pick<
   SessionState,
   | 'busy'
-  | 'op'
-  | 'refs'
   | 'path'
-  | 'status'
-  | 'undoState'
   | 'fetch'
   | 'pull'
   | 'push'
@@ -74,9 +74,57 @@ export type ActionSession = Pick<
   | 'redo'
   | 'setReflogOpen'
   | 'openFileBackups'
-  | 'remoteProject'
   | 'checkRemoteTags'
->;
+> & {
+  /** 진행 중 작업(병합·rebase 등)이 있는지 */
+  inOp: boolean;
+  /** 등록된 원격이 있는지 */
+  hasRemotes: boolean;
+  /** 지금 브랜치가 있는지 (분리 HEAD 가 아님) */
+  onBranch: boolean;
+  /** 지금 브랜치에 사라지지 않은 업스트림이 있는지 */
+  hasUpstream: boolean;
+  /** stage·unstage·미추적 변경이 하나라도 있는지 */
+  hasChanges: boolean;
+  /** 되돌릴 첫 항목의 이름 (되돌릴 것이 없으면 null) */
+  undoLabel: string | null;
+  /** 다시 할 것이 있는지 */
+  canRedo: boolean;
+  /** 원격 프로젝트(GitHub·GitLab)의 종류. 없으면 null */
+  remoteKind: NonNullable<SessionState['remoteProject']>['kind'] | null;
+};
+
+/**
+ * 세션 상태에서 동작이 쓰는 값을 뽑는다 (`ActionSession`). 얕은 비교로 구독하면(`useShallow`) 활성 여부·제목이 같은 상태
+ * 변화에는 같은 객체가 남는다. 동작 함수는 스토어가 한 번 만든 것이라 같은 세션이면 늘 같다
+ */
+export function actionSessionOf(s: SessionState): ActionSession {
+  const current = s.refs.labels.find((l) => l.isCurrent);
+  const { staged, unstaged, untracked } = s.status.summary;
+  return {
+    busy: s.busy,
+    path: s.path,
+    inOp: s.op !== null,
+    hasRemotes: s.refs.remotes.length > 0,
+    onBranch: current !== undefined,
+    hasUpstream: !!current?.upstream && !current.upstreamGone,
+    hasChanges: staged + unstaged + untracked > 0,
+    undoLabel: s.undoState.entries[0]?.label ?? null,
+    canRedo: s.undoState.redoCount > 0,
+    remoteKind: s.remoteProject?.kind ?? null,
+    fetch: s.fetch,
+    pull: s.pull,
+    push: s.push,
+    setSearchOpen: s.setSearchOpen,
+    openRepoSettings: s.openRepoSettings,
+    stashPush: s.stashPush,
+    undo: s.undo,
+    redo: s.redo,
+    setReflogOpen: s.setReflogOpen,
+    openFileBackups: s.openFileBackups,
+    checkRemoteTags: s.checkRemoteTags,
+  };
+}
 
 /** 동작이 읽을 상태. 훅이 아니라 호출 시점의 스냅샷이다 */
 export interface ActionContext {
@@ -381,9 +429,10 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
   const { app, session } = ctx;
   const hasRepo = session !== null;
   const busy = session?.busy ?? false;
-  const inOp = (session?.op ?? null) !== null;
-  const hasRemotes = (session?.refs.remotes.length ?? 0) > 0;
-  const current = session?.refs.labels.find((l) => l.isCurrent) ?? null;
+  const inOp = session?.inOp ?? false;
+  const hasRemotes = session?.hasRemotes ?? false;
+  const onBranch = session?.onBranch ?? false;
+  const hasUpstream = session?.hasUpstream ?? false;
   const repoPath = session?.path ?? null;
   const activeId = app.activeSessionId;
   const order = app.sessionOrder;
@@ -395,7 +444,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
   // 외부 앱으로 여는 곳: 저장소 탭은 저장소 루트, 폴더 탭은 폴더 루트 (Project 트리 선택과 상관없이 탭의 루트)
   const openPath = folder ? folder.root : repoPath;
   // 저장소 탭 세션의 원격 프로젝트 종류 (Pull Requests 도구 창을 보일 수 있는가 — 폴더 탭은 세션이 null 이라 없음)
-  const remoteKind = session?.remoteProject?.kind ?? null;
+  const remoteKind = session?.remoteKind ?? null;
   const dockVisible = effectiveDock(app.dock, ctx.tabKind).tool !== null;
   // Git 도구 창의 로그 탭이 지금 보이는지 (폴더 탭·저장소 탭 모두 로그가 이 탭에 있다, W21)
   const logShown = app.dock.tool === 'git' && app.dock.gitTab === 'log';
@@ -518,9 +567,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.actions.pull,
       group: 'sync',
       shortcut: 'mod+shift+l',
-      enabled: folder
-        ? folder.enabled
-        : hasRepo && !!current?.upstream && !current.upstreamGone && !busy && !inOp,
+      enabled: folder ? folder.enabled : hasRepo && hasUpstream && !busy && !inOp,
       run: () => (folder ? folder.pull() : void session?.pull()),
     },
     {
@@ -528,7 +575,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.actions.push,
       group: 'sync',
       shortcut: 'mod+shift+k',
-      enabled: folder ? folder.enabled : hasRepo && hasRemotes && !!current && !busy && !inOp,
+      enabled: folder ? folder.enabled : hasRepo && hasRemotes && onBranch && !busy && !inOp,
       run: () => (folder ? folder.push() : void session?.push()),
     },
     {
@@ -684,14 +731,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.actions.stashSave,
       group: 'branch',
       shortcut: 'mod+shift+s',
-      enabled:
-        hasRepo &&
-        !busy &&
-        !inOp &&
-        session.status.summary.staged +
-          session.status.summary.unstaged +
-          session.status.summary.untracked >
-          0,
+      enabled: hasRepo && !busy && !inOp && session.hasChanges,
       run: () => void session?.stashPush(null, true, false, []),
     },
     {
@@ -758,12 +798,10 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
     },
     {
       id: 'edit.undo',
-      title: session?.undoState.entries[0]
-        ? S.safety.undoOf(session.undoState.entries[0].label)
-        : S.safety.undo,
+      title: session?.undoLabel != null ? S.safety.undoOf(session.undoLabel) : S.safety.undo,
       group: 'repo',
       shortcut: 'mod+z',
-      enabled: hasRepo && !busy && (session?.undoState.entries.length ?? 0) > 0,
+      enabled: hasRepo && !busy && session?.undoLabel != null,
       run: () => void session?.undo(),
     },
     {
@@ -771,7 +809,7 @@ function buildDefaultActions(ctx: ActionContext): Action[] {
       title: S.safety.redo,
       group: 'repo',
       shortcut: 'mod+shift+z',
-      enabled: hasRepo && !busy && (session?.undoState.redoCount ?? 0) > 0,
+      enabled: hasRepo && !busy && (session?.canRedo ?? false),
       run: () => void session?.redo(),
     },
     {
@@ -990,6 +1028,32 @@ export function groupOpenActions(
     enabled,
     run: () => openGroupAt(g.id),
   }));
+}
+
+/** 그리기 자가 진단을 돌리는 손잡이 (`window.__mgitPerf` 의 일부 — 성능 기록기가 켜졌을 때만 있다) */
+export interface SelftestRunner {
+  selftest(value?: string): Promise<void>;
+}
+
+/**
+ * 팔레트의 "성능 자가 진단 실행" (반응성 G). 개발·테스트 프로필에서만 있고 배포 프로필은 빈 목록이다. 기록기가 꺼져 있으면
+ * (`mgit.perf=0`) 꺼진 채로 보인다. 지금 화면에서 바로 재고 끝나도 창을 닫지 않는다. 단축키 설정 목록에는 넣지 않는다
+ */
+export function developerActions(
+  profile: 'production' | 'development' | 'test',
+  runner: SelftestRunner | undefined,
+): Action[] {
+  if (profile === 'production') return [];
+  return [
+    {
+      id: 'dev.perfSelftest',
+      title: S.actions.perfSelftest,
+      group: 'app',
+      enabled: runner !== undefined,
+      disabledReason: runner ? undefined : S.perfSelftest.unavailable,
+      run: () => void runner?.selftest('frames=24'),
+    },
+  ];
 }
 
 /** 화면별 명령은 안정적 ID와 메타데이터를 갖고, 구현은 화면 수명에 맞춰 등록한다. */

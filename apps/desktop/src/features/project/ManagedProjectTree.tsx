@@ -12,6 +12,7 @@ import type { MenuItem } from '../../components/ContextMenu';
 import { TextContextMenu } from '../../components/TextContextMenu';
 import { ToolButton } from '../../layout/ToolButton';
 import { useAppStore } from '../../store';
+import { FocusTier, onFocusRefresh } from '../../store/focus-refresh';
 import { baseName, childPath, isWithin, parentDir } from '../../store/fs-path';
 import { dirSpace, type RootSpace } from '../../store/root-space';
 import { menuTargets } from '../workspace/folder-tree-menu';
@@ -34,6 +35,38 @@ interface InlineEdit {
   parent: string;
   path: string;
   name: string;
+}
+
+/**
+ * 트리에 내려 줄 행: 새 파일·폴더를 만드는 중이면 부모 바로 아래에 이름 입력 줄 자리(`EDIT_ID`)를 끼운다. 아니면 받은 행
+ * 배열을 그대로 돌려준다 — 참조가 같아야 트리의 폭 측정·키 규칙 메모가 다시 돌지 않는다
+ */
+function withPlaceholder(
+  rows: readonly ProjectTreeRow[],
+  kind: 'createFile' | 'createDirectory' | null,
+  parentId: string,
+): readonly ProjectTreeRow[] {
+  if (kind === null) return rows;
+  const parentIndex = rows.findIndex((row) => row.id === parentId);
+  const placeholder: EntryRow = {
+    kind: 'entry',
+    id: EDIT_ID,
+    path: EDIT_ID,
+    name: '',
+    entryKind: kind === 'createFile' ? 'file' : 'dir',
+    depth: (rows[parentIndex]?.depth ?? 0) + 1,
+    parentId,
+    setSize: 1,
+    posInSet: 1,
+    expanded: false,
+    expandable: false,
+    openable: false,
+    size: null,
+    mtimeMs: null,
+  };
+  const next = [...rows];
+  next.splice(Math.max(0, parentIndex + 1), 0, placeholder);
+  return next;
 }
 
 /** 중복 선택과 자식 선택을 제거해 같은 파일을 두 번 이동하지 않는다. */
@@ -279,7 +312,12 @@ export function ManagedProjectTree({
     return () => document.removeEventListener('pointerdown', outside, true);
   }, [edit, busy]);
 
-  // Finder에서 클립보드를 바꿨다가 돌아오면 오래된 잘라내기 표시를 해제한다.
+  // Finder에서 클립보드를 바꿨다가 돌아오면 오래된 잘라내기 표시를 해제한다. 처음 그릴 때 한 번 읽고, 창 포커스 복귀 때는
+  // 포커스 갱신 조율기(G4, 나머지 단계)를 거쳐 잘라내기 표시가 있을 때만 읽는다 — 표시가 없으면 해제할 것이 없고, 잘라내기는
+  // 이 트리가 하므로(다른 탭의 트리는 그려질 때 처음 읽기로 맞춘다) 바깥에서 새 표시가 생기지 않는다. 클립보드 읽기는 UI
+  // 스레드의 동기 명령이라 돌아온 직후 화면을 막지 않게 줄인다
+  const cutRef = useRef(cutPaths);
+  cutRef.current = cutPaths;
   useEffect(() => {
     let live = true;
     const refresh = () => {
@@ -299,10 +337,16 @@ export function ManagedProjectTree({
         .catch(() => {});
     };
     refresh();
-    window.addEventListener('focus', refresh);
+    const off = onFocusRefresh({
+      name: 'project-tree:clipboard',
+      tier: FocusTier.rest,
+      run: () => {
+        if (cutRef.current.length > 0) refresh();
+      },
+    });
     return () => {
       live = false;
-      window.removeEventListener('focus', refresh);
+      off();
     };
   }, [client, space]);
 
@@ -691,31 +735,13 @@ export function ManagedProjectTree({
       });
   };
 
-  const displayRows = [...rows];
-  if (edit && edit.kind !== 'rename') {
-    const parent = rows.find((row) => row.id === edit.parent);
-    const placeholder: EntryRow = {
-      kind: 'entry',
-      id: EDIT_ID,
-      path: EDIT_ID,
-      name: '',
-      entryKind: edit.kind === 'createFile' ? 'file' : 'dir',
-      depth: (parent?.depth ?? 0) + 1,
-      parentId: edit.parent,
-      setSize: 1,
-      posInSet: 1,
-      expanded: false,
-      expandable: false,
-      openable: false,
-      size: null,
-      mtimeMs: null,
-    };
-    displayRows.splice(
-      Math.max(0, rows.findIndex((row) => row.id === edit.parent) + 1),
-      0,
-      placeholder,
-    );
-  }
+  // 새 항목 입력 줄의 자리만 본다 (입력 중인 이름은 행 모양을 바꾸지 않는다)
+  const placeholderKind = edit && edit.kind !== 'rename' ? edit.kind : null;
+  const placeholderParent = edit?.parent ?? '';
+  const displayRows = useMemo(
+    () => withPlaceholder(rows, placeholderKind, placeholderParent),
+    [rows, placeholderKind, placeholderParent],
+  );
   const inline = edit
     ? {
         id: edit.kind === 'rename' ? edit.path : EDIT_ID,

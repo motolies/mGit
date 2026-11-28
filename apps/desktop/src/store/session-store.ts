@@ -810,6 +810,11 @@ export interface SessionState {
    */
   checkRemoteTags(remotes?: string[]): Promise<void>;
   /**
+   * 태그 문서를 처음 열 때 보이는 원격을 한 번 확인한다 (네트워크, 캐시가 있어도 새로 받는다). 세션마다 한 번만 해,
+   * 문서를 다시 열거나 원격을 바꿔도 되풀이하지 않는다 — 그 뒤 확인은 "원격 확인" 단추로 한다
+   */
+  autoCheckRemoteTags(remote: string): Promise<void>;
+  /**
    * 네트워크 없이 보고서를 다시 받는다 (앱의 push·삭제·조회 뒤, ref 변경 뒤 — 코어 캐시가 고친 값). 기본은 받은 적이 있는
    * 원격만, `all` 이면 모든 원격(다른 탭이 이미 확인한 같은 저장소의 캐시를 읽는다). 사라진 원격·비워진 캐시는 지운다
    */
@@ -1574,6 +1579,8 @@ export function createSessionStore(
      */
     let tagSeq = 0;
     const tagApplied: Record<string, number> = {};
+    /** 태그 문서를 처음 열 때의 자동 확인을 이미 했는지 (세션마다 한 번 — 실패해도 반복하지 않는다) */
+    let autoTagChecked = false;
 
     /**
      * 보고서 하나를 반영한다. 확인한 적도 실패한 적도 없는 빈 보고서면 그 원격을 지운다 (캐시가 비워졌다). 바뀐 것이 없으면
@@ -3191,6 +3198,15 @@ export function createSessionStore(
             }
           }),
         );
+      },
+
+      async autoCheckRemoteTags(remote) {
+        // 모르는 원격(아직 원격 목록을 받기 전 등)은 기회를 쓰지 않고 건너뛴다
+        if (autoTagChecked || !get().refs.remotes.some((r) => r.name === remote)) {
+          return;
+        }
+        autoTagChecked = true;
+        await get().checkRemoteTags([remote]);
       },
 
       async loadTagList() {

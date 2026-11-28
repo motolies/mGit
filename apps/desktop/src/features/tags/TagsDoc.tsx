@@ -5,7 +5,15 @@ import { useRovingToolbar } from '../../components/roving';
 // listbox 라 tag 수천 개도 보이는 줄만 그린다. 문서 안 작업은 토스트를 띄우지 않는다 (TG-12 ③).
 
 import type { TagSyncReport } from '@mgit/ipc';
-import { formatDateTime, formatTime, Icon, isPrimaryModifier, S, shortHash } from '@mgit/ui';
+import {
+  Button,
+  formatDateTime,
+  formatTime,
+  Icon,
+  isPrimaryModifier,
+  S,
+  shortHash,
+} from '@mgit/ui';
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -91,6 +99,7 @@ function pickTags(st: SessionState) {
     busy: st.busy,
     inOp: st.op !== null,
     checkRemoteTags: st.checkRemoteTags,
+    autoCheckRemoteTags: st.autoCheckRemoteTags,
     reloadRemoteTags: st.reloadRemoteTags,
     jumpToCommit: st.jumpToCommit,
     checkout: st.checkout,
@@ -138,6 +147,14 @@ export function TagsDoc() {
       void reloadRemoteTags({ all: true });
     }
   }, [reloadRemoteTags, remoteNames]);
+
+  // 태그 창을 처음 열 때 보이는 원격(업스트림의 원격, 없으면 origin)을 한 번 확인한다. 그 뒤는 "원격 확인" 단추로 한다
+  const autoCheckRemoteTags = s.autoCheckRemoteTags;
+  useEffect(() => {
+    if (remote !== null) {
+      void autoCheckRemoteTags(remote);
+    }
+  }, [autoCheckRemoteTags, remote]);
 
   // 로컬 tag 목록(종류·날짜·제목)을 읽는다: 문서가 보일 때와 ref 가 바뀔 때 (C3b)
   const loadTagList = s.loadTagList;
@@ -485,14 +502,13 @@ export function TagsDoc() {
         {view.selected.length > 0 ? (
           <span className={styles.muted}>{S.tag.doc.selected(view.selected.length)}</span>
         ) : null}
-        <button
-          type="button"
-          className={styles.filter}
+        {/* 원격 확인은 이 문서의 주 동작이라 필터 칩이 아닌 테두리 있는 단추로 보인다 */}
+        <Button
           disabled={remote === null || checking}
           onClick={() => remote !== null && void s.checkRemoteTags([remote])}
         >
           {S.tag.doc.check}
-        </button>
+        </Button>
       </div>
       <div className={styles.tools}>
         <input

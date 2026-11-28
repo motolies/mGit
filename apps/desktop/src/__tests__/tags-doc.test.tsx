@@ -93,6 +93,7 @@ function session(over: Record<string, unknown> = {}) {
     busy: false,
     op: null,
     checkRemoteTags: vi.fn(async () => {}),
+    autoCheckRemoteTags: vi.fn(async () => {}),
     reloadRemoteTags: vi.fn(async () => {}),
     jumpToCommit: vi.fn(async () => {}),
     checkout: vi.fn(async () => {}),
@@ -141,6 +142,8 @@ describe('태그 문서 머리·필터 (TG-10 ②③)', () => {
     expect(filterButton('localOnly')).toHaveProperty('disabled', true);
     expect(optionNames()).toEqual(['v2.4.0', 'v2.3.0', 'v2.2.0']);
     expect(s.reloadRemoteTags).toHaveBeenCalledWith({ all: true });
+    // 처음 보이는 원격은 자동 확인을 요청한다 (한 번만 할지는 스토어가 정한다)
+    expect(s.autoCheckRemoteTags).toHaveBeenCalledWith('upstream');
     // 원격 확인은 고른 원격만
     fireEvent.click(screen.getByRole('button', { name: S.tag.doc.check }));
     expect(s.checkRemoteTags).toHaveBeenCalledWith(['upstream']);

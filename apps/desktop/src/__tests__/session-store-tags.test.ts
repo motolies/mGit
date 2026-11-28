@@ -308,6 +308,48 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+describe('태그 문서를 열 때의 자동 원격 확인', () => {
+  it('처음 한 번은 캐시가 있어도 네트워크로 확인하고, 다시 열거나 원격을 바꿔도(실패해도) 되풀이하지 않는다', async () => {
+    const refreshes: string[] = [];
+    const { store } = setup(() => ({
+      remoteTags: async (_s, remote, refresh) => {
+        const name = remote ?? '';
+        if (refresh) refreshes.push(name);
+        // 확인은 네트워크 실패로 끝난다
+        return report(name, {
+          lastError: refresh ? { kind: 'network', at: 2_000, message: 'offline' } : null,
+        });
+      },
+    }));
+    withRemotes(store, ['origin', 'upstream']);
+    // 다른 탭이 이미 확인한 캐시
+    store.setState({ tagReports: { origin: report('origin') } } as Partial<SessionState>);
+    await store.getState().autoCheckRemoteTags('origin');
+    expect(refreshes).toEqual(['origin']);
+    expect(store.getState().tagReports.origin?.lastError?.kind).toBe('network');
+    await store.getState().autoCheckRemoteTags('origin');
+    await store.getState().autoCheckRemoteTags('upstream');
+    expect(refreshes).toEqual(['origin']);
+    expect(store.getState().actionError).toBeNull();
+  });
+
+  it('모르는 원격(원격 목록을 받기 전)은 기회를 쓰지 않고 건너뛴다', async () => {
+    const refreshes: string[] = [];
+    const { store } = setup(() => ({
+      remoteTags: async (_s, remote, refresh) => {
+        const name = remote ?? '';
+        if (refresh) refreshes.push(name);
+        return report(name);
+      },
+    }));
+    await store.getState().autoCheckRemoteTags('origin');
+    expect(refreshes).toEqual([]);
+    withRemotes(store, ['origin']);
+    await store.getState().autoCheckRemoteTags('origin');
+    expect(refreshes).toEqual(['origin']);
+  });
+});
+
 describe('원격 tag 확인 (B5, TG-08·09)', () => {
   it('busy 를 켜지 않고 원격마다 받는다. 확인 op(tagCheck)의 실패·오래 걸림 토스트는 없다. 실패는 그 원격의 lastError 로 남는다', async () => {
     const { store } = setup((get) => ({

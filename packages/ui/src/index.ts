@@ -54,6 +54,7 @@ export {
   useRepositoryPalette,
 } from './repository-colors';
 export { S, type Strings, setStringsLocale } from './strings';
+export { ToolGroup, type ToolGroupProps } from './ToolGroup';
 export { queryTextContext, TEXT_CONTEXT_EVENT, type TextContextAdapter } from './text-context';
 export { useElementWidth } from './use-element-width';
 export { useNativeDialog } from './use-native-dialog';

@@ -1,8 +1,9 @@
 import '@xterm/xterm/css/xterm.css';
-import { TEXT_CONTEXT_EVENT, type TextContextAdapter } from '@mgit/ui';
+import { isMac, TEXT_CONTEXT_EVENT, type TextContextAdapter } from '@mgit/ui';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef } from 'react';
+import { attachWkHangulInput } from './wk-hangul';
 
 /** PTY 이벤트 (셸 쪽 `PtyEvent` 와 같은 모양) */
 export type PtyEventLike =
@@ -98,7 +99,10 @@ export function TerminalView({
     term.loadAddon(fit);
     // 앱 단축키(⇧Esc 등)는 xterm 이 처리하지 않게 한다: false 를 돌려주면 셸로 보내지도, 이벤트를 막지도 않아 앱의
     // 전역 단축키 처리(window)까지 올라간다
-    term.attachCustomKeyEventHandler((e) => !passKeyRef.current(e));
+    // macOS WKWebView 는 한글 조합 이벤트를 보내지 않아 xterm 이 첫 자모만 보낸다: 음절을 모아 확정할 때 보낸다
+    const hangul = isMac() ? attachWkHangulInput(term, el) : null;
+    // 조합 중의 keydown(229)은 xterm 이 textarea 차이로 자모를 다시 보내지 않게 막는다
+    term.attachCustomKeyEventHandler((e) => !hangul?.blocksKey(e) && !passKeyRef.current(e));
     term.open(el);
     termRef.current = term;
     /** 터미널 선택과 paste API를 사용해 셸의 bracketed paste를 유지한다. */
@@ -179,6 +183,7 @@ export function TerminalView({
     ro.observe(el);
     return () => {
       disposed = true;
+      hangul?.dispose();
       ro.disconnect();
       dataSub.dispose();
       if (ptyId !== null) {

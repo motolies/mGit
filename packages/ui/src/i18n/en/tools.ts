@@ -148,7 +148,8 @@ export const enTools: Pick<
   external: {
     editor: 'Editor',
     terminal: 'Terminal',
-    auto: 'Auto (code → idea on PATH)',
+    autoEditor: 'Auto (code → idea on PATH)',
+    autoTerminal: (app: string) => `Auto (${app})`,
     vscode: 'Visual Studio Code',
     idea: 'IntelliJ IDEA',
     custom: 'Custom',

@@ -133,6 +133,18 @@ export function SettingsDialog({ actions = [] }: { actions?: readonly Action[] }
   return open && loaded ? <SettingsForm actions={actions} initial={loaded} /> : null;
 }
 
+/** 명령 입력칸과 그 입력칸을 쓰게 하는 선택 칸 (선택이 "직접 입력"일 때만 명령이 쓰인다) */
+const CUSTOM_COMMAND_OF: Readonly<Record<string, string>> = {
+  editorCustom: 'editor',
+  terminalCustom: 'terminal',
+};
+
+/** 명령 입력칸은 위 선택이 "직접 입력"이 아니면 끈다. 적어 둔 값은 지우지 않아 다시 고르면 그대로 돌아온다 */
+function customDisabled(key: string, values: Readonly<Record<string, string | boolean>>): boolean {
+  const select = CUSTOM_COMMAND_OF[key];
+  return select !== undefined && values[select] !== 'custom';
+}
+
 /** 일반 설정과 단축키의 초안을 유지하고 저장 성공 후에만 대화상자를 닫는다. */
 function SettingsForm({
   actions,
@@ -215,7 +227,7 @@ function SettingsForm({
       type: 'select',
       initial: apps.editor,
       options: [
-        { value: '', label: S.external.auto },
+        { value: '', label: S.external.autoEditor },
         { value: 'vscode', label: S.external.vscode },
         { value: 'idea', label: S.external.idea },
         { value: 'custom', label: S.external.custom },
@@ -228,7 +240,8 @@ function SettingsForm({
       type: 'select',
       initial: apps.terminal,
       options: [
-        { value: '', label: S.external.auto },
+        // 자동은 OS 기본 터미널이다 (commands_app.rs `terminal_fallbacks`)
+        { value: '', label: S.external.autoTerminal(mac ? S.external.terminalApp : S.external.wt) },
         ...(mac
           ? [
               { value: 'terminal', label: S.external.terminalApp },
@@ -378,6 +391,7 @@ function SettingsForm({
                   max={field.key === 'printWidth' ? 1000 : undefined}
                   step={field.key === 'printWidth' ? 1 : undefined}
                   required={field.required}
+                  disabled={customDisabled(field.key, values)}
                   value={String(values[field.key] ?? '')}
                   onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
                 />

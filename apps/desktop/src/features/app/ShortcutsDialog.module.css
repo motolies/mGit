@@ -167,6 +167,14 @@
   color: var(--fg);
 }
 
+/* 쓰이지 않는 칸 (예: 선택이 "직접 입력"이 아닐 때의 명령 입력칸): 칸과 이름을 함께 흐리게 한다 */
+.field input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.field:has(input:disabled) > span {
+  color: var(--fg-muted);
+}
 .field input[type="checkbox"] {
   justify-self: start;
   width: 16px;

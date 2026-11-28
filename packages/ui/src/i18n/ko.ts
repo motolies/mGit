@@ -183,6 +183,8 @@ export const ko = {
   },
   toolbar: {
     closeThisTab: '이 탭 닫기',
+    // 폴더·그룹·저장소 탭에서 연 하위 탭만 닫고 이 탭은 남긴다
+    closeChildTabs: '하위 탭만 닫기',
     closeOtherTabs: '이 탭 제외 닫기',
     closeAllTabs: '모두 닫기',
     closeTabsTitle: (n: number) => `${n}개 탭을 닫을까요?`,
@@ -198,6 +200,12 @@ export const ko = {
     closeRepo: '저장소 닫기',
     // 저장소·폴더 탭을 담은 탐색 영역의 접근성 이름
     tabsLabel: '열린 탭',
+    // 폴더·저장소 탭에서 연 하위 탭의 소속 (툴팁·화면 읽기 프로그램 설명)
+    openedFrom: (name: string) => `${name}에서 연 탭`,
+    // 상단 툴바 기능 묶음의 접근성 이름
+    groupWorkspace: '작업 공간',
+    groupSync: '원격 동기화',
+    groupApp: '앱 도구',
     refresh: '새로고침',
     // ⌘J 단추: Git 도구 창의 콘솔 탭 (팔레트의 "Git 콘솔 열기/닫기"와 같은 이름, W28)
     log: 'Git 콘솔',
@@ -641,6 +649,8 @@ export const ko = {
     zoomOut: '축소',
     zoomReset: '100%로 초기화',
     zoom: '본문 배율',
+    // 편집기 헤더의 보기 도구 막대 (줄바꿈·Markdown 보기 모드)
+    viewTools: '보기',
     format: '파일 포맷',
     formatting: '포맷 중…',
     formatFailed: '파일 포맷에 실패했습니다.',
@@ -2276,7 +2286,10 @@ export const ko = {
   external: {
     editor: '편집기',
     terminal: '터미널',
-    auto: '자동 (PATH의 code → idea)',
+    // 편집기의 자동: PATH 의 code → idea → OS 기본 순서로 시도한다
+    autoEditor: '자동 (PATH의 code → idea)',
+    // 터미널의 자동: OS 기본 터미널 (macOS Terminal.app, Windows Terminal)
+    autoTerminal: (app: string) => `자동 (${app})`,
     vscode: 'Visual Studio Code',
     idea: 'IntelliJ IDEA',
     custom: '직접 입력',

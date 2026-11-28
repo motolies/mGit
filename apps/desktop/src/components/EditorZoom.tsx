@@ -1,5 +1,5 @@
-import { Button, S } from '@mgit/ui';
-import { type RefObject, useEffect } from 'react';
+import { Button, S, ToolGroup } from '@mgit/ui';
+import { type CSSProperties, type RefObject, useEffect } from 'react';
 import { commandTarget, registerCommand } from '../command-registry';
 import { changeEditorZoom, useEditorPreferences } from '../store/editor-preferences';
 import { useCommandTitle } from './use-command-shortcut';
@@ -24,25 +24,20 @@ export function useEditorZoom(ref: RefObject<HTMLElement | null>) {
   return { zoomPercent, fontSize: (12 * zoomPercent) / 100 };
 }
 
-/** 배율 버튼은 현재 본문 포커스를 보존하며 키보드로도 조작할 수 있다. */
+/** 배율 % 단추: 숫자 폭을 고정해 배율이 바뀌어도 옆 묶음이 밀리지 않는다 */
+const PERCENT_STYLE: CSSProperties = {
+  fontVariantNumeric: 'tabular-nums',
+  minWidth: '6ch',
+  justifyContent: 'center',
+};
+
+/** 배율 버튼은 현재 본문 포커스를 보존하며 키보드로도 조작할 수 있다. 세 단추를 붙인 세그먼트 하나로 보인다 */
 export function EditorZoomControls() {
   const { zoomPercent } = useEditorPreferences();
   const out = useCommandTitle('editor.zoomOut', S.fileEditor.zoomOut);
   const into = useCommandTitle('editor.zoomIn', S.fileEditor.zoomIn);
   return (
-    <fieldset
-      aria-label={S.fileEditor.zoom}
-      style={{
-        display: 'inline-flex',
-        gap: 2,
-        alignItems: 'center',
-        flexShrink: 0,
-        border: 0,
-        padding: 0,
-        margin: 0,
-        minWidth: 0,
-      }}
-    >
+    <ToolGroup segmented label={S.fileEditor.zoom}>
       <Button
         size="compact"
         title={out}
@@ -57,6 +52,7 @@ export function EditorZoomControls() {
         size="compact"
         title={S.fileEditor.zoomReset}
         aria-label={`${S.fileEditor.zoomReset} (${zoomPercent}%)`}
+        style={PERCENT_STYLE}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => changeEditorZoom(0)}
       >
@@ -72,6 +68,6 @@ export function EditorZoomControls() {
       >
         +
       </Button>
-    </fieldset>
+    </ToolGroup>
   );
 }

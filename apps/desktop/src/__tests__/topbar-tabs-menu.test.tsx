@@ -37,7 +37,7 @@ function setup() {
 describe('상단 탭 앱 컨텍스트 메뉴', () => {
   it('우클릭한 탭을 활성화하지 않고 앱 전용 닫기 메뉴를 연다', async () => {
     const { close, tabs } = setup();
-    const tab = within(tabs).getByRole('tab', { name: '└ child' });
+    const tab = within(tabs).getByRole('tab', { name: 'child' });
     const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     act(() => tab.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
@@ -66,5 +66,21 @@ describe('상단 탭 앱 컨텍스트 메뉴', () => {
     });
     fireEvent.click(screen.getByRole('menuitem', { name: S.toolbar.closeOtherTabs }));
     expect(close).toHaveBeenCalledWith(31, 'others');
+  });
+
+  it('하위 탭이 있는 탭에만 하위 탭만 닫기가 보이고 그 범위로 닫기를 요청한다', () => {
+    const { close, tabs } = setup();
+    const folder = within(tabs).getByRole('tab', { name: 'folder' });
+    act(() => {
+      folder.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      S.toolbar.closeThisTab,
+      S.toolbar.closeChildTabs,
+      S.toolbar.closeOtherTabs,
+      S.toolbar.closeAllTabs,
+    ]);
+    fireEvent.click(screen.getByRole('menuitem', { name: S.toolbar.closeChildTabs }));
+    expect(close).toHaveBeenCalledWith(31, 'children');
   });
 });

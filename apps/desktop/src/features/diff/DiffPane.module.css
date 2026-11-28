@@ -132,15 +132,6 @@
   white-space: nowrap;
 }
 
-.segment {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.segment button[aria-pressed="true"] {
-  background: var(--bg-selected);
-  color: var(--accent);
-}
 .select {
   border: 1px solid var(--control-border);
   border-radius: var(--radius);

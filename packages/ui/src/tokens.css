@@ -295,7 +295,10 @@ body {
   text-decoration: line-through;
 }
 
-/* 조작용 컨트롤의 글자는 선택하지 않는다. WebKit에서도 같은 정책을 적용한다. */
+/* biome-ignore-start lint/complexity/noImportantStyles: all: unset 을 쓰는 컴포넌트가 선택 정책을 되돌리지 못하게 한다 */
+/* 조작용 컨트롤의 글자는 선택하지 않는다. WebKit에서도 같은 정책을 적용한다.
+   `:where()` 는 명시도가 0 이라 컴포넌트의 `all: unset`(탭·목록 단추 등 50여 곳)이 user-select 까지 되돌린다.
+   우클릭이 단어를 선택하지 않도록 !important 로 정책을 고정한다 (아래 입력란 예외도 같은 이유로 !important) */
 :where(
   button,
   select,
@@ -316,11 +319,12 @@ body {
   [role="option"],
   [role="separator"]
 ) {
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
-/* 컨트롤 안의 검색창과 편집기는 텍스트 선택·복사·편집을 계속 허용한다. */
+/* 컨트롤 안의 검색창과 편집기는 텍스트 선택·복사·편집을 계속 허용한다. 위 규칙 뒤에 같은 명시도로 두어
+   `<input role="combobox">` 처럼 둘 다 해당하는 입력란에서는 이 규칙이 이긴다 */
 :where(
   input,
   textarea,
@@ -329,6 +333,7 @@ body {
   [contenteditable="plaintext-only"],
   .cm-content
 ) {
-  -webkit-user-select: text;
-  user-select: text;
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
+/* biome-ignore-end lint/complexity/noImportantStyles: 선택 정책 끝 */

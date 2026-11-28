@@ -7,12 +7,16 @@ import {
 } from '@mgit/ipc';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppStore } from '../store/app-store';
+import { readPref, removePref, writePref } from '../store/prefs';
 import { clearSessionRegistry, getFolderStore } from '../store/session-registry';
+import { PREF_TAB_PARENTS } from '../store/tab-order';
 
 const HEAD = 'a'.repeat(40);
 
-/** 경로별 응답을 정하는 가짜 클라이언트 */
-function client(opts: { folders?: string[]; tabs?: string[]; startup?: string[] } = {}) {
+/** 경로별 응답을 정하는 가짜 클라이언트. `fail` 의 경로는 열기에 실패한다 */
+function client(
+  opts: { folders?: string[]; tabs?: string[]; startup?: string[]; fail?: string[] } = {},
+) {
   let next = 1;
   const opened = (path: string): RepoOpened => ({
     session: next++,
@@ -35,6 +39,9 @@ function client(opts: { folders?: string[]; tabs?: string[]; startup?: string[] 
     ...createNullClient(),
     gitVersion: async () => ({ version: '2.54.0', path: '/usr/bin/git' }),
     openRepo: vi.fn(async (path: string) => {
+      if (opts.fail?.includes(path)) {
+        throw new Error(`cannot open ${path}`);
+      }
       if (opts.folders?.includes(path)) {
         throw { kind: 'multiRepoFolder', path, repos: [`${path}/a`, `${path}/b`] };
       }
@@ -90,6 +97,7 @@ function setup(opts?: Parameters<typeof client>[0]) {
 
 afterEach(() => {
   clearSessionRegistry();
+  removePref(PREF_TAB_PARENTS);
 });
 
 describe('AppStore (S5)', () => {
@@ -145,5 +153,57 @@ describe('AppStore (S5)', () => {
     expect(store.getState().cloneOp).toBeNull();
     const id = store.getState().activeSessionId;
     expect(store.getState().sessions[id ?? -1]?.path).toBe('/dest');
+  });
+});
+
+describe('저장소 탭 세트 (순서·재시작 유지)', () => {
+  /** 열린 탭의 경로를 순서대로 */
+  const pathsOf = (store: ReturnType<typeof setup>['store']) =>
+    store.getState().sessionOrder.map((id) => store.getState().sessions[id]?.path);
+  /** 경로로 탭 메타를 찾는다 */
+  const metaOf = (store: ReturnType<typeof setup>['store'], path: string) =>
+    Object.values(store.getState().sessions).find((m) => m.path === path);
+
+  it('폴더 → 독립 저장소 → 폴더의 하위 저장소 순으로 열면 하위 탭이 폴더 세트 끝에 붙어 저장된다', async () => {
+    const { store, client: c } = setup({ folders: ['/f'] });
+    await store.getState().openRepositoryAt('/f');
+    const folderId = store.getState().activeSessionId;
+    await store.getState().openRepositoryAt('/r');
+    await store.getState().openRepositoryAt('/f/a', folderId);
+    expect(pathsOf(store)).toEqual(['/f', '/f/a', '/r']);
+    expect(c.openTabsSet).toHaveBeenLastCalledWith(['/f', '/f/a', '/r']);
+    expect(readPref(PREF_TAB_PARENTS, {})).toEqual({ '/f/a': '/f' });
+
+    // 닫으면 맵을 지금 열린 탭으로 새로 써서 지난 항목이 남지 않는다
+    await store.getState().closeSession(folderId ?? -1);
+    expect(pathsOf(store)).toEqual(['/r']);
+    expect(readPref(PREF_TAB_PARENTS, {})).toEqual({});
+  });
+
+  it('콜드 스타트 복원에서 하위 탭의 parent 가 부모 폴더 탭의 세션으로 이어진다', async () => {
+    writePref(PREF_TAB_PARENTS, { '/f/a': '/f' });
+    const { store } = setup({ folders: ['/f'], tabs: ['/f', '/f/a', '/r'] });
+    await store.getState().bootstrap();
+    expect(pathsOf(store)).toEqual(['/f', '/f/a', '/r']);
+    const folder = metaOf(store, '/f');
+    expect(folder?.kind).toBe('folder');
+    expect(metaOf(store, '/f/a')?.parent).toBe(folder?.id);
+    expect(metaOf(store, '/r')?.parent).toBeNull();
+  });
+
+  it('부모 경로를 열지 못하면 하위 탭은 독립 탭으로 복원된다', async () => {
+    writePref(PREF_TAB_PARENTS, { '/f/a': '/f' });
+    const { store } = setup({ fail: ['/f'], tabs: ['/f', '/f/a', '/r'] });
+    await store.getState().bootstrap();
+    expect(pathsOf(store)).toEqual(['/f/a', '/r']);
+    expect(metaOf(store, '/f/a')?.parent).toBeNull();
+  });
+
+  it('시작 인자는 저장된 부모 맵이 있어도 독립 탭으로 연다', async () => {
+    writePref(PREF_TAB_PARENTS, { '/f/b': '/f' });
+    const { store } = setup({ folders: ['/f'], tabs: ['/f'], startup: ['/f/b'] });
+    await store.getState().bootstrap();
+    expect(pathsOf(store)).toEqual(['/f', '/f/b']);
+    expect(metaOf(store, '/f/b')?.parent).toBeNull();
   });
 });

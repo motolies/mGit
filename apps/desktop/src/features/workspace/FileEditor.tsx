@@ -16,7 +16,7 @@ import {
 } from '@codemirror/view';
 import { codeHighlighter, loadLanguage } from '@mgit/diff-view';
 import type { FsEncoding, HeadState, SessionId } from '@mgit/ipc';
-import { Button, ConfirmDialog, S } from '@mgit/ui';
+import { Button, ConfirmDialog, S, ToolGroup } from '@mgit/ui';
 import { type ComponentProps, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
 import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
@@ -657,61 +657,79 @@ export function FileEditor({
         <span className={styles.path} title={source?.path ?? doc.path}>
           {source?.path ?? doc.path}
         </span>
-        <span className={styles.meta}>
-          {onEncoding ? (
-            <EncodingMenu
-              encoding={doc.encoding}
-              bom={doc.bom}
-              guessed={doc.guessed}
-              chosen={doc.readAs !== null}
-              locked={
-                doc.dirty || doc.inflight || doc.composing || doc.mutationLocked
-                  ? S.fileEditor.encodingLocked
-                  : null
-              }
-              onChoose={onEncoding}
-            />
-          ) : (
-            `${encodingName(doc.encoding)}${doc.bom ? ' BOM' : ''}`
-          )}{' '}
-          · {doc.lineEnding.toUpperCase()} · {indentLabel(documentIndent(doc))}
+        {/* 상태 묶음: 인코딩·줄 끝·들여쓰기, 강조 생략, 자동 저장, 저장 상태 */}
+        <span className={styles.status}>
+          <span className={styles.meta}>
+            {onEncoding ? (
+              <EncodingMenu
+                encoding={doc.encoding}
+                bom={doc.bom}
+                guessed={doc.guessed}
+                chosen={doc.readAs !== null}
+                locked={
+                  doc.dirty || doc.inflight || doc.composing || doc.mutationLocked
+                    ? S.fileEditor.encodingLocked
+                    : null
+                }
+                onChoose={onEncoding}
+              />
+            ) : (
+              `${encodingName(doc.encoding)}${doc.bom ? ' BOM' : ''}`
+            )}{' '}
+            · {doc.lineEnding.toUpperCase()} · {indentLabel(documentIndent(doc))}
+          </span>
+          {!highlighting ? <span className={styles.meta}>{S.fileEditor.noHighlight}</span> : null}
+          <span className={styles.meta}>{S.fileEditor.autoSave}</span>
+          <span role="status" data-status={doc.status}>
+            {S.fileEditor[doc.status]}
+          </span>
         </span>
-        {!highlighting ? <span className={styles.meta}>{S.fileEditor.noHighlight}</span> : null}
-        <span className={styles.meta}>{S.fileEditor.autoSave}</span>
-        <span role="status" data-status={doc.status}>
-          {S.fileEditor[doc.status]}
-        </span>
+        {/* 크기(배율 세그먼트)와 편집(저장·포맷·찾기) 묶음. 한 막대라 방향키로 Format → Find 가 이어진다 */}
         <div {...editTools} className={styles.tools} role="toolbar" aria-label={S.fileEditor.title}>
           <EditorZoomControls />
-          <Button
-            onClick={() => {
-              void (doc.explicitSave?.() ?? fileEditors.save(doc));
-            }}
-            disabled={!doc.dirty || doc.status === 'conflict' || doc.status === 'saving'}
-          >
-            {S.fileEditor.save}
-          </Button>
-          <Button
-            onClick={() => void format()}
-            disabled={!canFormat || formatting || doc.composing || doc.mutationLocked}
-          >
-            {formatting ? S.fileEditor.formatting : S.fileEditor.format}
-          </Button>
-          <Button onClick={find}>{S.fileEditor.findReplace}</Button>
+          <ToolGroup>
+            <Button
+              onClick={() => {
+                void (doc.explicitSave?.() ?? fileEditors.save(doc));
+              }}
+              disabled={!doc.dirty || doc.status === 'conflict' || doc.status === 'saving'}
+            >
+              {S.fileEditor.save}
+            </Button>
+            <Button
+              onClick={() => void format()}
+              disabled={!canFormat || formatting || doc.composing || doc.mutationLocked}
+            >
+              {formatting ? S.fileEditor.formatting : S.fileEditor.format}
+            </Button>
+            <Button onClick={find}>{S.fileEditor.findReplace}</Button>
+          </ToolGroup>
         </div>
-        <div {...viewTools} className={styles.tools} role="toolbar" aria-label={S.diff.viewToolbar}>
-          <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
-            {S.fileEditor.wrap}
-          </Button>
-          {markdown && source ? (
-            <fieldset className={styles.modes} aria-label={S.markdown.viewMode}>
-              {(['edit', 'preview', 'split'] as const).map((value) => (
-                <Button key={value} aria-pressed={mode === value} onClick={() => switchMode(value)}>
-                  {S.markdown[value]}
-                </Button>
-              ))}
-            </fieldset>
-          ) : null}
+        {/* 보기 묶음: 줄바꿈은 단독, Markdown 보기 모드는 붙인 세그먼트 */}
+        <div
+          {...viewTools}
+          className={styles.tools}
+          role="toolbar"
+          aria-label={S.fileEditor.viewTools}
+        >
+          <ToolGroup>
+            <Button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
+              {S.fileEditor.wrap}
+            </Button>
+            {markdown && source ? (
+              <ToolGroup segmented label={S.markdown.viewMode}>
+                {(['edit', 'preview', 'split'] as const).map((value) => (
+                  <Button
+                    key={value}
+                    aria-pressed={mode === value}
+                    onClick={() => switchMode(value)}
+                  >
+                    {S.markdown[value]}
+                  </Button>
+                ))}
+              </ToolGroup>
+            ) : null}
+          </ToolGroup>
         </div>
         {repoTools ? (
           <div
@@ -720,8 +738,10 @@ export function FileEditor({
             role="toolbar"
             aria-label={S.fileEditor.history}
           >
-            <Button onClick={repoTools.onHistory}>{S.fileEditor.history}</Button>
-            <Button onClick={repoTools.onBlame}>{S.fileView.blame}</Button>
+            <ToolGroup>
+              <Button onClick={repoTools.onHistory}>{S.fileEditor.history}</Button>
+              <Button onClick={repoTools.onBlame}>{S.fileView.blame}</Button>
+            </ToolGroup>
           </div>
         ) : null}
       </header>

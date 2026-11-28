@@ -6,7 +6,7 @@ import {
   DiffView,
 } from '@mgit/diff-view';
 import type { DiffDocument, FileDiff, SubmodulePointerLog } from '@mgit/ipc';
-import { Button, formatDateTime, S, shortHash } from '@mgit/ui';
+import { Button, formatDateTime, S, shortHash, ToolGroup } from '@mgit/ui';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { registerCommand } from '../../command-registry';
 import { EditorZoomControls, useEditorZoom } from '../../components/EditorZoom';
@@ -206,15 +206,16 @@ export function DiffPaneView({
       <div {...tools} className={styles.options} role="toolbar" aria-label={S.diff.viewToolbar}>
         <EditorZoomControls />
         {onEditCurrent ? <Button onClick={onEditCurrent}>{S.fileView.editCurrent}</Button> : null}
-        <span className={styles.segment}>
+        {/* 하나의 선택으로 읽히는 짝(나란히·한 줄, 전체·문맥)은 붙인 세그먼트다 */}
+        <ToolGroup segmented>
           <Button aria-pressed={mode === 'split'} onClick={() => onModeChange('split')}>
             {S.diff.split}
           </Button>
           <Button aria-pressed={mode === 'unified'} onClick={() => onModeChange('unified')}>
             {S.diff.unified}
           </Button>
-        </span>
-        <span className={styles.segment}>
+        </ToolGroup>
+        <ToolGroup segmented>
           <Button
             aria-pressed={options.fullFile}
             onClick={() => onOptionsChange({ fullFile: true })}
@@ -227,7 +228,7 @@ export function DiffPaneView({
           >
             {S.diff.contextOnly}
           </Button>
-        </span>
+        </ToolGroup>
         <label className={styles.opt}>
           <input
             type="checkbox"
@@ -236,8 +237,9 @@ export function DiffPaneView({
           />
           {S.diff.ignoreWhitespace}
         </label>
+        {/* 이전·다음 이동은 서로 다른 명령이라 붙이지 않고 묶기만 한다 */}
         {fileNavigation && (
-          <span className={styles.segment}>
+          <ToolGroup>
             <Button
               title={previousFileTitle}
               disabled={loading || !hasFile(-1)}
@@ -252,9 +254,9 @@ export function DiffPaneView({
             >
               {S.diff.nextFile} →
             </Button>
-          </span>
+          </ToolGroup>
         )}
-        <span className={styles.segment}>
+        <ToolGroup>
           <Button title={previousTitle} disabled={!canMove(-1)} onClick={() => move(-1)}>
             ↑ {S.diff.previousChange}
           </Button>
@@ -268,7 +270,7 @@ export function DiffPaneView({
           >
             ↓ {S.diff.nextChange}
           </Button>
-        </span>
+        </ToolGroup>
         <details className={styles.viewOptions}>
           <summary>{S.diff.viewOptions}</summary>
           <div className={styles.optionPopup}>

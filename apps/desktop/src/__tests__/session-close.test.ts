@@ -59,6 +59,35 @@ describe('상단 탭 닫기 집합', () => {
     expect(sessionCloseTargets(order, sessions, 2, 'all')).toEqual(order);
   });
 
+  it('하위 탭만 닫기는 대상 탭을 남기고 손자까지 닫으며 하위 탭이 없으면 비어 있다', () => {
+    expect(sessionCloseTargets(order, sessions, 1, 'children')).toEqual([2, 3]);
+    expect(sessionCloseTargets(order, sessions, 2, 'children')).toEqual([]);
+    expect(sessionCloseTargets(order, sessions, 4, 'children')).toEqual([]);
+    const nested: Record<number, SessionMeta> = {
+      ...sessions,
+      5: { id: 5, kind: 'repo', name: 'worktree', path: '/f/a-wt', parent: 2 },
+    };
+    expect(sessionCloseTargets([1, 2, 5, 3, 4], nested, 1, 'children')).toEqual([2, 5, 3]);
+    expect(sessionCloseTargets([1, 2, 5, 3, 4], nested, 2, 'children')).toEqual([5]);
+  });
+
+  it('하위 탭만 닫으면 부모는 남고, 보던 하위 탭이 닫히면 부모 탭으로 간다', async () => {
+    const { store, closeRepo, closeFolder } = setup();
+    store.setState({ activeSessionId: 2 });
+    await store.getState().requestCloseTabs(1, 'children');
+    expect(store.getState().sessionOrder).toEqual([1, 4]);
+    expect(store.getState().activeSessionId).toBe(1);
+    expect(closeRepo.mock.calls).toEqual([[2], [3]]);
+    expect(closeFolder).not.toHaveBeenCalled();
+  });
+
+  it('세트 밖의 탭을 보던 중 하위 탭만 닫으면 보던 탭을 유지한다', async () => {
+    const { store } = setup();
+    await store.getState().requestCloseTabs(1, 'children');
+    expect(store.getState().sessionOrder).toEqual([1, 4]);
+    expect(store.getState().activeSessionId).toBe(4);
+  });
+
   it('작업 중 child와 부모는 보존하고 나머지를 닫는다', async () => {
     const { store, states, closeRepo, closeFolder } = setup();
     const busy = states.get(2);

@@ -2756,7 +2756,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-bench"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "memory-stats",
  "mgit-core",
@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -2804,7 +2804,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-desktop"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "dunce",
  "mgit-core",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-git"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "insta",
  "mgit-l10n",
@@ -2858,7 +2858,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-graph"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "insta",
  "mgit-model",
@@ -2868,7 +2868,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-helper"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "interprocess",
  "serde",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-hosting"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "httpmock",
  "mgit-l10n",
@@ -2893,11 +2893,11 @@ dependencies = [
 
 [[package]]
 name = "mgit-l10n"
-version = "0.1.7"
+version = "0.1.8"
 
 [[package]]
 name = "mgit-merge"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "imara-diff",
  "mgit-l10n",
@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-model"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "mgit-l10n",
  "proptest",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-store"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "mgit-model",
  "rusqlite",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-syntax"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "tree-sitter",
  "tree-sitter-go",
@@ -2945,7 +2945,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-testkit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "mgit-model",
  "tempfile",
@@ -2953,7 +2953,7 @@ dependencies = [
 
 [[package]]
 name = "mgit-watch"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "mgit-l10n",
  "mgit-model",

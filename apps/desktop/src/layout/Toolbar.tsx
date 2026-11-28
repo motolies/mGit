@@ -19,23 +19,38 @@ import { RemotesDialog } from '../features/remote/RemotesDialog';
 import { useActiveTab, useAppStore, useFolder, useIsRepoTab, useSession } from '../store';
 import { GROUP_GLYPH, isGroupKey } from '../store/root-space';
 import { type SessionCloseMode, sessionCloseTargets } from '../store/session-close';
+import { tabSets } from '../store/tab-order';
 import type { ThemePreference } from '../store/theme';
 import styles from './Toolbar.module.css';
 
-/** 작업 버튼끼리 방향키로 이동하며 입력·선택창의 기본 키 동작은 유지한다. */
-function ActionGroup({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * 작업 버튼끼리 방향키로 이동하며 입력·선택창의 기본 키 동작은 유지한다. `divided` 면 앞에 구분선을 함께 그린다 —
+ * 묶음을 그리지 않는 쪽(폴더 동기화가 null)에서는 선도 남지 않는다
+ */
+function ActionGroup({
+  label,
+  divided = false,
+  children,
+}: {
+  label: string;
+  divided?: boolean;
+  children: ReactNode;
+}) {
   const roving = useRovingToolbar<HTMLDivElement>('horizontal');
   return (
-    <div
-      className={styles.sync}
-      role="toolbar"
-      aria-label={label}
-      ref={roving.ref}
-      onKeyDown={roving.onKeyDown}
-      onFocus={roving.onFocus}
-    >
-      {children}
-    </div>
+    <>
+      {divided ? <span className={styles.divider} aria-hidden="true" /> : null}
+      <div
+        className={styles.sync}
+        role="toolbar"
+        aria-label={label}
+        ref={roving.ref}
+        onKeyDown={roving.onKeyDown}
+        onFocus={roving.onFocus}
+      >
+        {children}
+      </div>
+    </>
   );
 }
 
@@ -98,7 +113,7 @@ function UndoButtons() {
   }));
   const top = s.entries[0];
   return (
-    <ActionGroup label={S.safety.undo}>
+    <ActionGroup label={S.safety.undo} divided>
       <Button
         disabled={s.busy || !top}
         onClick={() => void s.undo()}
@@ -191,7 +206,7 @@ function SyncButtons({ onRemotes }: { onRemotes: () => void }) {
     ),
   ];
   return (
-    <ActionGroup label={S.dock.git}>
+    <ActionGroup label={S.toolbar.groupSync} divided>
       <Button
         title={fetchTitle}
         disabled={disabled || !s.hasRemotes}
@@ -274,7 +289,7 @@ function FolderSyncButtons() {
   const t = S.folder.batch;
   const label = (op: string) => t.withScope(op, target.scope);
   return (
-    <ActionGroup label={S.dock.git}>
+    <ActionGroup label={S.toolbar.groupSync} divided>
       <Button
         disabled={flows.running}
         onClick={() => void flows.fetch()}
@@ -424,10 +439,67 @@ export function Toolbar() {
     document.getElementById(`${tabPrefix}-${next}`)?.focus();
   };
 
+  /**
+   * 탭 하나. 하위 탭은 이름 앞에 └ 를 그리고 툴팁·설명에 연 곳을 덧붙인다. 부모가 닫힌 고아 탭은 독립 탭처럼 보인다.
+   * └ 는 보조 기술에서 숨겨 탭의 이름은 저장소 이름 그대로다
+   */
+  const renderTab = (id: SessionId) => {
+    const meta = sessions[id];
+    if (!meta) {
+      return null;
+    }
+    const active = id === activeSessionId;
+    // 가상 그룹 탭 (MR-13): 폴더 탭과 같은 종류지만 글리프·툴팁이 그룹이다 (경로 대신 그룹 이름)
+    const group = isGroupKey(meta.path);
+    const kindLabel = group ? S.group.kind : meta.kind === 'folder' ? S.home.folder : S.home.repo;
+    const parent = meta.parent === null ? undefined : sessions[meta.parent];
+    const openedFrom = parent ? S.toolbar.openedFrom(parent.name) : null;
+    const baseTitle = group ? S.group.tabTitle(meta.name) : `${kindLabel}: ${meta.path}`;
+    return (
+      <div key={id} data-session-tab={id} className={active ? styles.tabActive : styles.tab}>
+        <button
+          type="button"
+          className={styles.tabLabel}
+          id={`${tabPrefix}-${id}`}
+          role="tab"
+          aria-selected={active}
+          tabIndex={active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1}
+          onKeyDown={(e) => onTabKeyDown(e, id)}
+          onClick={() => setActiveSession(id)}
+          title={openedFrom ? `${baseTitle}\n${openedFrom}` : baseTitle}
+          aria-description={openedFrom ? `${kindLabel}, ${openedFrom}` : kindLabel}
+        >
+          {parent ? (
+            <span aria-hidden="true" className={styles.childMark}>
+              └
+            </span>
+          ) : null}
+          {group ? (
+            <span aria-hidden="true">{GROUP_GLYPH}</span>
+          ) : meta.kind === 'folder' ? (
+            <Icon name="folder" />
+          ) : null}
+          <span>{meta.name}</span>
+        </button>
+        <button
+          type="button"
+          className={styles.tabClose}
+          disabled={closing}
+          tabIndex={-1}
+          onClick={() => void closeTab(id)}
+          aria-label={S.toolbar.closeRepo}
+          title={S.toolbar.closeRepo}
+        >
+          ×
+        </button>
+      </div>
+    );
+  };
+
   return (
     <header className={styles.toolbar}>
       <span className={styles.brand}>{S.app.title}</span>
-      <ActionGroup label={S.app.title}>
+      <ActionGroup label={S.toolbar.groupWorkspace}>
         <Button variant="primary" onClick={() => void openRepository()} disabled={isOpening}>
           {isOpening ? S.toolbar.opening : S.toolbar.openRepo}
         </Button>
@@ -443,6 +515,7 @@ export function Toolbar() {
       {folderTab ? <FolderSyncButtons /> : null}
       {repoTab ? <UndoButtons /> : null}
 
+      {sessionOrder.length > 0 ? <span className={styles.divider} aria-hidden="true" /> : null}
       <div className={styles.tabRow}>
         <ContextMenuArea
           className={styles.tabContext}
@@ -453,20 +526,25 @@ export function Toolbar() {
             const id = Number(element?.dataset.sessionTab);
             return element && sessions[id] ? id : null;
           }}
-          items={(id) =>
-            (
-              [
-                ['this', S.toolbar.closeThisTab],
-                ['others', S.toolbar.closeOtherTabs],
-                ['all', S.toolbar.closeAllTabs],
-              ] as const
-            ).map(([mode, label]) => ({
+          items={(id) => {
+            // 하위 탭만 닫기는 하위 탭이 있는 탭(폴더·그룹·워크트리를 연 저장소)에서만 보인다
+            const hasChildren =
+              sessionCloseTargets(sessionOrder, sessions, id, 'children').length > 0;
+            const entries: [SessionCloseMode, string][] = [
+              ['this', S.toolbar.closeThisTab],
+              ...(hasChildren
+                ? [['children', S.toolbar.closeChildTabs] as [SessionCloseMode, string]]
+                : []),
+              ['others', S.toolbar.closeOtherTabs],
+              ['all', S.toolbar.closeAllTabs],
+            ];
+            return entries.map(([mode, label]) => ({
               label,
               disabled:
                 closing || sessionCloseTargets(sessionOrder, sessions, id, mode).length === 0,
-              onSelect: () => void closeTabs(id, mode as SessionCloseMode),
-            }))
-          }
+              onSelect: () => void closeTabs(id, mode),
+            }));
+          }}
         >
           <div
             ref={tabsRef}
@@ -475,60 +553,16 @@ export function Toolbar() {
             tabIndex={sessionOrder.length === 0 ? 0 : -1}
             aria-label={S.toolbar.tabsLabel}
           >
-            {sessionOrder.map((id) => {
-              const meta = sessions[id];
-              if (!meta) {
-                return null;
-              }
-              const active = id === activeSessionId;
-              // 가상 그룹 탭 (MR-13): 폴더 탭과 같은 종류지만 글리프·툴팁이 그룹이다 (경로 대신 그룹 이름)
-              const group = isGroupKey(meta.path);
-              const kindLabel = group
-                ? S.group.kind
-                : meta.kind === 'folder'
-                  ? S.home.folder
-                  : S.home.repo;
-              return (
-                <div
-                  key={id}
-                  data-session-tab={id}
-                  className={active ? styles.tabActive : styles.tab}
-                >
-                  <button
-                    type="button"
-                    className={styles.tabLabel}
-                    id={`${tabPrefix}-${id}`}
-                    role="tab"
-                    aria-selected={active}
-                    tabIndex={
-                      active || (activeSessionId === null && sessionOrder[0] === id) ? 0 : -1
-                    }
-                    onKeyDown={(e) => onTabKeyDown(e, id)}
-                    onClick={() => setActiveSession(id)}
-                    title={group ? S.group.tabTitle(meta.name) : `${kindLabel}: ${meta.path}`}
-                    aria-description={kindLabel}
-                  >
-                    {group ? (
-                      <span aria-hidden="true">{GROUP_GLYPH}</span>
-                    ) : meta.kind === 'folder' ? (
-                      <Icon name="folder" />
-                    ) : null}
-                    <span>{meta.parent !== null ? `└ ${meta.name}` : meta.name}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.tabClose}
-                    disabled={closing}
-                    tabIndex={-1}
-                    onClick={() => void closeTab(id)}
-                    aria-label={S.toolbar.closeRepo}
-                    title={S.toolbar.closeRepo}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })}
+            {/* 세트(둘 이상)는 역할 없는 칸으로 감싼다 — tablist 의 구조와 탭 순서는 그대로다 */}
+            {tabSets(sessionOrder, sessions).flatMap(({ root, ids }) =>
+              ids.length > 1
+                ? [
+                    <div key={`set-${root}`} className={styles.tabSet} data-tab-set>
+                      {ids.map(renderTab)}
+                    </div>,
+                  ]
+                : ids.map(renderTab),
+            )}
           </div>
         </ContextMenuArea>
         <TabListMenu
@@ -565,7 +599,8 @@ export function Toolbar() {
         </span>
       ) : null}
 
-      <ActionGroup label={S.actions.settings}>
+      {/* 앱 도구: 테마 선택도 같은 묶음이다 (선택창은 방향키 이동에서 빠지고 자기 키 동작을 쓴다) */}
+      <ActionGroup label={S.toolbar.groupApp} divided>
         <Button
           onClick={() => toggleDock('git', 'console')}
           aria-pressed={consoleOpen}
@@ -577,21 +612,21 @@ export function Toolbar() {
         <Button onClick={() => setSettingsOpen(true)} title={settingsTitle}>
           {S.actions.settings}
         </Button>
+        <label className={styles.theme}>
+          <span className={styles.themeLabel}>{S.toolbar.theme.label}</span>
+          <select
+            className={styles.select}
+            value={theme}
+            onChange={(e) => setTheme(e.target.value as ThemePreference)}
+          >
+            {themeOptions().map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </ActionGroup>
-      <label className={styles.theme}>
-        <span className={styles.themeLabel}>{S.toolbar.theme.label}</span>
-        <select
-          className={styles.select}
-          value={theme}
-          onChange={(e) => setTheme(e.target.value as ThemePreference)}
-        >
-          {themeOptions().map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </label>
       {showRemotes && repoTab ? <RemotesDialog onClose={() => setShowRemotes(false)} /> : null}
     </header>
   );

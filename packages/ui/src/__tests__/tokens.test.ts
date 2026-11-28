@@ -130,3 +130,19 @@ describe('본문 글자 대비 4.5:1 (LF-06)', () => {
     expect(luminance(dark.get('--bg') ?? '')).toBeLessThan(luminance(dark.get('--bg-panel') ?? ''));
   });
 });
+
+describe('컨트롤 글자 선택 정책', () => {
+  // 컨트롤 규칙(:where 명시도 0)은 컴포넌트의 `all: unset` 에 지지 않도록 !important 여야 하고, 입력란 예외가 그 뒤에서 이긴다
+  const controls = tokensCss.indexOf('user-select: none !important');
+  const editable = tokensCss.indexOf('user-select: text !important');
+
+  it('컨트롤 글자 선택 금지가 all: unset 에 되돌려지지 않는다', () => {
+    expect(controls).toBeGreaterThan(-1);
+    expect(tokensCss).toContain('-webkit-user-select: none !important');
+  });
+
+  it('입력란·편집기 선택 허용이 컨트롤 규칙보다 뒤에서 같은 강도로 이긴다', () => {
+    expect(editable).toBeGreaterThan(controls);
+    expect(tokensCss).toContain('-webkit-user-select: text !important');
+  });
+});

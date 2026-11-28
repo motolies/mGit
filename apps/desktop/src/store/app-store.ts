@@ -101,6 +101,7 @@ import {
   type SessionState,
   type SessionStoreOptions,
 } from './session-store';
+import { groupTabOrder, PREF_TAB_PARENTS, tabParentPaths } from './tab-order';
 import {
   applyTheme,
   loadThemePreference,
@@ -548,8 +549,11 @@ export interface AppStore {
    */
   confirmConflictLeave(discard: boolean): void;
   cancelConflictLeave(): void;
-  /** 여러 경로를 차례로 연다 (DnD·CLI 인자·두 번째 실행) */
-  openPaths(paths: readonly string[]): Promise<void>;
+  /**
+   * 여러 경로를 차례로 연다 (DnD·CLI 인자·두 번째 실행·콜드 스타트 복원). `parentOf`(`{ 자식 경로: 부모 경로 }`)를 주면
+   * 그 부모 경로의 탭이 이미 열려 있을 때 하위 탭으로 연다 — 콜드 스타트 복원만 넘긴다. 부모가 없으면 독립 탭이다
+   */
+  openPaths(paths: readonly string[], parentOf?: Readonly<Record<string, string>>): Promise<void>;
   closeSession(id: SessionId): Promise<void>;
   /**
    * 사용자의 탭 닫기. 저장소 탭은 미저장 충돌 편집이 있으면, 폴더 탭은 잃는 것(`folderCloseRisks`: 하위 저장소 탭, 숨은
@@ -912,7 +916,10 @@ export function createAppStore(deps: AppStoreDeps) {
       }
     };
 
-    /** 열린 탭 경로를 저장한다 (부모 폴더가 먼저 오도록 순서 유지) */
+    /**
+     * 열린 탭 경로를 저장한다 (부모 폴더가 먼저 오도록 순서 유지). 하위 탭의 부모 경로 맵은 설정에 따로 둔다 — 코어의
+     * 탭 목록 형식(`string[]`)은 그대로이고, 지금 열린 탭만으로 매번 새로 써서 지난 항목이 남지 않는다
+     */
     const persistTabs = () => {
       const { sessions, sessionOrder } = get();
       const paths = sessionOrder.flatMap((id) => {
@@ -920,6 +927,7 @@ export function createAppStore(deps: AppStoreDeps) {
         return m ? [m.path] : [];
       });
       deps.client.openTabsSet(paths).catch(() => {});
+      writePref(PREF_TAB_PARENTS, tabParentPaths(sessionOrder, sessions));
     };
 
     let navigationVersion = 0;
@@ -972,11 +980,15 @@ export function createAppStore(deps: AppStoreDeps) {
       if (get().sessions[id]?.path === root && getWorkspaceStore(id) === ws) watchTabsOf(id, root);
     };
 
-    /** 탭을 등록하고 활성화한다. */
+    /** 탭을 등록하고 활성화한다. 하위 탭은 끝이 아니라 부모 세트의 끝에 붙는다 (세트가 갈라지지 않게) */
     const addTab = (meta: SessionMeta, activate = true) => {
+      const sessions = { ...get().sessions, [meta.id]: meta };
       set({
-        sessions: { ...get().sessions, [meta.id]: meta },
-        sessionOrder: [...get().sessionOrder.filter((s) => s !== meta.id), meta.id],
+        sessions,
+        sessionOrder: groupTabOrder(
+          [...get().sessionOrder.filter((s) => s !== meta.id), meta.id],
+          sessions,
+        ),
         activeSessionId: activate ? meta.id : get().activeSessionId,
         ...(activate ? { homeVisible: false, homeReturnSessionId: null } : {}),
       });
@@ -1713,6 +1725,7 @@ export function createAppStore(deps: AppStoreDeps) {
           return;
         }
         const closing = latest.targets;
+        const activeBefore = get().activeSessionId;
         for (const id of closing) approvedCloseIds.add(id);
         // 모두 동기적으로 제거를 시작해 첫 탭의 IPC 대기 중 새 탭이 연쇄로 닫히지 않는다.
         const pending = [...closing]
@@ -1724,6 +1737,15 @@ export function createAppStore(deps: AppStoreDeps) {
           .map((id) => get().closeSession(id));
         approvedCloseIds.clear();
         if (!get().homeVisible && plan.mode === 'others' && get().sessions[plan.target])
+          set({ activeSessionId: plan.target });
+        // 하위 탭만 닫을 때 보던 탭이 닫혔으면 남은 부모 탭으로 간다 (세트 밖의 탭을 보고 있었다면 그대로 둔다)
+        if (
+          !get().homeVisible &&
+          plan.mode === 'children' &&
+          activeBefore !== null &&
+          closing.includes(activeBefore) &&
+          get().sessions[plan.target]
+        )
           set({ activeSessionId: plan.target });
         persistTabs();
         await Promise.all(pending);
@@ -2063,12 +2085,14 @@ export function createAppStore(deps: AppStoreDeps) {
         } catch {
           // 저장소를 못 읽으면 빈 상태로 시작
         }
+        // 하위 탭의 부모 경로: 탭을 열 때마다 저장이 지금 열린 탭으로 덮으므로 열기 전에 읽어 둔다
+        const parentOf = readPref<Record<string, string>>(PREF_TAB_PARENTS, {});
         // 각 탭의 파일 탭: 저장해 둔 것을 먼저 읽어 두고, 다시 열지 못한 루트의 기록은 지운다. 파일 탭은 기다리지
         // 않고 뒤에서 연다 (시작을 늦추지 않게)
         const savedTabs = new Map(restored.map((root) => [root, readSavedEditorTabs(root)]));
         restoringRoots = new Set(restored);
         try {
-          await get().openPaths(restored);
+          await get().openPaths(restored, parentOf);
         } finally {
           restoringRoots = new Set();
         }
@@ -2231,14 +2255,21 @@ export function createAppStore(deps: AppStoreDeps) {
         void get().loadGroups();
       },
 
-      async openPaths(paths) {
+      async openPaths(paths, parentOf = {}) {
         for (const p of paths) {
           // 저장한 탭 목록의 그룹 키(`mgit-group:<id>`)는 그룹으로, 나머지는 경로로 연다
           const group = groupIdOf(p);
           if (group !== null) {
             await get().openGroupAt(group);
           } else {
-            await get().openRepositoryAt(p);
+            // 저장 순서상 부모가 먼저 열린다. 부모 경로의 탭이 없으면(열지 못했으면) 독립 탭으로 연다
+            const parentPath = parentOf[p];
+            const { sessions, sessionOrder } = get();
+            const parent =
+              typeof parentPath === 'string'
+                ? (sessionOrder.find((id) => sessions[id]?.path === parentPath) ?? null)
+                : null;
+            await get().openRepositoryAt(p, parent);
           }
         }
       },
@@ -2439,7 +2470,11 @@ export function createAppStore(deps: AppStoreDeps) {
         const current = get();
         const rest = { ...current.sessions };
         delete rest[id];
-        const order = current.sessionOrder.filter((s) => s !== id);
+        // 중간 부모가 닫혀 세트에서 떨어진 하위 탭이 남은 세트를 가르지 않게 다시 묶는다
+        const order = groupTabOrder(
+          current.sessionOrder.filter((s) => s !== id),
+          rest,
+        );
         // 장부 (W13): 폴더 탭이면 그 폴더의 장부를 비운다(코어의 폴더 닫기가 잡음을 거둔다). 저장소 탭이면 그 세션을
         // 가리키던 폴더 장부 항목을 지운다 — 탭이 닫으면 세션이 닫히므로, 다음에 필요하면 새로 연다
         const { [id]: ledger, ...otherLedgers } = current.repoSessions;

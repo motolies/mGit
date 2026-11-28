@@ -186,6 +186,43 @@ describe('설정 대화상자 (⌘,)', () => {
     expect(within(dialog).getByRole('button', { name: '저장' })).toBeTruthy();
   });
 
+  it('터미널의 자동은 OS 기본 터미널로 적고, 명령 입력칸은 "직접 입력"일 때만 켠다', async () => {
+    openSettings('ko');
+    render(<SettingsDialog />);
+    await tick();
+    const { dialog, selects } = languageSelect();
+    const [editor, terminal] = [selects[1], selects[2]] as HTMLSelectElement[];
+    // 편집기의 자동 설명(code → idea)을 터미널에 쓰지 않는다
+    expect(editor?.options[0]?.textContent).toBe(S.external.autoEditor);
+    expect([
+      S.external.autoTerminal(S.external.terminalApp),
+      S.external.autoTerminal(S.external.wt),
+    ]).toContain(terminal?.options[0]?.textContent);
+
+    const editorCommand = within(dialog).getByLabelText(
+      S.external.customEditor,
+    ) as HTMLInputElement;
+    const terminalCommand = within(dialog).getByLabelText(
+      S.external.customTerminal,
+    ) as HTMLInputElement;
+    // 처음 값은 VS Code·자동이라 둘 다 꺼져 있다
+    expect(editorCommand.disabled).toBe(true);
+    expect(terminalCommand.disabled).toBe(true);
+
+    fireEvent.change(editor as HTMLSelectElement, { target: { value: 'custom' } });
+    expect(editorCommand.disabled).toBe(false);
+    expect(terminalCommand.disabled).toBe(true);
+    fireEvent.change(editorCommand, { target: { value: 'cursor' } });
+
+    // 다른 앱으로 바꾸면 다시 꺼지지만 적어 둔 값은 남는다
+    fireEvent.change(editor as HTMLSelectElement, { target: { value: 'idea' } });
+    expect(editorCommand.disabled).toBe(true);
+    expect(editorCommand.value).toBe('cursor');
+
+    fireEvent.change(terminal as HTMLSelectElement, { target: { value: 'custom' } });
+    expect(terminalCommand.disabled).toBe(false);
+  });
+
   it('English 로 저장하면 외부 앱을 먼저 저장하고 대화상자를 닫은 뒤 언어를 바꾼다', async () => {
     const { order, externalAppsSet, setLanguage } = openSettings('system');
     render(<SettingsDialog />);
